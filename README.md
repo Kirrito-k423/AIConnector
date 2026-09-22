@@ -4,7 +4,7 @@
 
 第一版提供 Windows PowerShell 5.1 / PowerShell 7 脚本，无第三方模块。Windows 不需要 Python，不需要联网安装依赖。Mac 使用 PowerShell 7。
 
-下载：[Windows 探测工具包](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.1/AIConnector-Probe.zip) · [SHA-256 校验文件](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.1/AIConnector-Probe.zip.sha256) · [版本说明](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.1.1)。
+下载：[Windows 探测工具包](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.2/AIConnector-Probe.zip) · [SHA-256 校验文件](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.2/AIConnector-Probe.zip.sha256) · [版本说明](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.1.2)。
 
 ## Windows：先做不需要账号的检查
 
@@ -58,6 +58,18 @@ Unblock-File -LiteralPath .\Probe.ps1
 ```
 
 这只解除 `Probe.ps1` 的下载来源标记，不修改执行策略，也不会给脚本添加数字签名。启动器不会自动执行此操作，不设置 `Bypass`，不改注册表或组织策略。依据：[Microsoft 执行策略说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies)、[Unblock-File](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/unblock-file)。
+
+## v0.1.1 的路径初始化报错
+
+如果解除下载标记后遇到 `Join-Path` 的 `Path` 为空，且报错指向参数默认值中的 `$PSScriptRoot`，这是 v0.1.1 的兼容性缺陷。v0.1.2 已将默认配置和输出路径的解析移到参数绑定之后，按脚本文件位置定位。
+
+当前 v0.1.1 也可以在解压目录显式传入这两个路径后运行：
+
+```powershell
+.\Run-Windows.cmd -Config .\probe.config.json -OutputDir .\reports
+```
+
+新版已测试默认启动、仅指定一个路径参数、从其他工作目录启动，以及 Windows 启动器调用真实探测脚本的完整扫描流程；不依赖调用者先切换到脚本目录。
 
 ## 报告如何读
 
@@ -157,7 +169,7 @@ pwsh -NoProfile -File ./Probe.ps1 -Mode Verify -Node mac-outer -Peer windows-inn
 
 - 已实现：GitCode/GitHub 的 HTTP、身份 API、指定 Issue 评论读取；双节点文本样本和回执；有界下载及文件校验；中文 Markdown/JSON 报告。
 - 尚未实现：浏览器自动化、网盘 SDK、附件自动上传、长期轮询、NPU 任务执行、自动选择中转路由。现阶段先得到实际可用性证据。
-- Windows PowerShell 5.1 已在 GitHub 托管 Windows 环境通过 21 项测试，包含签名策略拦截与启动器诊断；macOS ARM64 + PowerShell 7.6.6 下通过 16 项通用测试。用户内网 Windows 的实际策略、启动和网络结果仍需采集。[Windows 测试记录](https://github.com/Kirrito-k423/AIConnector/actions/runs/35682791272)
+- Windows PowerShell 5.1 已在 GitHub 托管 Windows 环境通过 24 项测试，包含默认路径、真实启动入口、签名策略拦截与启动器诊断；macOS ARM64 + PowerShell 7.6.6 下通过 18 项通用测试。用户内网 Windows 的启动和网络结果仍需回读。[Windows 测试记录](https://github.com/Kirrito-k423/AIConnector/actions/runs/35695017923)
 - 本地 HTTP 模拟服务覆盖协议与错误处理，不替代真实 GitCode/GitHub 评论写入或两台机器的跨网络测试。
 
 开发测试（Python 只供开发测试使用，Windows 用户运行探测器不需要它）：

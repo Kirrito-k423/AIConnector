@@ -28,6 +28,14 @@ Windows 测试中还定位并修复了 PowerShell 5.1 / 7 根 JSON 数组枚举�
 
 这些是实际 Windows 操作系统上的回归测试；HTTP 服务仍为模拟服务，执行策略由测试进程设置，**不代表用户内网机器的组织策略、外网可达性或跨机器通信已验证**。
 
+## v0.1.2：默认参数与完整入口回归
+
+Issue #1 后续日志确认下载标记已经解除，失败点转为参数默认值中的 `$PSScriptRoot` 为空。此前测试显式提供 Config 和 OutputDir，启动器测试主要使用替身脚本，未覆盖这条默认启动路径。
+
+修复将默认路径的解析移到参数绑定完成之后。新增测试覆盖两个路径都默认、单个路径默认、从其他目录启动、无配置文件时的 Samples 模式，以及 Run-Windows.cmd 调用真实 Probe.ps1 完成 Scan。
+
+[GitHub 托管 Windows 测试记录](https://github.com/Kirrito-k423/AIConnector/actions/runs/35695017923)，源代码提交 `e0582a6`：Windows PowerShell 5.1 下 24 项测试全部通过。Mac PowerShell 7.6.6 下 18 项通用测试通过、6 项 Windows 专用测试跳过。测试网络仍为本机模拟 HTTP 服务；用户内网机器更新后的扫描结果尚待回读。
+
 ## Mac 真实网络观测
 
 使用默认配置，未提供 Token，没有发送外部评论。分别使用显式代理 `http://127.0.0.1:7890` 和关闭 HttpClient 代理的 `direct` 模式。
