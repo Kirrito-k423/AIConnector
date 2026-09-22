@@ -1,10 +1,15 @@
 """Exercise actual cmd.exe and Windows PowerShell signing-policy rejection."""
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
+
+from test_probe import Handler
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,6 +76,37 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertNotEqual(run.returncode, 0)
         self.assertIn(b"EffectivePolicy: AllSigned", log)
         self.assertNotIn(b"PROBE_EXECUTED", log)
+
+    def test_real_probe_scan_uses_bundled_default_paths(self):
+        # Run the delivered entry point with the actual script, not a stub.
+        shutil.copyfile(ROOT / "Probe.ps1", self.script)
+        Handler.comments = []
+        Handler.requests = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            (self.folder / "probe.config.json").write_text(json.dumps({"channels": [{
+                "name": "local-fixture", "provider": "github",
+                "website": base + "/website", "api_base": base + "/good",
+                "repository": "", "issue": ""
+            }], "downloads": []}), encoding="utf-8")
+            run, log = self.run_launcher()
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            reports = list((self.folder / "reports").glob("*.json"))
+            self.assertEqual(len(reports), 1, run.stdout + run.stderr)
+            report = json.loads(reports[0].read_text(encoding="utf-8"))
+            self.assertEqual(report["mode"], "Scan")
+            self.assertEqual(report["node"], "windows-inner")
+            statuses = {r["test"]: r["status"] for r in report["observations"]}
+            self.assertEqual(statuses["local-fixture/api"], "AUTH_API_VERIFIED")
+            self.assertNotIn(b"startup diagnostics", log)
+            self.assertTrue(all(method == "GET" for method, *_ in Handler.requests))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 if __name__ == "__main__":

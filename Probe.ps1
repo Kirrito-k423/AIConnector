@@ -7,13 +7,13 @@ No external modules. Default Scan performs GET requests only.
 param(
     [ValidateSet('Scan', 'Samples', 'Send', 'Receive', 'Verify')]
     [string]$Mode = 'Scan',
-    [string]$Config = (Join-Path $PSScriptRoot 'probe.config.json'),
+    [string]$Config = '',
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')][string]$Node = 'local',
     [string]$Peer = '',
     [string]$Channel = 'gitcode',
     [string]$Session = '',
     [string]$Proxy = 'system',
-    [string]$OutputDir = (Join-Path $PSScriptRoot 'reports'),
+    [string]$OutputDir = '',
     [ValidateRange(1, 60)][int]$TimeoutSeconds = 12,
     [ValidateRange(256, 32768)][int]$SizeBytes = 1024,
     [ValidateRange(1, 100)][int]$MaxPages = 10,
@@ -21,6 +21,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell can evaluate parameter defaults before PSScriptRoot is
+# populated. Resolve file-relative defaults only after parameter binding.
+$scriptFile = $PSCommandPath
+if (-not $scriptFile) { $scriptFile = $MyInvocation.MyCommand.Path }
+$scriptRoot = [IO.Path]::GetDirectoryName($scriptFile)
+if (-not $scriptRoot) { throw '无法定位脚本目录，请将 Probe.ps1 保存为文件后运行。' }
+if (-not $Config) { $Config = Join-Path $scriptRoot 'probe.config.json' }
+if (-not $OutputDir) { $OutputDir = Join-Path $scriptRoot 'reports' }
 Add-Type -AssemblyName System.Net.Http
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:Token = ''

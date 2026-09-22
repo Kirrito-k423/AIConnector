@@ -139,6 +139,43 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(self.statuses(r)["test/issue_read"], "PASS")
         self.assertTrue(all(method == "GET" for method, *_ in Handler.requests))
 
+    def test_default_paths_from_unrelated_working_directory(self):
+        install = self.root / "installed probe"
+        install.mkdir()
+        shutil.copyfile(ROOT / "Probe.ps1", install / "Probe.ps1")
+        config = install / "probe.config.json"
+        config.write_text(json.dumps({"channels": [{
+            "name": "local-fixture", "provider": "github",
+            "website": self.base + "/website", "api_base": self.base + "/good",
+            "repository": "", "issue": ""
+        }], "downloads": []}), encoding="utf-8")
+        cases = [([], install / "reports"),
+                 (["-Config", str(config)], install / "reports"),
+                 (["-OutputDir", str(self.root / "custom-reports")], self.root / "custom-reports")]
+        for args, out in cases:
+            with self.subTest(args=args):
+                before = set(out.glob("*.json"))
+                run = subprocess.run([PWSH, "-NoLogo", "-NoProfile", "-File", str(install / "Probe.ps1"), *args],
+                                     cwd=self.root, capture_output=True, encoding="utf-8", errors="replace", timeout=25)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                created = set(out.glob("*.json")) - before
+                self.assertEqual(len(created), 1, run.stdout + run.stderr)
+                report = json.loads(created.pop().read_text(encoding="utf-8"))
+                self.assertEqual(self.statuses(report)["local-fixture/api"], "AUTH_API_VERIFIED")
+        self.assertFalse((self.root / "reports").exists())
+        self.assertTrue(all(method == "GET" for method, *_ in Handler.requests))
+
+    def test_samples_default_output_without_config_file(self):
+        install = self.root / "single script"
+        install.mkdir()
+        shutil.copyfile(ROOT / "Probe.ps1", install / "Probe.ps1")
+        run = subprocess.run([PWSH, "-NoLogo", "-NoProfile", "-File", str(install / "Probe.ps1"), "-Mode", "Samples"],
+                             cwd=self.root, capture_output=True, encoding="utf-8", errors="replace", timeout=25)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertTrue((install / "reports" / "samples" / "manifest.json").is_file())
+        self.assertFalse((self.root / "reports").exists())
+        self.assertEqual(Handler.requests, [])
+
     def test_html_not_valid_api(self):
         self.assertEqual(self.statuses(self.run_probe(prefix="html"))["test/api"], "UNEXPECTED_API_RESPONSE")
 
