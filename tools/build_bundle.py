@@ -8,7 +8,7 @@ from pathlib import Path
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 RELEASE = f"https://github.com/Kirrito-k423/AIConnector/releases/download/v{VERSION}/"
 
 
@@ -47,7 +47,7 @@ def build(output):
             raise ValueError("Preset does not match release fixture: " + name)
     if len(config["downloads"]) != len(samples):
         raise ValueError("Every release fixture must be in the default scan")
-    files = {name: (ROOT / name).read_bytes() for name in ("Probe.ps1", "Run-Windows.cmd", "probe.config.json", "README.md")}
+    files = {name: (ROOT / name).read_bytes() for name in ("Probe.ps1", "Run-Windows.cmd", "Run-Windows-Write.cmd", "probe.config.json", "README.md")}
     for name in ("Probe.ps1", "probe.config.json", "README.md"):
         files[name] = files[name].replace(b"\r\n", b"\n")
     if not files["Probe.ps1"].startswith(b"\xef\xbb\xbf"):
@@ -56,11 +56,12 @@ def build(output):
     cmd = files["Run-Windows.cmd"].decode("ascii").replace("\r\n", "\n")
     cmd = cmd.replace("__PROBE_SHA256__", hashlib.sha256(files["Probe.ps1"]).hexdigest())
     files["Run-Windows.cmd"] = cmd.replace("\n", "\r\n").encode("ascii")
+    files["Run-Windows-Write.cmd"] = files["Run-Windows-Write.cmd"].replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
     bundle = make_zip({"AIConnector-Probe/" + name: data for name, data in files.items()})
     archive = output / "AIConnector-Probe.zip"
     archive.write_bytes(bundle)
     checksum = hashlib.sha256(bundle).hexdigest()
-    (output / (archive.name + ".sha256")).write_text(f"{checksum}  {archive.name}\n", encoding="ascii")
+    (output / (archive.name + ".sha256")).write_bytes(f"{checksum}  {archive.name}\n".encode("ascii"))
     for name, data in samples.items():
         (output / name).write_bytes(data)
     print(f"{archive}\n{len(bundle)} bytes\nSHA-256 {checksum}")

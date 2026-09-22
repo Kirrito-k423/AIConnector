@@ -2,6 +2,28 @@
 
 日期：2026-09-22。
 
+## v0.1.4：写入测试及用户内网结果
+
+本节更新下面历史记录中的待测状态。
+
+用户 [v0.1.3 内网 Windows 报告](https://github.com/Kirrito-k423/AIConnector/issues/1#issuecomment-5774000653) 已回收并校验 ZIP：PowerShell 5.1.26100.7705 完成检查，GitHub 与 GitCode 公共评论可读；7 个下载样本中 6 个 SHA-256 正确，1 MiB 二进制在原默认 12 秒期限下超时。该超时不能说明平台容量上限，也不能证明没有收到任何字节。报告没有写入凭据，因此没有证明内网写入。
+
+2026-09-22 在外部 Mac 实际执行的写入：
+
+| 通道与路径 | 实测结果 |
+|---|---|
+| [GitHub #2 评论 API](https://github.com/Kirrito-k423/AIConnector/issues/2) | 1、8、32 KiB 中文合成正文提交成功，独立 GET 读回，字节数及 SHA-256 一致 |
+| GitHub CLI / user-attachments 上传接口 | PNG 上传、发布链接、匿名下载及 SHA-256 校验成功；TXT（1 / 32 KiB）、JSON、CSV、ZIP、1 MiB 二进制均返回 422 |
+| [GitCode #1 浏览器评论](https://gitcode.com/shaojiemike/AIConnector-Probe/issues/1) | 1、8 KiB 提交成功，随后通过匿名评论 API 读回并校验；32 KiB 尚未完成 |
+| GitCode 附件 / 认证 API 写入 | 未完成；浏览器操作被本机锁屏中断，当前程序没有 GitCode Token |
+| 用户内网 Windows 写入 / 双 PC 回执 | 尚未执行，不能用 Mac 或托管 Windows 结果代替 |
+
+GitHub 附件在发布评论引用之前，匿名读取可能返回 404；发布后同一地址可读。探测程序已按“上传 → 发布链接 → 匿名下载校验”执行。422 结论只适用于本次 API 路径，**不代表 GitHub 浏览器或 Release 不支持这些文件**。此前用户已通过浏览器上传 ZIP。
+
+v0.1.4 增加 `Run-Windows-Write.cmd`：预置两个专用目标，一次收集所需 Token，一次检查三档评论和七种附件，自动对已有 Mac 样本发送回执，最后输出一个报告 ZIP。写入请求默认 60 秒；仅上传内存生成的合成数据。附件请求前记录本地状态，结果不确定或重复运行时不自动再次上传。
+
+Mac PowerShell 7.6.6 已对实际 `Probe.ps1 -Mode Write` 执行 GitHub 实网检查，结果与上表一致；GitCode 无 Token 明确记录为 `NEEDS_TOKEN`。本地模拟接口另外覆盖 multipart 文件字节、Base64 图片、评论与附件读回、内容损坏、超时不重传、重复运行、缺凭据不发送请求。Windows 包入口和发布包验收记录将在实际完成后追加。
+
 ## 本地程序验证
 
 环境：macOS ARM64，PowerShell 7.6.6。运行时来自 PowerShell 官方 GitHub Release，未安装系统级模块。

@@ -63,7 +63,7 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(cmd.count(b"\n"), cmd.count(b"\r\n"))
         config = json.loads((self.install / "probe.config.json").read_text())
         self.assertTrue(all(c.get("read_repository") for c in config["channels"]))
-        self.assertTrue(all(not c.get("repository") for c in config["channels"]))
+        self.assertEqual({c["repository"] for c in config["channels"]}, {"Kirrito-k423/AIConnector", "shaojiemike/AIConnector-Probe"})
         self.assertEqual(len(config["downloads"]), 7)
         for row in config["downloads"]:
             data = (self.root / "dist" / row["name"]).read_bytes()
@@ -75,7 +75,7 @@ class BundleTests(unittest.TestCase):
     def test_windows_checkout_line_endings_produce_identical_bundle(self):
         checkout = self.root / "windows checkout"
         checkout.mkdir()
-        for name in ("Probe.ps1", "Run-Windows.cmd", "probe.config.json", "README.md"):
+        for name in ("Probe.ps1", "Run-Windows.cmd", "Run-Windows-Write.cmd", "probe.config.json", "README.md"):
             data = (ROOT / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
             (checkout / name).write_bytes(data)
         with patch.object(builder, "ROOT", checkout):

@@ -5,7 +5,7 @@ No external modules. Default Scan performs GET requests only.
 ##>
 [CmdletBinding()]
 param(
-    [ValidateSet('Scan', 'Samples', 'Send', 'Receive', 'Verify')]
+    [ValidateSet('Scan', 'Samples', 'Send', 'Receive', 'Verify', 'Write')]
     [string]$Mode = 'Scan',
     [string]$Config = '',
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')][string]$Node = 'local',
@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Mode -eq 'Write' -and -not $PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = 60 }
 # Windows PowerShell can evaluate parameter defaults before PSScriptRoot is
 # populated. Resolve file-relative defaults only after parameter binding.
 $scriptFile = $PSCommandPath
@@ -32,10 +33,11 @@ if (-not $OutputDir) { $OutputDir = Join-Path $scriptRoot 'reports' }
 Add-Type -AssemblyName System.Net.Http
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:Token = ''
+$script:Tokens = @{}
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:DownloadLimit = 16 * 1024 * 1024
 $script:Report = [ordered]@{
-    schema = 'aiconnector.report.v1'; version = '0.1.3'; node = $Node; mode = $Mode
+    schema = 'aiconnector.report.v1'; version = '0.1.4'; node = $Node; mode = $Mode
     completed = $false
     generated_at = [DateTime]::UtcNow.ToString('o')
     platform = [Environment]::OSVersion.Platform.ToString()
@@ -91,7 +93,7 @@ function Save-Report {
     $stem = '{0}-{1}-{2}-{3}' -f $Node, $Mode.ToLowerInvariant(), [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'), ([Guid]::NewGuid().ToString('N').Substring(0,6))
     $jsonPath = Join-Path $OutputDir ($stem + '.json')
     $mdPath = Join-Path $OutputDir ($stem + '.md')
-    $verified = @($script:Results | Where-Object { $_.status -in @('PASS','EXACT_BYTES_VERIFIED','AUTH_API_VERIFIED','PEER_RECEIPT_VERIFIED') })
+    $verified = @($script:Results | Where-Object { $_.status -in @('PASS','EXACT_BYTES_VERIFIED','AUTH_API_VERIFIED','PEER_RECEIPT_VERIFIED','COMMENT_BYTES_VERIFIED') })
     $script:Report['summary'] = [ordered]@{
         completed = $script:Report.completed; checked = $script:Results.Count; verified = $verified.Count
         conclusion = '完整检查记录已生成；只将明确验证的能力列为通过。未验证项目及原因见下表。'
@@ -117,7 +119,7 @@ function Save-Report {
     [IO.File]::WriteAllText($mdPath, ($lines -join "`n"), $script:Utf8)
     $htmlPath = Join-Path $OutputDir ($stem + '.html')
     $encoded = [Net.WebUtility]::HtmlEncode(($lines -join "`n"))
-    [IO.File]::WriteAllText($htmlPath, ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>AIConnector 检查报告</title><style>body{max-width:1100px;margin:32px auto;padding:0 24px;font:16px/1.7 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>AIConnector v0.1.3</h1><pre>' + $encoded + '</pre></html>'), $script:Utf8)
+    [IO.File]::WriteAllText($htmlPath, ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>AIConnector 检查报告</title><style>body{max-width:1100px;margin:32px auto;padding:0 24px;font:16px/1.7 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>AIConnector v0.1.4</h1><pre>' + $encoded + '</pre></html>'), $script:Utf8)
     Add-Type -AssemblyName System.IO.Compression
     $zipPath = Join-Path $OutputDir ($stem + '.zip')
     $stream = [IO.File]::Create($zipPath)
@@ -135,7 +137,8 @@ function Save-Report {
 
 function Invoke-ProbeHttp {
     param([string]$Url, [string]$Method = 'GET', [hashtable]$Headers = @{},
-        [string]$Body = '', [int]$Limit = 2097152, [bool]$Authenticated = $false)
+        [string]$Body = '', [int]$Limit = 2097152, [bool]$Authenticated = $false,
+        [byte[]]$BinaryBody = $null, [string]$MultipartFileName = '')
     $u = Assert-Url $Url
     if ($Authenticated -and $u.Scheme -ne 'https' -and -not $u.IsLoopback) {
         Stop-Probe '带凭据的请求必须使用 HTTPS。'
@@ -164,7 +167,16 @@ function Invoke-ProbeHttp {
             $req = New-Object System.Net.Http.HttpRequestMessage(([System.Net.Http.HttpMethod]::new($Method)), $u)
             $req.Headers.TryAddWithoutValidation('User-Agent', 'AIConnector-Probe/0.1') | Out-Null
             foreach ($key in $Headers.Keys) { $req.Headers.TryAddWithoutValidation($key, [string]$Headers[$key]) | Out-Null }
-            if ($Method -eq 'POST') { $req.Content = New-Object System.Net.Http.StringContent($Body, $script:Utf8, 'application/json') }
+            if ($Method -eq 'POST') {
+                if ($null -ne $BinaryBody) {
+                    $part = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $BinaryBody)
+                    $part.Headers.ContentType = [Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream')
+                    if ($MultipartFileName) {
+                        $multi = New-Object Net.Http.MultipartFormDataContent
+                        $multi.Add($part,'file',$MultipartFileName); $req.Content = $multi
+                    } else { $req.Content = $part }
+                } else { $req.Content = New-Object System.Net.Http.StringContent($Body, $script:Utf8, 'application/json') }
+            }
             $response = $client.SendAsync($req, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
             $result.http = [int]$response.StatusCode
             $result.url = Get-SafeUrl $u.AbsoluteUri
@@ -231,11 +243,12 @@ function Get-Evidence($Result) {
         url = $Result.url; content_type = $Result.content_type; sha256 = $Result.sha256; retry_after = $Result.retry_after }
 }
 function Get-Token($C) {
+    if ($script:Tokens.ContainsKey([string]$C.name)) { return $script:Tokens[[string]$C.name] }
     $name = [string](Get-Field $C 'token_env')
     if (-not $name) { return '' }
     return [Environment]::GetEnvironmentVariable($name)
 }
-function Invoke-ChannelApi($C, [string]$Path, [string]$Method = 'GET', [string]$Body = '', [string]$Token = '') {
+function Invoke-ChannelApi($C, [string]$Path, [string]$Method = 'GET', [string]$Body = '', [string]$Token = '', [byte[]]$BinaryBody = $null, [string]$MultipartFileName = '') {
     $base = ([string]$C.api_base).TrimEnd('/')
     $url = $base + $Path
     $headers = @{ Accept = 'application/json' }
@@ -248,7 +261,7 @@ function Invoke-ChannelApi($C, [string]$Path, [string]$Method = 'GET', [string]$
             $url += $separator + 'access_token=' + [Uri]::EscapeDataString($Token)
         }
     } else { Stop-Probe 'provider 只支持 gitcode 或 github。' }
-    return Invoke-ProbeHttp -Url $url -Method $Method -Headers $headers -Body $Body -Authenticated ([bool]$Token)
+    return Invoke-ProbeHttp -Url $url -Method $Method -Headers $headers -Body $Body -Authenticated ([bool]$Token) -BinaryBody $BinaryBody -MultipartFileName $MultipartFileName
 }
 function Get-CommentsPath($C) {
     $repo = [string](Get-Field $C 'repository')
@@ -275,10 +288,12 @@ function Get-Comments($C, [string]$Token) {
     Stop-Probe '达到分页上限，不能证明已读取完整；请使用专用测试 Issue 或增加 MaxPages。'
 }
 function ConvertTo-PacketBody($Packet) {
-    return 'AIConnector probe v1' + "`n`n" + '```json' + "`n" + ($Packet | ConvertTo-Json -Depth 8 -Compress) + "`n" + '```'
+    $body = 'AIConnector probe v1' + "`n`n" + '```json' + "`n" + ($Packet | ConvertTo-Json -Depth 8 -Compress) + "`n" + '```'
+    if ($Packet.kind -eq 'attachment') { $body += "`n`n" + '[' + $Packet.name + '](' + $Packet.url + ')' }
+    return $body
 }
 function Read-Packet([string]$Body) {
-    if ($Body -match '(?s)\AAIConnector probe v1\r?\n\r?\n```json\r?\n(.+?)\r?\n```\s*\z') {
+    if ($Body -match '(?s)\AAIConnector probe v1\r?\n\r?\n```json\r?\n(.+?)\r?\n```(?:\r?\n\r?\n\[[^\]\r\n]+\]\(https?://[^\s)]+\))?\s*\z') {
         try {
             $p = ConvertFrom-Json -InputObject $Matches[1]
             if ((Get-Field $p 'schema') -eq 'aiconnector.probe.v1') { return $p }
@@ -464,6 +479,140 @@ function Invoke-Exchange($Settings) {
     }
 }
 
+function New-WriteSamples {
+    # In-memory synthetic bytes only. Never enumerate or upload the user's files.
+    $files = New-Object System.Collections.Generic.List[object]
+    foreach ($size in @(1024,32768)) { $files.Add([pscustomobject]@{name=('text-' + $size + '.txt'); mime='text/plain'; data=$script:Utf8.GetBytes(('x' * $size))}) }
+    $files.Add([pscustomobject]@{name='metrics.json'; mime='application/json'; data=$script:Utf8.GetBytes('{"synthetic":true,"note":"中文","latency_us":12.5}')})
+    $files.Add([pscustomobject]@{name='metrics.csv'; mime='text/csv'; data=$script:Utf8.GetBytes("rank,latency_us`n0,12.5`n")})
+    $files.Add([pscustomobject]@{name='pixel.png'; mime='image/png'; data=[Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwaDgAAAJUAXHIMWMAAAAAAElFTkSuQmCC')})
+    $binary = New-Object byte[] 1048576
+    $seed = [byte[]](0..255)
+    for ($i=0; $i -lt $binary.Length; $i+=256) { [Buffer]::BlockCopy($seed,0,$binary,$i,256) }
+    $files.Add([pscustomobject]@{name='binary-1MiB.bin'; mime='application/octet-stream'; data=$binary})
+    Add-Type -AssemblyName System.IO.Compression
+    $mem = New-Object IO.MemoryStream
+    $zip = New-Object IO.Compression.ZipArchive($mem,[IO.Compression.ZipArchiveMode]::Create,$true)
+    try {
+        $entry = $zip.CreateEntry('sample.bin',[IO.Compression.CompressionLevel]::NoCompression)
+        $entry.LastWriteTime = [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)
+        $dest = $entry.Open(); try { $dest.Write($binary,0,131072) } finally { $dest.Dispose() }
+    } finally { $zip.Dispose() }
+    $files.Add([pscustomobject]@{name='result-128KiB.zip'; mime='application/zip'; data=$mem.ToArray()})
+    $mem.Dispose()
+    return ,($files.ToArray())
+}
+function Save-WriteState($State,[string]$Path) {
+    [IO.Directory]::CreateDirectory($OutputDir) | Out-Null
+    $temp = $Path + '.tmp'
+    [IO.File]::WriteAllText($temp,(ConvertTo-Json -InputObject @($State) -Depth 8),$script:Utf8)
+    Move-Item -LiteralPath $temp -Destination $Path -Force
+}
+function Invoke-WriteCheck($Settings) {
+    if (-not $Session) { $Session = 'writecheck-v013' }
+    if (-not $Peer) { $Peer = 'mac-outer'; if ($Node -eq 'mac-outer') { $Peer = 'windows-inner' } }
+    if ($Session -notmatch '^[A-Za-z0-9_-]{1,64}$' -or $Peer -notmatch '^[A-Za-z0-9_-]{1,64}$' -or $Peer -eq $Node) { Stop-Probe 'Session 与节点标识无效。' }
+    $files = New-WriteSamples
+    Write-Host '写入检查：仅向下列专用 Issue 发布合成评论、样本链接及回执。'
+    foreach ($c in $Settings.channels) { Write-Host ($c.name + ': ' + $c.repository + ' #' + $c.issue) }
+    # Collect credentials once, before the network checks.
+    foreach ($c in $Settings.channels) {
+        $token = Get-Token $c
+        if ($PromptToken -and -not $token) {
+            $secure = Read-Host ($c.name + ' Token（隐藏输入；回车跳过）') -AsSecureString
+            $token = (New-Object Net.NetworkCredential('', $secure)).Password
+        }
+        $script:Tokens[[string]$c.name] = $token
+    }
+    foreach ($c in $Settings.channels) {
+        $name = [string]$c.name; $token = Get-Token $c
+        if (-not $token) { Add-Observation ($name+'/write') 'NEEDS_TOKEN' '本次缺少写入凭据，未执行写入。'; continue }
+        $script:Token = $token
+        try {
+            $comments = Get-Comments $c $token
+            foreach ($size in @(1024,8192,32768)) {
+                $prefix = "AIConnector 通道测试`n中文 / JSON / code / newline`n"
+                $payload = $prefix + ('x' * ($size - $script:Utf8.GetByteCount($prefix)))
+                $id = Get-TextHash ($Session+'|'+$Node+'|'+$Peer+'|'+$size)
+                $packet = [ordered]@{schema='aiconnector.probe.v1';kind='sample';message_id=$id;session=$Session;sender=$Node;receiver=$Peer;payload_bytes=$size;payload_sha256=(Get-TextHash $payload);payload=$payload}
+                $posted = Publish-Packet $c $packet $comments $token
+                $comments = Get-Comments $c $token
+                $match = @($comments | Where-Object { [string]$_.id -eq $posted.comment_id })
+                if ($match.Count -ne 1 -or $match[0].body -cne (ConvertTo-PacketBody $packet)) { Stop-Probe '评论提交后独立读回不一致，停止该平台后续写入。' }
+                Add-Observation ($name+'/comment/'+$size) 'COMMENT_BYTES_VERIFIED' '独立 GET 读回的完整评论与发送内容一致。' @{payload_bytes=$size;sha256=$packet.payload_sha256;comment_id=$posted.comment_id;write_status=$posted.status}
+                if ($posted.status -eq 'POST_ACCEPTED') { Start-Sleep -Milliseconds 1100 }
+            }
+            # Existing peer samples, if any, are validated and acknowledged in this run.
+            $Channel = $name; $Mode = 'Receive'; $PromptToken = $false
+            Invoke-Exchange $Settings
+            $statePath = Join-Path $OutputDir ('write-state-' + (Get-TextHash ($c.api_base+'|'+$c.repository+'|'+$c.issue+'|'+$Session+'|'+$Node)).Substring(0,20) + '.local.json')
+            $state = New-Object System.Collections.Generic.List[object]
+            if ([IO.File]::Exists($statePath)) {
+                $saved = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($statePath,$script:Utf8))
+                foreach ($r in @($saved)) { $state.Add($r) }
+            }
+            $repoId = ''
+            if ($c.provider -eq 'github') {
+                $meta = Invoke-ChannelApi $c ('/repos/'+$c.repository) 'GET' '' $token
+                $repoId = [string](Get-Field $meta.json 'id')
+                if ($meta.status -ne 'HTTP_OK' -or $repoId -notmatch '^[1-9][0-9]*$') { Stop-Probe '无法确定附件所属仓库 ID。' }
+            }
+            foreach ($f in $files) {
+                $sha = Get-Sha256 $f.data; $key = $f.name+'|'+$sha
+                $known = @($state | Where-Object { $_.key -eq $key })
+                $row = $null
+                if ($known.Count) { $row = $known[0] }
+                else {
+                    $row = [pscustomobject]@{key=$key;name=$f.name;sha256=$sha;bytes=$f.data.Length;status='WRITE_UNCERTAIN';url='';http=0}
+                    $state.Add($row); Save-WriteState $state.ToArray() $statePath
+                    if ($c.provider -eq 'github') {
+                        $base = [string](Get-Field $c 'asset_upload_base' 'https://uploads.github.com')
+                        $url = $base.TrimEnd('/')+'/user-attachments/assets?repository_id='+$repoId+'&name='+[Uri]::EscapeDataString($f.name)+'&content_type='+[Uri]::EscapeDataString($f.mime)
+                        $up = Invoke-ProbeHttp -Url $url -Method POST -BinaryBody $f.data -Headers @{Authorization=('Bearer '+$token);Accept='application/vnd.github+json'} -Authenticated $true
+                        $row.url = [string](Get-Field $up.json 'url')
+                    } elseif ($f.mime -eq 'image/png') {
+                        $body = @{body=[Convert]::ToBase64String($f.data);file_name=$f.name} | ConvertTo-Json -Compress
+                        $up = Invoke-ChannelApi $c ('/repos/'+$c.repository+'/img/upload') 'POST' $body $token
+                        $row.url = [string](Get-Field $up.json 'full_path')
+                    } else {
+                        $up = Invoke-ChannelApi $c ('/repos/'+$c.repository+'/file/upload') 'POST' '' $token -BinaryBody $f.data -MultipartFileName $f.name
+                        $row.url = [string](Get-Field $up.json 'full_path')
+                    }
+                    $row.http = $up.http
+                    if ($up.status -eq 'HTTP_OK' -and $row.url) {
+                        $assetUri = Assert-Url $row.url
+                        if ($assetUri.Query -or $assetUri.Fragment) { Stop-Probe '附件接口返回临时签名地址，未将其保存到报告。' }
+                        $row.status = 'UPLOADED'
+                    } elseif ($up.http -ge 400 -and $up.http -lt 500) { $row.status = 'UPLOAD_REJECTED'; $row.url = '' }
+                    Save-WriteState $state.ToArray() $statePath
+                    Start-Sleep -Milliseconds 1100
+                }
+                if ($row.status -ne 'UPLOADED') {
+                    Add-Observation ($name+'/attachment/'+$f.name) $row.status '记录服务端拒绝或未确认结果；不自动重复上传。' @{http=$row.http;bytes=$row.bytes;sha256=$row.sha256}; continue
+                }
+                # GitHub assets can remain private until referenced by a posted comment.
+                $packet = [ordered]@{schema='aiconnector.probe.v1';kind='attachment';message_id=(Get-TextHash ('asset|'+$Session+'|'+$Node+'|'+$key));session=$Session;sender=$Node;receiver=$Peer;name=$f.name;bytes=$f.data.Length;sha256=$sha;url=$row.url}
+                $null = Publish-Packet $c $packet $comments $token
+                $comments = Get-Comments $c $token
+                $back = Invoke-ProbeHttp -Url $row.url -Limit $script:DownloadLimit
+                $status = $back.status
+                if ($status -eq 'HTTP_OK') {
+                    $status = 'HASH_MISMATCH'
+                    if ($back.sha256 -ceq $sha -and $back.bytes -eq $f.data.Length) { $status = 'EXACT_BYTES_VERIFIED' }
+                }
+                Add-Observation ($name+'/attachment/'+$f.name) $status '上传后发布附件链接，再匿名 GET 下载核对原始字节。' (Get-Evidence $back)
+            }
+        } catch {
+            $detail = '该平台写入未完成；其他平台继续。'
+            $e = $_.Exception
+            while ($null -ne $e) { if ($e.Data.Contains('probe_reason')) { $detail=[string]$e.Data['probe_reason'];break };$e=$e.InnerException }
+            Add-Observation ($name+'/write') 'NOT_VERIFIED' $detail
+        }
+    }
+    $script:Token = ''; $script:Tokens.Clear()
+    $script:Report.limits += '附件接口拒绝不等于浏览器上传也被拒绝；单端写入读回不等于另一台机器收到。'
+}
+
 $exitCode = 0
 try {
     # Enable TLS 1.2 without disabling certificate validation (Windows PowerShell 5.1).
@@ -478,7 +627,7 @@ try {
             ); downloads = @() }
         } else { $settings = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Config, $script:Utf8)) }
         if (-not (Get-Field $settings 'channels')) { Stop-Probe '配置缺少 channels。' }
-        if ($Mode -eq 'Scan') { Invoke-Scan $settings } else { Invoke-Exchange $settings }
+        if ($Mode -eq 'Scan') { Invoke-Scan $settings } elseif ($Mode -eq 'Write') { Invoke-WriteCheck $settings } else { Invoke-Exchange $settings }
     }
     $script:Report.completed = $true
 } catch {

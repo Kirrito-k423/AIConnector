@@ -7,6 +7,8 @@ if not exist "reports" exit /b 2
 set "AICONNECTOR_SCRIPT=%~dp0Probe.ps1"
 set "AICONNECTOR_STARTUP_LOG=%~dp0reports\startup-%RANDOM%-%RANDOM%.txt"
 set "AICONNECTOR_EXIT=0"
+set "AICONNECTOR_MODE=Scan"
+if "%AICONNECTOR_REQUEST_WRITE%"=="1" set "AICONNECTOR_MODE=Write"
 set "AICONNECTOR_EXPECTED_HASH=__PROBE_SHA256__"
 if /I "%~1"=="--diagnose" goto diagnose
 
@@ -17,13 +19,13 @@ if not "%AICONNECTOR_EXIT%"=="0" goto diagnose
 
 echo Running all configured checks. Individual failures will be recorded.
 if /I "%~1"=="-PromptToken" goto interactive
-powershell.exe -NoLogo -NoProfile -File "%AICONNECTOR_SCRIPT%" -Mode Scan -Node windows-inner %* >"%AICONNECTOR_STARTUP_LOG%" 2>&1
+powershell.exe -NoLogo -NoProfile -File "%AICONNECTOR_SCRIPT%" -Mode %AICONNECTOR_MODE% -Node windows-inner %* >"%AICONNECTOR_STARTUP_LOG%" 2>&1
 set "AICONNECTOR_EXIT=%ERRORLEVEL%"
 goto probe_done
 
 :interactive
 echo Interactive token entry requested. Tokens are not saved. >"%AICONNECTOR_STARTUP_LOG%"
-powershell.exe -NoLogo -NoProfile -File "%AICONNECTOR_SCRIPT%" -Mode Scan -Node windows-inner %*
+powershell.exe -NoLogo -NoProfile -File "%AICONNECTOR_SCRIPT%" -Mode %AICONNECTOR_MODE% -Node windows-inner %*
 set "AICONNECTOR_EXIT=%ERRORLEVEL%"
 
 :probe_done

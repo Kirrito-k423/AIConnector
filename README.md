@@ -2,7 +2,7 @@
 
 检查内外 PC 能通过哪些渠道交换实验任务和结果。Windows 使用系统自带 PowerShell 5.1，不需要 Python、管理员权限或联网安装依赖。
 
-[下载 Windows 检查包 v0.1.3](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.3/AIConnector-Probe.zip) · [SHA-256](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.3/AIConnector-Probe.zip.sha256) · [验证记录](VALIDATION.md)
+[下载 Windows 检查包 v0.1.4](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.4/AIConnector-Probe.zip) · [SHA-256](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.4/AIConnector-Probe.zip.sha256) · [验证记录](VALIDATION.md)
 
 ## 用户只需一次运行
 
@@ -18,7 +18,7 @@
 |---|---|
 | 环境 | 包内脚本校验、PowerShell；启动失败时收集执行策略、签名和下载标记 |
 | 网页 / API | GitCode、GitHub 的脚本 HTTP 访问和身份接口响应 |
-| 公共评论 | 读取 AIConnector Issue #1；GitCode 自动尝试从 Ascend/triton-ascend 公开列表选择 Issue |
+| 公共评论 | 读取 GitHub AIConnector Issue #2 和 GitCode AIConnector-Probe Issue #1 |
 | 实际文件 | 下载并校验 TXT（1 KiB、32 KiB）、JSON、CSV、PNG、ZIP（内含 128 KiB 数据）、1 MiB 二进制，共 7 个合成样本 |
 | 报告 | 中文 HTML、Markdown、机器可读 JSON，自动打为一个 ZIP |
 
@@ -26,15 +26,24 @@
 
 默认只发 GET 请求，不发布评论、不上传本地文件。**单机检查可以一次完成；跨网段双向通信仍需两端实际运行并取得对端回执。** 没有凭据的写入权限、附件上传和双机通信会明确保留为未验证，不会包装成全部通过。
 
-## 可选：本次同时检查账号认证
+## 一次完成写入检查
 
-已准备好 GitCode / GitHub Token 时，在解压目录打开终端运行：
+双击 **Run-Windows-Write.cmd**。程序先显示两个专用测试目标，再分别询问 GitHub / GitCode Token（隐藏输入，各一次；已有环境变量则不询问）。请在本机输入，不要把 Token 发到 Issue 或聊天。
 
-```bat
-Run-Windows.cmd -PromptToken
-```
+已预置的目标：[GitHub #2](https://github.com/Kirrito-k423/AIConnector/issues/2)、[GitCode #1](https://gitcode.com/shaojiemike/AIConnector-Probe/issues/1)。使用相应账号已有的、获准写入这些仓库的凭据。
 
-每个平台只在本次进程中询问一次，输入隐藏；直接回车即可跳过。也支持已有环境变量 `AICONNECTOR_GITCODE_TOKEN`、`AICONNECTOR_GITHUB_TOKEN`。不保存 Token，不回传 API 正文、评论正文或本机文件。即使提供 Token，Scan 也不执行写入测试。
+本次依次检查：
+
+- 1、8、32 KiB 合成中文评论的提交及独立读回校验。
+- 对已存在的 Mac 样本自动核对并发送回执。
+- TXT、JSON、CSV、PNG、128 KiB ZIP、1 MiB 二进制的附件接口，提交链接后再匿名下载核对 SHA-256。
+- 自动生成一份 HTML / JSON / Markdown 报告和回传 ZIP；某个平台失败时继续另一个平台。
+
+文件全部在内存中合成，不读取用户实验文件。写入与附件下载默认每请求 60 秒；无自动上传重试。`write-state-*.local.json` 用于保存附件上传进度，未知写入不会在重跑时自动重复；请保留它。`UPLOAD_REJECTED` 表示当前 API 路径明确拒绝，不等于浏览器上传也不支持。GitHub 当前评论附件 API 实测支持 PNG，但对其他六个样本返回 422；GitCode 使用其官方图片与文件上传接口。
+
+没有 Token 的平台会标为 `NEEDS_TOKEN`，不能算测试完成。生成回执也不等于 Mac 已读到；Mac 还需要读取回执验证。无需重新执行只读扫描。
+
+命令行可使用 `Probe.ps1 -Mode Write -Node windows-inner -PromptToken`。Mac 可运行 `pwsh -File ./Probe.ps1 -Mode Write -Node mac-outer -PromptToken`。凭据也可由 `AICONNECTOR_GITCODE_TOKEN` / `AICONNECTOR_GITHUB_TOKEN` 提供，不写入报告。
 
 ## 下载标记与组织策略
 
@@ -72,11 +81,11 @@ Run-Windows.cmd -PromptToken
 
 这里的 `127.0.0.1` 指运行程序的这台 PC。Mac 可使用 PowerShell 7：`pwsh -File ./Probe.ps1 -Node mac-outer`。
 
-自定义平台只读目标用 `read_repository` / `read_issue`；显式收发目标用 `repository` / `issue`。两者分开，避免向公共演示仓库发布测试消息。自定义配置通过 `-Config path` 传入；常规用户无需配置。
+自定义平台只读目标用 `read_repository` / `read_issue`；写入目标用 `repository` / `issue`。默认已指向本项目专用测试区。自定义配置通过 `-Config path` 传入；常规用户无需配置。
 
 ## 开发者：显式双机文本收发
 
-此步骤属于后续通信验证，需要受控测试 Issue、写入权限和两端分别运行。只读默认目标不能直接用于 Send/Receive。先在自定义配置的 `repository` / `issue` 设置自己获准写入的目标，再使用同一 Session：
+此步骤属于后续通信验证，需要受控测试 Issue、写入权限和两端分别运行。默认写入目标已设置；以下自定义配置用于其他获准写入的目标。使用同一 Session：
 
 ```powershell
 # 外部 Mac 发样本
@@ -89,7 +98,7 @@ Run-Windows.cmd -PromptToken
 
 可交换 Node/Peer 测试反方向。正文上限 32 KiB，使用合成数据，包含字节数、SHA-256 和稳定消息 ID。顺序重跑会先查已有消息；不提供并发锁。写入结果不明确时不自动重发。回执用于连通性验证，不是设备身份认证。
 
-未实现浏览器自动化、附件自动上传、持续轮询任务队列或 NPU 实验执行。当前目标是先把单次通道检查做完整。
+未实现内网浏览器自动化、持续轮询任务队列或 NPU 实验执行。
 
 ## 开发者：发布前验收
 
@@ -100,4 +109,6 @@ python3 tools/build_bundle.py
 
 Windows CI 用系统 PowerShell 5.1 检查构建后的 ZIP、中文空格目录、真实 cmd 入口、NTFS 来源标记、信任确认、损坏包拒绝、AllSigned 和报告打包。HTTP 错误分支使用本地模拟服务。
 
-发布后额外执行 `tools/validate_release.py v0.1.3`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
+发布后额外执行 `tools/validate_release.py v0.1.4`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
+
+接口依据：[GitCode 文件上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-file-upload/)、[GitCode 图片上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-img-upload/)、[GitHub CLI 附件实现](https://github.com/cli/cli/blob/v2.101.0/internal/attachments/client.go)。
