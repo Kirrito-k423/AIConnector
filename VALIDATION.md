@@ -22,7 +22,16 @@ GitHub 附件在发布评论引用之前，匿名读取可能返回 404；发布
 
 v0.1.4 增加 `Run-Windows-Write.cmd`：预置两个专用目标，一次收集所需 Token，一次检查三档评论和七种附件，自动对已有 Mac 样本发送回执，最后输出一个报告 ZIP。写入请求默认 60 秒；仅上传内存生成的合成数据。附件请求前记录本地状态，结果不确定或重复运行时不自动再次上传。
 
-Mac PowerShell 7.6.6 已对实际 `Probe.ps1 -Mode Write` 执行 GitHub 实网检查，结果与上表一致；GitCode 无 Token 明确记录为 `NEEDS_TOKEN`。本地模拟接口另外覆盖 multipart 文件字节、Base64 图片、评论与附件读回、内容损坏、超时不重传、重复运行、缺凭据不发送请求。Windows 包入口和发布包验收记录将在实际完成后追加。
+Mac PowerShell 7.6.6 已对实际 `Probe.ps1 -Mode Write` 执行 GitHub 实网检查，结果与上表一致；GitCode 无 Token 明确记录为 `NEEDS_TOKEN`。本地模拟接口另外覆盖 multipart 文件字节、Base64 图片、评论与附件读回、内容损坏、超时不重传、重复运行、缺凭据不发送请求。
+
+发布前 [Windows 回归](https://github.com/Kirrito-k423/AIConnector/actions/runs/35716793268) 与发布后 [公开包验收](https://github.com/Kirrito-k423/AIConnector/actions/runs/35717196502) 均通过，代码及标签对应 `36eaf5d`：
+
+- Windows PowerShell 5.1.26100.33296：36 项测试全部通过。包含解压后的真实 `Run-Windows-Write.cmd`、中文空格路径、互联网来源标记及一次信任确认；向两个本地模拟 API 完成评论、附件、对端样本回执和 ZIP 报告。
+- 公开包验收：匿名下载实际 v0.1.4，全新解压，默认配置未修改，一次启动只读入口完成 GitHub 评论读取及 7 个实网下载样本的 SHA-256 校验。此阶段没有外部写入。
+- Mac：25 项通用测试通过，11 项 Windows 专用测试由上述 Windows CI 执行。
+- Windows CI 构建、本地构建和匿名下载的发布包逐字节一致：21,419 字节，SHA-256 `16fed4e96269f788d96f60cc951be21efb1ad0c428a1ea241201caf39dac790d`；9 个发布资产（含校验文本和合成样本）与 CI 产物一致。
+
+这些验收证明程序和交付入口按预期工作。用户内网的认证写入与双 PC 回执仍需该机器上的实际执行；GitCode 剩余浏览器测试也仍待解锁后进行。
 
 ## 本地程序验证
 
