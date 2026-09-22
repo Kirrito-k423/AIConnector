@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import zipfile
 from http.server import ThreadingHTTPServer
 
@@ -70,6 +71,16 @@ class BundleTests(unittest.TestCase):
         with zipfile.ZipFile(self.root / "dist/sample-128KiB.zip") as z:
             self.assertIsNone(z.testzip())
             self.assertEqual(len(z.read("sample.bin")), 131072)
+
+    def test_windows_checkout_line_endings_produce_identical_bundle(self):
+        checkout = self.root / "windows checkout"
+        checkout.mkdir()
+        for name in ("Probe.ps1", "Run-Windows.cmd", "probe.config.json", "README.md"):
+            data = (ROOT / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            (checkout / name).write_bytes(data)
+        with patch.object(builder, "ROOT", checkout):
+            windows_archive = builder.build(self.root / "windows build")
+        self.assertEqual(self.archive.read_bytes(), windows_archive.read_bytes())
 
     def check_report(self, run):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

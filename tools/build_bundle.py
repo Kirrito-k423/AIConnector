@@ -48,6 +48,8 @@ def build(output):
     if len(config["downloads"]) != len(samples):
         raise ValueError("Every release fixture must be in the default scan")
     files = {name: (ROOT / name).read_bytes() for name in ("Probe.ps1", "Run-Windows.cmd", "probe.config.json", "README.md")}
+    for name in ("Probe.ps1", "probe.config.json", "README.md"):
+        files[name] = files[name].replace(b"\r\n", b"\n")
     if not files["Probe.ps1"].startswith(b"\xef\xbb\xbf"):
         raise ValueError("Probe.ps1 requires UTF-8 BOM for Windows PowerShell 5.1")
     # Normalize regardless of checkout platform, and bind launcher to exact script.
