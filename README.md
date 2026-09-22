@@ -4,13 +4,15 @@
 
 第一版提供 Windows PowerShell 5.1 / PowerShell 7 脚本，无第三方模块。Windows 不需要 Python，不需要联网安装依赖。Mac 使用 PowerShell 7。
 
-下载：[Windows 探测工具包](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.0/AIConnector-Probe.zip) · [SHA-256 校验文件](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.0/AIConnector-Probe.zip.sha256) · [版本说明](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.1.0)。
+下载：[Windows 探测工具包](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.1/AIConnector-Probe.zip) · [SHA-256 校验文件](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.1/AIConnector-Probe.zip.sha256) · [版本说明](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.1.1)。
 
 ## Windows：先做不需要账号的检查
 
 1. 将整个压缩包解压到一个目录。
 2. 双击 `Run-Windows.cmd`。
 3. 查看 `reports` 中最新的中文 `.md` 报告；同名 `.json` 供后续程序汇总。
+
+如果程序启动失败，启动器会保留真实退出码，生成 `reports/startup-*.txt`，记录报错、执行策略、脚本签名状态和下载来源标记。启动失败不算网络探测失败，也不再提示“报告已保存”。
 
 如果只能传递文本，可以只复制 `Probe.ps1` 内容，在 Windows 保存为 **UTF-8 with BOM** 的同名文件，在 PowerShell 中运行 `.\Probe.ps1 -Node windows-inner`。初次只读检查有内置默认配置，不依赖其他文件；BOM 用于确保 Windows PowerShell 5.1 正确读取中文。
 
@@ -29,6 +31,33 @@
 ```
 
 `127.0.0.1` 指运行脚本的这台机器，不能把 Mac 的本机代理地址直接当成 Windows 可用的代理。`system` 也不保证和浏览器扩展、浏览器独立登录状态使用同一路径。
+
+## 启动报错：未进行数字签名（Issue #1）
+
+这表示 PowerShell 在执行 `Probe.ps1` 之前拦截了它，还没有进行网络测试。仅凭这条报错，不能判断是 `RemoteSigned` 加下载来源标记，还是 `AllSigned` 等签名要求。
+
+新版启动器失败后会自动收集只读诊断；也可仅诊断、不启动探测器：
+
+```bat
+Run-Windows.cmd --diagnose
+```
+
+| 诊断结果 | 对应处理 |
+|---|---|
+| `EffectivePolicy: RemoteSigned`，`ZoneId=3` 或 `4`，签名不是 `Valid` | 下载文件来源标记可能是直接原因。先核对下载包的 SHA-256 及来源，再按下方说明处理这一个文件 |
+| `EffectivePolicy: AllSigned` | 本包脚本未签名；解除下载标记不能满足签名要求，需要受信任的代码签名 |
+| `EffectivePolicy: Restricted` | 当前策略禁止脚本，需使用该环境允许的运行方式 |
+| `MachinePolicy` 或 `UserPolicy` 不是 `Undefined` | 存在组织策略，按组织允许的签名和执行流程处理 |
+| Zone、签名或策略无法读取 | 保留完整诊断，不把未知值当作“没有限制” |
+
+如果确认是 **RemoteSigned + 下载来源标记**，并已核对这是自己信任的发布包，且所在环境允许解除这份文件的来源标记，可在解压目录的 PowerShell 中运行：
+
+```powershell
+Unblock-File -LiteralPath .\Probe.ps1
+.\Run-Windows.cmd
+```
+
+这只解除 `Probe.ps1` 的下载来源标记，不修改执行策略，也不会给脚本添加数字签名。启动器不会自动执行此操作，不设置 `Bypass`，不改注册表或组织策略。依据：[Microsoft 执行策略说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies)、[Unblock-File](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/unblock-file)。
 
 ## 报告如何读
 

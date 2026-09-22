@@ -116,14 +116,14 @@ class ProbeTests(unittest.TestCase):
                "-Proxy", "direct", "-Node", node, "-Channel", "test",
                "-Session", "run1", "-Peer", peer, *extra]
         env = dict(os.environ, AICONNECTOR_TEST_TOKEN=token)
-        run = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=25)
+        run = subprocess.run(cmd, env=env, encoding="utf-8", errors="replace", capture_output=True, timeout=25)
         reports = list(out.glob("*.json"))
         self.assertEqual(len(reports), 1, run.stdout + run.stderr)
         if success:
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         else:
             self.assertEqual(run.returncode, 2, run.stdout + run.stderr)
-        raw = reports[0].read_text()
+        raw = reports[0].read_text(encoding="utf-8")
         if token:
             self.assertNotIn(token, raw + run.stdout + run.stderr)
             self.assertNotIn("access_token", raw)
@@ -220,7 +220,7 @@ class ProbeTests(unittest.TestCase):
     def test_samples_hashes_and_sizes(self):
         self.run_probe("Samples")
         folder = self.root / "1" / "samples"
-        manifest = json.loads((folder / "manifest.json").read_text())
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(len(manifest), 6)
         for row in manifest:
             data = (folder / row["name"]).read_bytes()
@@ -242,9 +242,9 @@ class ProbeTests(unittest.TestCase):
         config.write_text('{"secret": "DO_NOT_PRINT_ME", invalid}')
         out = self.root / "broken-report"
         run = subprocess.run([PWSH, "-NoLogo", "-NoProfile", "-File", str(ROOT / "Probe.ps1"),
-                              "-Config", str(config), "-OutputDir", str(out)], text=True, capture_output=True)
+                              "-Config", str(config), "-OutputDir", str(out)], encoding="utf-8", errors="replace", capture_output=True)
         self.assertEqual(run.returncode, 2)
-        output = run.stdout + run.stderr + next(out.glob("*.json")).read_text()
+        output = run.stdout + run.stderr + next(out.glob("*.json")).read_text(encoding="utf-8")
         self.assertNotIn("DO_NOT_PRINT_ME", output)
 
 

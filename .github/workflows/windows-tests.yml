@@ -1,0 +1,27 @@
+name: Windows PowerShell tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.ps1'
+      - '*.cmd'
+      - 'tests/**'
+      - '.github/workflows/windows-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run protocol and launcher regression tests with Windows PowerShell 5.1
+        shell: pwsh
+        env:
+          PWSH: powershell.exe
+          PYTHONUTF8: '1'
+        run: python -m unittest discover -s tests -v
