@@ -157,7 +157,7 @@ pwsh -NoProfile -File ./Probe.ps1 -Mode Verify -Node mac-outer -Peer windows-inn
 
 - 已实现：GitCode/GitHub 的 HTTP、身份 API、指定 Issue 评论读取；双节点文本样本和回执；有界下载及文件校验；中文 Markdown/JSON 报告。
 - 尚未实现：浏览器自动化、网盘 SDK、附件自动上传、长期轮询、NPU 任务执行、自动选择中转路由。现阶段先得到实际可用性证据。
-- Windows 目标为系统自带 PowerShell 5.1；本次开发验证在 macOS ARM64 + PowerShell 7.6.6 进行，Windows 真机结果待采集。
+- Windows PowerShell 5.1 已在 GitHub 托管 Windows 环境通过 21 项测试，包含签名策略拦截与启动器诊断；macOS ARM64 + PowerShell 7.6.6 下通过 16 项通用测试。用户内网 Windows 的实际策略、启动和网络结果仍需采集。[Windows 测试记录](https://github.com/Kirrito-k423/AIConnector/actions/runs/35682791272)
 - 本地 HTTP 模拟服务覆盖协议与错误处理，不替代真实 GitCode/GitHub 评论写入或两台机器的跨网络测试。
 
 开发测试（Python 只供开发测试使用，Windows 用户运行探测器不需要它）：
