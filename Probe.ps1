@@ -168,8 +168,9 @@ function Invoke-ProbeHttp {
         $result.sha256 = Get-Sha256 $bytes
         $text = $script:Utf8.GetString($bytes)
         try {
-            if ($text.TrimStart().StartsWith('[')) { $result.json = @(ConvertFrom-Json -InputObject $text -ErrorAction Stop) }
-            else { $result.json = ConvertFrom-Json -InputObject $text -ErrorAction Stop }
+            # A property preserves [] / [item] on both Windows PowerShell 5.1
+            # and PowerShell 7, whose root-array pipeline enumeration differs.
+            $result.json = (ConvertFrom-Json -InputObject ('{"value":' + $text + '}') -ErrorAction Stop).value
         } catch { }
         if ($result.http -eq 429) { $result.status = 'RATE_LIMITED' }
         elseif ($result.http -eq 401) { $result.status = 'AUTH_REQUIRED_OR_REJECTED' }
