@@ -6,9 +6,17 @@ on:
     paths:
       - '*.ps1'
       - '*.cmd'
+      - '*.json'
+      - 'README.md'
+      - 'tools/**'
       - 'tests/**'
       - '.github/workflows/windows-tests.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional published release to download and test with unchanged defaults'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,9 +27,33 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Run protocol and launcher regression tests with Windows PowerShell 5.1
+      - name: Test scripts, startup policies and extracted release package on Windows PowerShell 5.1
         shell: pwsh
         env:
           PWSH: powershell.exe
           PYTHONUTF8: '1'
         run: python -m unittest discover -s tests -v
+      - name: Build release bundle and synthetic fixtures
+        run: python tools/build_bundle.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-windows-package
+          path: dist/*
+  release-acceptance:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    needs: windows-powershell
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Public release download, clean extraction, default launch and live read-only checks
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python tools/validate_release.py $env:RELEASE_TAG
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-acceptance-evidence
+          path: release-acceptance/

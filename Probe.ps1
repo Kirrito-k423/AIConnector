@@ -35,7 +35,8 @@ $script:Token = ''
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:DownloadLimit = 16 * 1024 * 1024
 $script:Report = [ordered]@{
-    schema = 'aiconnector.report.v1'; node = $Node; mode = $Mode
+    schema = 'aiconnector.report.v1'; version = '0.1.3'; node = $Node; mode = $Mode
+    completed = $false
     generated_at = [DateTime]::UtcNow.ToString('o')
     platform = [Environment]::OSVersion.Platform.ToString()
     powershell = $PSVersionTable.PSVersion.ToString()
@@ -90,12 +91,21 @@ function Save-Report {
     $stem = '{0}-{1}-{2}-{3}' -f $Node, $Mode.ToLowerInvariant(), [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss'), ([Guid]::NewGuid().ToString('N').Substring(0,6))
     $jsonPath = Join-Path $OutputDir ($stem + '.json')
     $mdPath = Join-Path $OutputDir ($stem + '.md')
+    $verified = @($script:Results | Where-Object { $_.status -in @('PASS','EXACT_BYTES_VERIFIED','AUTH_API_VERIFIED','PEER_RECEIPT_VERIFIED') })
+    $script:Report['summary'] = [ordered]@{
+        completed = $script:Report.completed; checked = $script:Results.Count; verified = $verified.Count
+        conclusion = '完整检查记录已生成；只将明确验证的能力列为通过。未验证项目及原因见下表。'
+        peer_verified = (@($script:Results | Where-Object { $_.status -eq 'PEER_RECEIPT_VERIFIED' }).Count -gt 0)
+    }
+    if (-not $script:Report.completed) { $script:Report.summary.conclusion = '本次运行未完成，请查看 ERROR 项；不能视为完整检查。' }
     [IO.File]::WriteAllText($jsonPath, ($script:Report | ConvertTo-Json -Depth 20), $script:Utf8)
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('# AIConnector 通道探测报告')
     $lines.Add('')
     $lines.Add(('节点：{0}；模式：{1}；路由：{2}；PowerShell：{3}' -f $Node,$Mode,$script:Report.route,$script:Report.powershell))
     $lines.Add(('时间：{0}' -f $script:Report.generated_at))
+    $lines.Add('')
+    $lines.Add($script:Report.summary.conclusion)
     $lines.Add('')
     $lines.Add('| 检查 | 状态 | 说明 |')
     $lines.Add('|---|---|---|')
@@ -105,7 +115,22 @@ function Save-Report {
     $lines.Add('')
     foreach ($line in $script:Report.limits) { $lines.Add('- ' + $line) }
     [IO.File]::WriteAllText($mdPath, ($lines -join "`n"), $script:Utf8)
-    Write-Host ('报告：' + $mdPath)
+    $htmlPath = Join-Path $OutputDir ($stem + '.html')
+    $encoded = [Net.WebUtility]::HtmlEncode(($lines -join "`n"))
+    [IO.File]::WriteAllText($htmlPath, ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>AIConnector 检查报告</title><style>body{max-width:1100px;margin:32px auto;padding:0 24px;font:16px/1.7 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>AIConnector v0.1.3</h1><pre>' + $encoded + '</pre></html>'), $script:Utf8)
+    Add-Type -AssemblyName System.IO.Compression
+    $zipPath = Join-Path $OutputDir ($stem + '.zip')
+    $stream = [IO.File]::Create($zipPath)
+    $zip = New-Object IO.Compression.ZipArchive($stream, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($path in @($jsonPath,$mdPath,$htmlPath)) {
+            $entry = $zip.CreateEntry([IO.Path]::GetFileName($path))
+            $dest = $entry.Open()
+            try { $bytes = [IO.File]::ReadAllBytes($path); $dest.Write($bytes,0,$bytes.Length) } finally { $dest.Dispose() }
+        }
+    } finally { $zip.Dispose(); $stream.Dispose() }
+    Write-Host ('查看报告：' + $htmlPath)
+    Write-Host ('回传这一个文件即可：' + $zipPath)
 }
 
 function Invoke-ProbeHttp {
@@ -288,6 +313,10 @@ function Invoke-Scan($Settings) {
         if ($status -eq 'HTTP_OK') { $status = 'HTTP_REACHABLE_ONLY' }
         Add-Observation ($name + '/website') $status '仅检查脚本 HTTP 访问；浏览器登录、验证码与页面功能尚未验证。' (Get-Evidence $web)
         $token = Get-Token $c
+        if ($PromptToken -and -not $token) {
+            $secure = Read-Host ($name + ' Token（可选，直接回车跳过；不会保存）') -AsSecureString
+            $token = (New-Object Net.NetworkCredential('', $secure)).Password
+        }
         $api = Invoke-ChannelApi $c '/user' 'GET' '' $token
         $status = $api.status
         $detail = '检查身份 API；未保存响应正文。'
@@ -299,26 +328,52 @@ function Invoke-Scan($Settings) {
             if ($token) { $status = 'AUTH_REJECTED'; $detail = '已提供凭据但返回 401；检查凭据和服务端认证方式。' }
             else { $status = 'NEEDS_TOKEN'; $detail = '未提供 Token，收到 HTTP 401；凭据认证能力尚未验证。' }
         }
+        if ($api.http -eq 403 -and -not $token) { $detail = '匿名身份 API 返回 403；尚不能区分认证要求、权限或网关拒绝，不能据此判断整个通道不可用。' }
         Add-Observation ($name + '/api') $status $detail (Get-Evidence $api)
-        if ((Get-Field $c 'repository') -and (Get-Field $c 'issue')) {
+        # Read targets are separate from exchange targets: public third-party
+        # repositories must never become destinations for Send/Receive.
+        $readRepo = [string](Get-Field $c 'read_repository' (Get-Field $c 'repository'))
+        $readIssue = [string](Get-Field $c 'read_issue' (Get-Field $c 'issue'))
+        if ($readRepo -and -not $readIssue) {
+            if ($readRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { Stop-Probe '只读仓库格式无效。' }
+            $list = Invoke-ChannelApi $c ('/repos/' + $readRepo + '/issues?state=all&per_page=1') 'GET' '' $token
+            $ls = $list.status
+            if ($ls -eq 'HTTP_OK') {
+                if ($list.json -is [Array]) {
+                    $ls = 'PASS'
+                    if ($list.json.Count -gt 0) { $readIssue = [string](Get-Field $list.json[0] 'number') }
+                } else { $ls = 'UNEXPECTED_API_RESPONSE' }
+            }
+            Add-Observation ($name + '/issue_list') $ls '自动检查预置公共仓库并选择一个 Issue 读取；不向该仓库写入。' (Get-Evidence $list)
+        }
+        if ($readRepo -and $readIssue) {
             try {
-                $comments = Get-Comments $c $token
+                $readTarget = [pscustomobject]@{repository=$readRepo;issue=$readIssue;api_base=$c.api_base;provider=$c.provider}
+                $comments = Get-Comments $readTarget $token
                 Add-Observation ($name + '/issue_read') 'PASS' ('读取并验证了评论数组，条数：' + $comments.Count)
             } catch {
-                Add-Observation ($name + '/issue_read') 'NOT_VERIFIED' '未能完成评论读取；检查 Issue、凭据、响应结构和分页限制。'
+                $detail = '未能完成评论读取；检查 Issue、凭据、响应结构和分页限制。'
+                $e = $_.Exception
+                while ($null -ne $e) {
+                    if ($e.Data.Contains('probe_reason')) { $detail = [string]$e.Data['probe_reason']; break }
+                    $e = $e.InnerException
+                }
+                Add-Observation ($name + '/issue_read') 'NOT_VERIFIED' $detail
             }
-        } else { Add-Observation ($name + '/issue_read') 'NOT_CONFIGURED' '尚未填写测试仓库与 Issue。' }
+        } elseif ($readRepo) { Add-Observation ($name + '/issue_read') 'NOT_VERIFIED' '公共 Issue 列表未提供可读条目，原因见 issue_list；本次已记录，无需修改配置补测。' }
+        else { Add-Observation ($name + '/issue_read') 'NOT_CONFIGURED' '当前配置没有只读测试目标。' }
         Add-Observation ($name + '/upload_and_peer') 'NOT_TESTED' 'Scan 不写入；跨机器文本用 Send/Receive/Verify 测试，附件上传尚未验证。'
     }
     foreach ($d in @(Get-Field $Settings 'downloads' @())) {
-        $r = Invoke-ProbeHttp -Url $d.url -Limit $script:DownloadLimit
+        try { $r = Invoke-ProbeHttp -Url $d.url -Limit $script:DownloadLimit }
+        catch { Add-Observation ('download/' + $d.name) 'INVALID_TARGET' '下载目标格式无效，其他项目继续检查。'; continue }
         $expected = [string](Get-Field $d 'sha256')
         $status = $r.status
         $detail = '下载失败或未完成。'
         if ($status -eq 'HTTP_OK') {
             if (-not $expected) { $status = 'DOWNLOADED_UNVERIFIED'; $detail = '已获取响应；缺少原文件 SHA-256，无法排除登录页、转码或截断。' }
             elseif ($expected -notmatch '^[a-fA-F0-9]{64}$') { $status = 'INVALID_EXPECTED_HASH'; $detail = '配置中的 SHA-256 格式不正确。' }
-            elseif ($expected.ToLowerInvariant() -eq $r.sha256) { $status = 'EXACT_BYTES_VERIFIED'; $detail = '下载字节与指定原文件 SHA-256 一致；只证明此文件、此大小。' }
+            elseif ($expected.ToLowerInvariant() -eq $r.sha256) { $status = 'EXACT_BYTES_VERIFIED'; $detail = ('下载字节与原文件 SHA-256 一致，{0} 字节；只证明该文件，未测出容量上限。' -f $r.bytes) }
             else { $status = 'HASH_MISMATCH'; $detail = '下载结果不等于原文件；可能被转码、截断或返回拦截页面。' }
         }
         Add-Observation ('download/' + $d.name) $status $detail (Get-Evidence $r)
@@ -425,6 +480,7 @@ try {
         if (-not (Get-Field $settings 'channels')) { Stop-Probe '配置缺少 channels。' }
         if ($Mode -eq 'Scan') { Invoke-Scan $settings } else { Invoke-Exchange $settings }
     }
+    $script:Report.completed = $true
 } catch {
     # Only our controlled application messages are printable. Suppress parser/network exception details.
     $message = '运行未完成，请检查配置、参数及权限。'

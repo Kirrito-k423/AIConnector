@@ -1,181 +1,103 @@
-# AIConnector：通道探测原型
+# AIConnector：一次运行的通道检查包
 
-先测清楚内外两台 PC 能通过什么渠道交换数据，再决定实验中间件如何实现。
+检查内外 PC 能通过哪些渠道交换实验任务和结果。Windows 使用系统自带 PowerShell 5.1，不需要 Python、管理员权限或联网安装依赖。
 
-第一版提供 Windows PowerShell 5.1 / PowerShell 7 脚本，无第三方模块。Windows 不需要 Python，不需要联网安装依赖。Mac 使用 PowerShell 7。
+[下载 Windows 检查包 v0.1.3](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.3/AIConnector-Probe.zip) · [SHA-256](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.3/AIConnector-Probe.zip.sha256) · [验证记录](VALIDATION.md)
 
-下载：[Windows 探测工具包](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.2/AIConnector-Probe.zip) · [SHA-256 校验文件](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.2/AIConnector-Probe.zip.sha256) · [版本说明](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.1.2)。
+## 用户只需一次运行
 
-## Windows：先做不需要账号的检查
+1. **完整解压** ZIP，双击 `Run-Windows.cmd`。
+2. 如果提示下载来源标记，确认信任此包且环境允许后输入 `Y`，本次继续完成检查。
+3. 将 `reports` 中本次生成的 **一个 ZIP** 回传。旁边的 HTML 可直接在浏览器查看。
 
-1. 将整个压缩包解压到一个目录。
-2. 双击 `Run-Windows.cmd`。
-3. 查看 `reports` 中最新的中文 `.md` 报告；同名 `.json` 供后续程序汇总。
+**不需要改配置、填写仓库或逐项重新运行。** 没有 Token 也会完成所有不需要凭据的检查。部分通道失败时，其余检查继续；结果会明确标出失败或未验证原因。默认网络超时为每项 12 秒，完整检查通常需要几十秒至几分钟。启动阶段失败也会自动生成诊断 ZIP。
 
-如果程序启动失败，启动器会保留真实退出码，生成 `reports/startup-*.txt`，记录报错、执行策略、脚本签名状态和下载来源标记。启动失败不算网络探测失败，也不再提示“报告已保存”。
+默认预置：
 
-如果只能传递文本，可以只复制 `Probe.ps1` 内容，在 Windows 保存为 **UTF-8 with BOM** 的同名文件，在 PowerShell 中运行 `.\Probe.ps1 -Node windows-inner`。初次只读检查有内置默认配置，不依赖其他文件；BOM 用于确保 Windows PowerShell 5.1 正确读取中文。
+| 检查 | 本次自动执行的内容 |
+|---|---|
+| 环境 | 包内脚本校验、PowerShell；启动失败时收集执行策略、签名和下载标记 |
+| 网页 / API | GitCode、GitHub 的脚本 HTTP 访问和身份接口响应 |
+| 公共评论 | 读取 AIConnector Issue #1；GitCode 自动尝试从 Ascend/triton-ascend 公开列表选择 Issue |
+| 实际文件 | 下载并校验 TXT（1 KiB、32 KiB）、JSON、CSV、PNG、ZIP（内含 128 KiB 数据）、1 MiB 二进制，共 7 个合成样本 |
+| 报告 | 中文 HTML、Markdown、机器可读 JSON，自动打为一个 ZIP |
 
-第一次运行只发送 GET 请求，检查 GitCode / GitHub 网页和身份 API。**不会创建 Issue、发评论、上传本机文件，也不会改变代理或脚本执行策略。** 如果环境策略禁止执行脚本，保留系统提示作为运行环境限制，不将其误报为平台网络失败。
+下载样本来自本项目 GitHub Release，分别记录 SHA-256。验证一个 1 MiB 文件并不代表测出了平台容量上限；也不证明 GitCode 附件、网盘或公网服务器可用。
 
-默认使用运行时的系统代理配置。需要比较直连时，在解压目录打开 PowerShell：
+默认只发 GET 请求，不发布评论、不上传本地文件。**单机检查可以一次完成；跨网段双向通信仍需两端实际运行并取得对端回执。** 没有凭据的写入权限、附件上传和双机通信会明确保留为未验证，不会包装成全部通过。
 
-```powershell
-.\Probe.ps1 -Mode Scan -Node windows-inner -Proxy direct
-```
+## 可选：本次同时检查账号认证
 
-指定已有的 HTTP 代理：
-
-```powershell
-.\Probe.ps1 -Mode Scan -Node windows-inner -Proxy http://127.0.0.1:7890
-```
-
-`127.0.0.1` 指运行脚本的这台机器，不能把 Mac 的本机代理地址直接当成 Windows 可用的代理。`system` 也不保证和浏览器扩展、浏览器独立登录状态使用同一路径。
-
-## 启动报错：未进行数字签名（Issue #1）
-
-这表示 PowerShell 在执行 `Probe.ps1` 之前拦截了它，还没有进行网络测试。仅凭这条报错，不能判断是 `RemoteSigned` 加下载来源标记，还是 `AllSigned` 等签名要求。
-
-新版启动器失败后会自动收集只读诊断；也可仅诊断、不启动探测器：
+已准备好 GitCode / GitHub Token 时，在解压目录打开终端运行：
 
 ```bat
-Run-Windows.cmd --diagnose
+Run-Windows.cmd -PromptToken
 ```
 
-| 诊断结果 | 对应处理 |
-|---|---|
-| `EffectivePolicy: RemoteSigned`，`ZoneId=3` 或 `4`，签名不是 `Valid` | 下载文件来源标记可能是直接原因。先核对下载包的 SHA-256 及来源，再按下方说明处理这一个文件 |
-| `EffectivePolicy: AllSigned` | 本包脚本未签名；解除下载标记不能满足签名要求，需要受信任的代码签名 |
-| `EffectivePolicy: Restricted` | 当前策略禁止脚本，需使用该环境允许的运行方式 |
-| `MachinePolicy` 或 `UserPolicy` 不是 `Undefined` | 存在组织策略，按组织允许的签名和执行流程处理 |
-| Zone、签名或策略无法读取 | 保留完整诊断，不把未知值当作“没有限制” |
+每个平台只在本次进程中询问一次，输入隐藏；直接回车即可跳过。也支持已有环境变量 `AICONNECTOR_GITCODE_TOKEN`、`AICONNECTOR_GITHUB_TOKEN`。不保存 Token，不回传 API 正文、评论正文或本机文件。即使提供 Token，Scan 也不执行写入测试。
 
-如果确认是 **RemoteSigned + 下载来源标记**，并已核对这是自己信任的发布包，且所在环境允许解除这份文件的来源标记，可在解压目录的 PowerShell 中运行：
+## 下载标记与组织策略
 
-```powershell
-Unblock-File -LiteralPath .\Probe.ps1
-.\Run-Windows.cmd
-```
+发布包启动器内置了本包 `Probe.ps1` 的 SHA-256。文件不匹配时停止执行。该检查用于发现包内文件不一致，**不是发布者数字签名**。
 
-这只解除 `Probe.ps1` 的下载来源标记，不修改执行策略，也不会给脚本添加数字签名。启动器不会自动执行此操作，不设置 `Bypass`，不改注册表或组织策略。依据：[Microsoft 执行策略说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies)、[Unblock-File](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/unblock-file)。
+仅当有效策略为 `RemoteSigned`、没有 MachinePolicy/UserPolicy 强制策略、脚本带互联网来源标记时，启动器才会询问是否解除这一个已校验脚本的来源标记。接受后在同次启动中运行；拒绝则保留文件原状。不会设置 `Bypass`，不会修改执行策略。`AllSigned`、`Restricted` 或组织策略限制仍需使用组织允许的方式处理。
 
-## v0.1.1 的路径初始化报错
+依据：[Microsoft 执行策略](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies)、[Unblock-File](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/unblock-file)。
 
-如果解除下载标记后遇到 `Join-Path` 的 `Path` 为空，且报错指向参数默认值中的 `$PSScriptRoot`，这是 v0.1.1 的兼容性缺陷。v0.1.2 已将默认配置和输出路径的解析移到参数绑定之后，按脚本文件位置定位。
-
-当前 v0.1.1 也可以在解压目录显式传入这两个路径后运行：
-
-```powershell
-.\Run-Windows.cmd -Config .\probe.config.json -OutputDir .\reports
-```
-
-新版已测试默认启动、仅指定一个路径参数、从其他工作目录启动，以及 Windows 启动器调用真实探测脚本的完整扫描流程；不依赖调用者先切换到脚本目录。
+需要仅诊断而不启动检查时，可运行 `Run-Windows.cmd --diagnose`。
 
 ## 报告如何读
 
-| 状态 | 实际含义 |
+| 状态 | 含义 |
 |---|---|
-| `HTTP_REACHABLE_ONLY` | 收到成功 HTTP 响应；浏览器登录和页面功能未验证 |
-| `NEEDS_TOKEN` | 未带凭据收到 401；还不能判断认证后是否可用 |
-| `AUTH_API_VERIFIED` | 身份 API 返回预期字段；还没证明 Issue 写权限 |
-| `UNEXPECTED_API_RESPONSE` | 返回 2xx，但结构不是预期 API，可能是登录页或拦截页 |
-| `FORBIDDEN_OR_RATE_LIMITED` | 403；权限、网关、风控或限流原因尚不能区分 |
-| `NOT_FOUND_OR_NOT_VISIBLE` | 404；可能不存在，也可能没有读取权限 |
-| `TIMEOUT` / `TLS_ERROR` / `DNS_ERROR` / `NETWORK_ERROR` | 对应请求失败；单次失败不代表永远不可达 |
-| `NOT_CONFIGURED` / `NOT_TESTED` | 尚无证据，不能当作成功或失败 |
-| `POST_ACCEPTED` | 平台接受评论，尚未证明对端收到 |
-| `RECEIVED_AND_RECEIPT_POSTED` | 接收端校验样本后提交了回执 |
-| `PEER_RECEIPT_VERIFIED` | 发送端看到了匹配回执，须两台真实机器分别运行才证明跨网段 |
-| `EXACT_BYTES_VERIFIED` | 下载文件与提供的原文件 SHA-256 完全一致 |
-| `DOWNLOADED_UNVERIFIED` | 拿到了响应，但没有原文件校验值，不能排除登录页等错误内容 |
-| `HASH_MISMATCH` | 下载内容被改变，或拿到错误页面 |
+| `PASS` | 指定评论或列表返回预期 API 数据 |
+| `EXACT_BYTES_VERIFIED` | 下载字节与合成原文件 SHA-256 相同 |
+| `HTTP_REACHABLE_ONLY` | HTTP 有响应，浏览器登录和网页功能未验证 |
+| `NEEDS_TOKEN` | 未带 Token 返回 401，认证能力未验证 |
+| `AUTH_REJECTED` | 已带 Token 仍返回 401 |
+| `FORBIDDEN_OR_RATE_LIMITED` | 返回 403，不能仅凭这一项判定整个平台不可用 |
+| `UNEXPECTED_API_RESPONSE` / `HASH_MISMATCH` | 响应结构或文件内容不符，可能是登录页、拦截页或被修改 |
+| `NOT_TESTED` / `NOT_VERIFIED` | 尚无对应能力的充分证据 |
 
-报告记录请求时间、HTTP 状态、响应字节数、SHA-256、内容类型，不保存网页/API 正文、Token 或 URL 查询参数。网页与身份 API 的响应上限为 2 MiB，附件下载为 16 MiB；超出只记为探测器限额，不推断平台最大容量。
+`completed=true` 表示本次检查运行完成，不表示所有通道通过。以每项状态为准。
 
-## 文本：验证两台机器之间的往返
+## 开发者：代理和自定义目标
 
-需要一个专用测试 Issue。把配置 `probe.config.json` 中选定渠道的 `repository` 和 `issue` 填好，例如：
-
-```json
-{
-  "name": "gitcode",
-  "provider": "gitcode",
-  "website": "https://gitcode.com/",
-  "api_base": "https://api.gitcode.com/api/v5",
-  "token_env": "AICONNECTOR_GITCODE_TOKEN",
-  "repository": "your-owner/your-test-repo",
-  "issue": "123"
-}
-```
-
-可以保留另一个渠道的空配置，也可以删除其配置对象。GitHub 的 `provider` 为 `github`、`api_base` 为 `https://api.github.com`。不要把 Token 写进配置或命令行；下面的 `-PromptToken` 会以隐藏输入方式提示。也可以由本机凭据管理流程注入 `token_env` 指定的环境变量。
-
-**Send 会创建一条样本评论；Receive 会创建一条校验回执。只写入配置指定的 Issue，不创建或关闭 Issue，不删除评论。** 同一 Session、方向和大小的重复运行会先查询已存在的消息，避免串行重试重复发帖；这不是生产级并发锁。
-
-两端设置同一个 Session，例如 `probe-001`，不同的 Node 名称。
-
-Mac 发 1 KiB 文本（包含中文和换行）：
+默认使用 .NET 系统代理配置，未必等于浏览器插件的配置。显式代理只作用于此次请求，不修改系统网络设置：
 
 ```powershell
-pwsh -NoProfile -File ./Probe.ps1 -Mode Send -Node mac-outer -Peer windows-inner -Session probe-001 -Channel gitcode -SizeBytes 1024 -PromptToken -Proxy http://127.0.0.1:7890
+.\Probe.ps1 -Node windows-inner -Proxy http://127.0.0.1:7890
+.\Probe.ps1 -Node windows-inner -Proxy direct
 ```
 
-Windows 接收并回执：
+这里的 `127.0.0.1` 指运行程序的这台 PC。Mac 可使用 PowerShell 7：`pwsh -File ./Probe.ps1 -Node mac-outer`。
+
+自定义平台只读目标用 `read_repository` / `read_issue`；显式收发目标用 `repository` / `issue`。两者分开，避免向公共演示仓库发布测试消息。自定义配置通过 `-Config path` 传入；常规用户无需配置。
+
+## 开发者：显式双机文本收发
+
+此步骤属于后续通信验证，需要受控测试 Issue、写入权限和两端分别运行。只读默认目标不能直接用于 Send/Receive。先在自定义配置的 `repository` / `issue` 设置自己获准写入的目标，再使用同一 Session：
 
 ```powershell
-.\Probe.ps1 -Mode Receive -Node windows-inner -Peer mac-outer -Session probe-001 -Channel gitcode -PromptToken
+# 外部 Mac 发样本
+./Probe.ps1 -Config ./probe.local.json -Mode Send -Channel github -Node mac -Peer windows -Session trial1 -PromptToken
+# 内部 Windows 读取、校验并发布回执
+./Probe.ps1 -Config ./probe.local.json -Mode Receive -Channel github -Node windows -Peer mac -Session trial1 -PromptToken
+# Mac 校验对端回执
+./Probe.ps1 -Config ./probe.local.json -Mode Verify -Channel github -Node mac -Peer windows -Session trial1
 ```
 
-Mac 确认回执：
+可交换 Node/Peer 测试反方向。正文上限 32 KiB，使用合成数据，包含字节数、SHA-256 和稳定消息 ID。顺序重跑会先查已有消息；不提供并发锁。写入结果不明确时不自动重发。回执用于连通性验证，不是设备身份认证。
 
-```powershell
-pwsh -NoProfile -File ./Probe.ps1 -Mode Verify -Node mac-outer -Peer windows-inner -Session probe-001 -Channel gitcode -PromptToken -Proxy http://127.0.0.1:7890
-```
+未实现浏览器自动化、附件自动上传、持续轮询任务队列或 NPU 实验执行。当前目标是先把单次通道检查做完整。
 
-然后交换方向：Windows 执行 Send，Mac 执行 Receive，Windows 执行 Verify。两端 Node/Peer 对调，Session 保持一致。
-
-可按需要将 `SizeBytes` 增至 8192 或 32768，逐档做同样的往返。该参数是 **UTF-8 样本正文** 的字节数；完整评论还包含协议字段和 Markdown 包装，发送报告会另外记录完整评论正文大小。成功只能说明这个大小本次可用，不能宣称已测出平台最大值。工具不自动增加大小、不连续刷屏、不对写入超时自动重发。
-
-公开 Issue 的 Verify 可以不带 Token；私有 Issue 需要相应读取权限。回执基于受控测试 Issue 和节点标签，不构成密码学设备身份认证；不要把此测试协议直接用作任意命令执行通道。
-
-## 文件：测试浏览器上传后的下载完整性
-
-生成合成样本：
-
-```powershell
-.\Probe.ps1 -Mode Samples -Node windows-inner
-```
-
-输出 `reports/samples`：1、8、32 KiB 文本，JSON、CSV、1×1 PNG 和 `manifest.json`。每个文件有实际字节数和 SHA-256；不收集真实实验文件。
-
-1. 在现有可用浏览器中尝试上传需要测试的样本，记录不允许的文件类型。
-2. 将实际下载链接填入配置的 `downloads`，SHA-256 从清单原样复制。
-3. 在另一台机器运行 Scan，检查是否为 `EXACT_BYTES_VERIFIED`。
-4. 反方向重复；图片如果被平台转码，哈希不一致会明确显示。
-
-```json
-"downloads": [
-  {
-    "name": "text-1024.txt",
-    "url": "https://your-actual-download-url",
-    "sha256": "这里填写清单中的64位SHA-256"
-  }
-]
-```
-
-下载不携带平台 Token、浏览器 Cookie 或系统登录凭据。若浏览器能下载而脚本不能，报告记录这个能力差异；需要登录的附件自动化下载属于下一步适配范围。带认证的 API 请求遇到重定向会停止，避免 Token 被带到其他地址；若平台迁移，应核对官方 API 地址后更新配置。
-
-## 当前范围和验证边界
-
-- 已实现：GitCode/GitHub 的 HTTP、身份 API、指定 Issue 评论读取；双节点文本样本和回执；有界下载及文件校验；中文 Markdown/JSON 报告。
-- 尚未实现：浏览器自动化、网盘 SDK、附件自动上传、长期轮询、NPU 任务执行、自动选择中转路由。现阶段先得到实际可用性证据。
-- Windows PowerShell 5.1 已在 GitHub 托管 Windows 环境通过 24 项测试，包含默认路径、真实启动入口、签名策略拦截与启动器诊断；macOS ARM64 + PowerShell 7.6.6 下通过 18 项通用测试。用户内网 Windows 的启动和网络结果仍需回读。[Windows 测试记录](https://github.com/Kirrito-k423/AIConnector/actions/runs/35695017923)
-- 本地 HTTP 模拟服务覆盖协议与错误处理，不替代真实 GitCode/GitHub 评论写入或两台机器的跨网络测试。
-
-开发测试（Python 只供开发测试使用，Windows 用户运行探测器不需要它）：
+## 开发者：发布前验收
 
 ```bash
 PWSH=/path/to/pwsh python3 -m unittest discover -s tests -v
+python3 tools/build_bundle.py
 ```
 
-接口依据：[GitCode 读取评论](https://docs.gitcode.com/docs/apis/get-api-v-5-repos-owner-repo-issues-number-comments/)、[GitCode 创建评论](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-issues-number-comments/)、[GitHub 评论接口](https://docs.github.com/en/rest/issues/comments)。网络策略、权限、容量和附件行为仍以两端实测为准。
+Windows CI 用系统 PowerShell 5.1 检查构建后的 ZIP、中文空格目录、真实 cmd 入口、NTFS 来源标记、信任确认、损坏包拒绝、AllSigned 和报告打包。HTTP 错误分支使用本地模拟服务。
+
+发布后额外执行 `tools/validate_release.py v0.1.3`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
