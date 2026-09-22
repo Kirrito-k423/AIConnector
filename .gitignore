@@ -1,0 +1,4 @@
+reports/
+dist/
+__pycache__/
+*.local.json

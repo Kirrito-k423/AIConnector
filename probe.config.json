@@ -1,0 +1,23 @@
+{
+  "channels": [
+    {
+      "name": "gitcode",
+      "provider": "gitcode",
+      "website": "https://gitcode.com/",
+      "api_base": "https://api.gitcode.com/api/v5",
+      "token_env": "AICONNECTOR_GITCODE_TOKEN",
+      "repository": "",
+      "issue": ""
+    },
+    {
+      "name": "github",
+      "provider": "github",
+      "website": "https://github.com/",
+      "api_base": "https://api.github.com",
+      "token_env": "AICONNECTOR_GITHUB_TOKEN",
+      "repository": "",
+      "issue": ""
+    }
+  ],
+  "downloads": []
+}
