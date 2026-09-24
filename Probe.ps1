@@ -19,7 +19,7 @@ param(
     [ValidateRange(1, 100)][int]$MaxPages = 10,
     [switch]$PromptToken,
     [switch]$ResumeUploads,
-    [ValidateRange(0, 900)][int]$MaxUploadWaitSeconds = 180
+    [ValidateRange(0, 900)][int]$MaxUploadWaitSeconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -666,6 +666,10 @@ function Invoke-WriteCheck($Settings) {
             if ($c.provider -eq 'github' -and $tag) {
                 $zip = @($files | Where-Object { $_.mime -eq 'application/zip' })[0]
                 $targets.Add([pscustomobject]@{file=$zip;transport='release';key=('release|'+$tag+'|'+$zip.name+'|'+(Get-Sha256 $zip.data))})
+            }
+            if ($ResumeUploads -and $c.provider -eq 'gitcode') {
+                # Resolve the missing ZIP capability before spending quota on other samples.
+                $targets = @($targets | Sort-Object @{Expression={if ($_.file.mime -eq 'application/zip') { 0 } else { 1 }}})
             }
             $repoId = ''; $release = $null
             foreach ($target in $targets) {

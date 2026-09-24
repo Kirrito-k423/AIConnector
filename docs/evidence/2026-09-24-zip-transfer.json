@@ -1,0 +1,32 @@
+{
+  "environment": "GitHub-hosted Windows, not user intranet",
+  "mac_to_windows_ci": {
+    "url": "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/aiconnector-writecheck-v013-mac-outer-f6f98c9176bc9ec555d3bf235121ad1f274570e0f1de0e90a1b02c7cbe1954ea-result-128KiB.zip",
+    "sha256": "f6f98c9176bc9ec555d3bf235121ad1f274570e0f1de0e90a1b02c7cbe1954ea"
+  },
+  "windows_ci_uploaded_zip": {
+    "http": 200,
+    "elapsed_ms": 245,
+    "bytes": 131215,
+    "url": "https://release-assets.githubusercontent.com/github-production-release-asset/1380791928/0bcf9143-7ee2-4cd7-abbf-b5f1fb3b2f33",
+    "content_type": "application/octet-stream",
+    "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+    "retry_after": "",
+    "source_url": "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/aiconnector-zip-v015-ci-windows-ci-38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12-result-128KiB.zip"
+  },
+  "windows_ci_to_mac": {
+    "source_url": "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/aiconnector-zip-v015-ci-windows-ci-38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12-result-128KiB.zip",
+    "bytes": 131215,
+    "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+    "zip_crc": "PASS",
+    "payload_bytes": 131072,
+    "status": "EXACT_BYTES_VERIFIED"
+  },
+  "workflow": "https://github.com/Kirrito-k423/AIConnector/actions/runs/35983123728",
+  "workflow_commit": "abd995f6ea071d174da5af501ce4b0536703e685",
+  "limits": [
+    "Hosted Windows is not the user intranet.",
+    "Only the synthetic 128 KiB payload has been verified; capacity limit and arbitrary user ZIP files were not tested.",
+    "Actual GitCode rate-limit recovery and user Windows Release upload remain pending."
+  ]
+}

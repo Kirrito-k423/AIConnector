@@ -28,7 +28,7 @@
 
 ## 一次完成写入检查
 
-**已运行过 v0.1.4：将 v0.1.5 解压覆盖原目录，保留原 `reports`，双击 `Run-Windows-Resume.cmd`。** 它跳过评论容量测试和已验证附件，恢复原记录中明确返回 429 或被冷却暂停的项目，并额外验证 ZIP Release 通道。不要删除 `write-state-*.local.json`；换了目录会缺少旧上传记录。缺少记录时不会重新发送旧附件测试，但仍可安全核对 ZIP Release。
+**已运行过 v0.1.4：将 v0.1.5 解压覆盖原目录，保留原 `reports`，双击 `Run-Windows-Resume.cmd`。** 它跳过评论容量测试和已验证附件，优先补测 GitCode ZIP，再恢复原记录中明确返回 429 或被冷却暂停的其他项目，并额外验证 ZIP Release 通道。不要删除 `write-state-*.local.json`；换了目录会缺少旧上传记录。缺少记录时不会重新发送旧附件测试，但仍可安全核对 ZIP Release。
 
 本次还会读取对端在同一测试 Session 发布的 Release ZIP，匿名下载并核对字节与 SHA-256，不解压或执行内容。预置探测只接受指定仓库和测试 Release 的稳定链接，每次最多五个、小于 5 MiB 的样本。
 
@@ -46,7 +46,7 @@
 
 文件全部在内存中合成，不读取用户实验文件。写入与附件下载默认每请求 60 秒。GitCode 上传默认间隔至少 15 秒；这只是保守初始设置，不是已测得的服务端配额。
 
-遇到明确的 HTTP 429，保存 `Retry-After` 和下次允许时间，暂停该平台后续上传；在每平台 180 秒总等待预算内恢复，每文件每次运行最多 3 次被限流的尝试。无有效 `Retry-After` 时按 60 / 120 / 240 秒退避。预算不足就将余项保留为待测，下次恢复仍遵守保存的冷却时间。401、403、400、422 以及超时或未知写入不会按此规则重发。
+遇到明确的 HTTP 429，保存 `Retry-After` 和下次允许时间，暂停该平台后续上传；在每平台 300 秒总等待预算内恢复，每文件每次运行最多 3 次被限流的尝试。无有效 `Retry-After` 时按 60 / 120 / 240 秒退避。预算不足就将余项保留为待测，下次恢复仍遵守保存的冷却时间。401、403、400、422 以及超时或未知写入不会按此规则重发。
 
 `write-state-*.local.json` 保存附件进度。v0.1.4 的 `UPLOAD_REJECTED + HTTP 429` 会迁移为 `RATE_LIMITED`；其余拒绝保留。ZIP Release 文件名含完整 SHA-256，上传前检查已有资产；不覆盖或删除文件，未知上传只允许通过服务器已有资产及字节校验来恢复确认。
 
@@ -56,7 +56,7 @@ GitHub 评论附件 API 的 TXT、JSON、CSV、ZIP 请求已被拒绝；Release 
 
 命令行可使用 `Probe.ps1 -Mode Write -Node windows-inner -PromptToken`。Mac 可运行 `pwsh -File ./Probe.ps1 -Mode Write -Node mac-outer -PromptToken`。凭据也可由 `AICONNECTOR_GITCODE_TOKEN` / `AICONNECTOR_GITHUB_TOKEN` 提供，不写入报告。
 
-恢复命令为 `Probe.ps1 -Mode Write -ResumeUploads -Node windows-inner -PromptToken`；可用 `-MaxUploadWaitSeconds 300` 增加本次等待预算。恢复模式不会重跑 Scan、评论容量测试或样本回执。
+恢复命令为 `Probe.ps1 -Mode Write -ResumeUploads -Node windows-inner -PromptToken`；可用 `-MaxUploadWaitSeconds 600` 增加本次等待预算。恢复模式不会重跑 Scan、评论容量测试或样本回执。
 
 ## 下载标记与组织策略
 
