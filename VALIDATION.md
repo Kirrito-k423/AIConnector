@@ -1,6 +1,31 @@
 # 本次验证记录
 
-日期：2026-09-22。
+更新日期：2026-09-24；下面按日期保留历史证据。
+
+## 2026-09-24：内网 Windows 写入与跨机器回执确认
+
+已回收 [Issue #3 的 Windows 写入报告](https://github.com/Kirrito-k423/AIConnector/issues/3#issuecomment-5810898944)，并在外部 Mac 独立读取两个平台的评论、验证回执、下载附件。详细字节数、SHA-256、评论 ID 及失败 HTTP 状态见 [机器可读验证记录](docs/evidence/2026-09-24-write-verification.json)。本节更新 9 月 22 日“内网写入未测”的状态。
+
+报告 ZIP 为 5,100 字节，CRC 正常，包含 JSON / Markdown / HTML；SHA-256 为 `dd8e17cc17ba1628de06cfa17807dd58aac1927bc0e212cd05a4ab6f7bc76cf1`。Windows PowerShell 5.1.26100.7705，v0.1.4 `Write`，运行完成；`completed=true` 不表示所有附件通过。
+
+| 实际链路 | GitHub | GitCode |
+|---|---|---|
+| Windows 提交评论并独立读回 | 1 / 8 / 32 KiB 通过 | 1 / 8 / 32 KiB 通过 |
+| Mac 独立读取 Windows 评论并核对字节、SHA-256、消息 ID | 1 / 8 / 32 KiB 通过 | 1 / 8 / 32 KiB 通过 |
+| Mac 原先发送 → Windows 接收回执 → Mac `Verify` | 1 / 8 / 32 KiB 通过 | 1 / 8 KiB 通过；原先未发送 32 KiB |
+| Windows 上传附件 → Mac 匿名下载并校验 SHA-256 | PNG 通过 | 1 KiB TXT、PNG 通过 |
+
+Mac 已通过 GitHub `Receive` 为 Windows 的三档评论发布回执；尚未声称 Windows 后续执行过 `Verify`。GitCode 的 Windows 评论已在 Mac 校验，但 Mac 尚未为该方向发布回执。回执依赖本次两个节点实际分别运行的背景，不是设备身份认证。
+
+剩余附件的实际失败原因必须分开记录：
+
+- **GitCode 32 KiB TXT、JSON、CSV、ZIP：HTTP 429，属于限流，格式与容量仍未验证。** 不能将它们当成不支持的文件类型；[官方 API 状态说明](https://docs.gitcode.com/docs/apis/) 也将 429 定义为超过速率限制。当前报告没有保存这些上传响应的 `Retry-After` 或细分原因，无法确定具体限流窗口。
+- GitCode 1 MiB 二进制：HTTP 400；仅凭现有日志不能判定是后缀、内容、参数或其他校验问题。
+- GitHub 两档 TXT、JSON、CSV、ZIP：HTTP 422；1 MiB 二进制：HTTP 403。仅说明此次附件 API 请求未被接受；用户通过浏览器上传结果 ZIP 的路径已实际可用。
+
+下载 GitHub 附件时应使用评论中保存的稳定 `github.com/user-attachments/assets/...` 链接。报告中的 `evidence.url` 是最后跳转地址且查询参数被脱敏；本次直接读取该 S3 地址返回 403，而使用评论里的稳定链接重新获取后为 HTTP 200，69 字节和 SHA-256 均正确。未复制或保存临时签名参数。
+
+当前证据已支持用评论交换小型任务描述、参数和结果摘要，并通过已验证的附件传回图片。通用 ZIP 自动上传、限流后的待测项目恢复、持续轮询和实验执行器仍未完成。后续补测应只覆盖未确认项目，保留成功记录；不要求用户重复运行已经通过的检查。
 
 ## v0.1.4：写入测试及用户内网结果
 

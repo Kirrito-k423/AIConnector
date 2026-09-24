@@ -1,0 +1,220 @@
+{
+  "schema": "aiconnector.validation.v1",
+  "checked_at": "2026-09-24T09:07:19.964577+00:00",
+  "source_issue": "https://github.com/Kirrito-k423/AIConnector/issues/3#issuecomment-5810898944",
+  "source_zip": "https://github.com/user-attachments/files/32600513/windows-inner-write-20260924-084546-7f8de0.zip",
+  "source_zip_bytes": 5100,
+  "source_zip_sha256": "dd8e17cc17ba1628de06cfa17807dd58aac1927bc0e212cd05a4ab6f7bc76cf1",
+  "windows": {
+    "version": "0.1.4",
+    "node": "windows-inner",
+    "mode": "Write",
+    "platform": "Win32NT",
+    "powershell": "5.1.26100.7705",
+    "generated_at": "2026-09-24T08:44:49.3588724Z",
+    "completed": true
+  },
+  "windows_to_mac": {
+    "comments": [
+      {
+        "channel": "github",
+        "comment_id": "5810827505",
+        "bytes": 1024,
+        "sha256": "9e2fa5027c912821028ec9cd5b8315f4b3c03e0a0aff50d1c233e2d86aae0b50",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "channel": "github",
+        "comment_id": "5810828299",
+        "bytes": 8192,
+        "sha256": "1da1c011a5489422b3e8204c30aa2a67fea3153f053a546e27da4f0f747e783f",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "channel": "github",
+        "comment_id": "5810829116",
+        "bytes": 32768,
+        "sha256": "48b03f2782540e919fe10c16327aafdb3dbdf80a0ea727c630e7c4c874ea588d",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "channel": "gitcode",
+        "comment_id": "191578980",
+        "bytes": 32768,
+        "sha256": "48b03f2782540e919fe10c16327aafdb3dbdf80a0ea727c630e7c4c874ea588d",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "channel": "gitcode",
+        "comment_id": "191578950",
+        "bytes": 8192,
+        "sha256": "1da1c011a5489422b3e8204c30aa2a67fea3153f053a546e27da4f0f747e783f",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "channel": "gitcode",
+        "comment_id": "191578911",
+        "bytes": 1024,
+        "sha256": "9e2fa5027c912821028ec9cd5b8315f4b3c03e0a0aff50d1c233e2d86aae0b50",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      }
+    ],
+    "attachments": [
+      {
+        "test": "gitcode/attachment/text-1024.txt",
+        "url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/9d43b6f0-0f8c-4039-b44a-7b3c9f2df7a7/text-1024.txt",
+        "http": 200,
+        "bytes": 1024,
+        "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "test": "gitcode/attachment/pixel.png",
+        "url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/7e958d0e-8669-4eb4-90cf-6ff56412031c/pixel.png",
+        "http": 200,
+        "bytes": 69,
+        "sha256": "e11c7b056593ce0041e2f75a89ec8ea81b19f2261b1021d2ab61da2133ff342f",
+        "status": "WINDOWS_TO_MAC_VERIFIED"
+      },
+      {
+        "test": "github/attachment/pixel.png",
+        "url": "https://github.com/user-attachments/assets/43471a4a-c150-427e-afb1-f552ef38bd60",
+        "status": "WINDOWS_TO_MAC_VERIFIED",
+        "report_redirect_url_http": 403,
+        "http": 200,
+        "bytes": 69,
+        "sha256": "e11c7b056593ce0041e2f75a89ec8ea81b19f2261b1021d2ab61da2133ff342f"
+      }
+    ]
+  },
+  "mac_to_windows_receipts": {
+    "github": [
+      {
+        "bytes": 1024,
+        "sha256": "9e2fa5027c912821028ec9cd5b8315f4b3c03e0a0aff50d1c233e2d86aae0b50",
+        "status": "PEER_RECEIPT_VERIFIED"
+      },
+      {
+        "bytes": 8192,
+        "sha256": "1da1c011a5489422b3e8204c30aa2a67fea3153f053a546e27da4f0f747e783f",
+        "status": "PEER_RECEIPT_VERIFIED"
+      },
+      {
+        "bytes": 32768,
+        "sha256": "48b03f2782540e919fe10c16327aafdb3dbdf80a0ea727c630e7c4c874ea588d",
+        "status": "PEER_RECEIPT_VERIFIED"
+      }
+    ],
+    "gitcode": [
+      {
+        "bytes": 8192,
+        "sha256": "1da1c011a5489422b3e8204c30aa2a67fea3153f053a546e27da4f0f747e783f",
+        "status": "PEER_RECEIPT_VERIFIED"
+      },
+      {
+        "bytes": 1024,
+        "sha256": "9e2fa5027c912821028ec9cd5b8315f4b3c03e0a0aff50d1c233e2d86aae0b50",
+        "status": "PEER_RECEIPT_VERIFIED"
+      }
+    ]
+  },
+  "mac_github_acknowledgements": [
+    {
+      "bytes": 1024,
+      "comment_id": "5811154636"
+    },
+    {
+      "bytes": 8192,
+      "comment_id": "5811155271"
+    },
+    {
+      "bytes": 32768,
+      "comment_id": "5811155904"
+    }
+  ],
+  "upload_failures": [
+    {
+      "test": "gitcode/attachment/text-32768.txt",
+      "http": 429,
+      "bytes": 32768,
+      "sha256": "427965f49a857174e308658227325dbd23ff4eccbe399d5ad4817dda3ec79f87",
+      "interpretation": "RATE_LIMITED_NOT_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/metrics.json",
+      "http": 429,
+      "bytes": 52,
+      "sha256": "f7f2912d04359b00ca0d6061f8b366fb654f83690d02cfd67dec705e9a35f737",
+      "interpretation": "RATE_LIMITED_NOT_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/metrics.csv",
+      "http": 429,
+      "bytes": 23,
+      "sha256": "8698f7decdcda7eeeddbff496f44a1e90070db30ed65211db008a728c8871b38",
+      "interpretation": "RATE_LIMITED_NOT_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/binary-1MiB.bin",
+      "http": 400,
+      "bytes": 1048576,
+      "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    },
+    {
+      "test": "gitcode/attachment/result-128KiB.zip",
+      "http": 429,
+      "bytes": 131215,
+      "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+      "interpretation": "RATE_LIMITED_NOT_VERIFIED"
+    },
+    {
+      "test": "github/attachment/text-1024.txt",
+      "http": 422,
+      "bytes": 1024,
+      "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    },
+    {
+      "test": "github/attachment/text-32768.txt",
+      "http": 422,
+      "bytes": 32768,
+      "sha256": "427965f49a857174e308658227325dbd23ff4eccbe399d5ad4817dda3ec79f87",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    },
+    {
+      "test": "github/attachment/metrics.json",
+      "http": 422,
+      "bytes": 52,
+      "sha256": "f7f2912d04359b00ca0d6061f8b366fb654f83690d02cfd67dec705e9a35f737",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    },
+    {
+      "test": "github/attachment/metrics.csv",
+      "http": 422,
+      "bytes": 23,
+      "sha256": "8698f7decdcda7eeeddbff496f44a1e90070db30ed65211db008a728c8871b38",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    },
+    {
+      "test": "github/attachment/binary-1MiB.bin",
+      "http": 403,
+      "bytes": 1048576,
+      "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    },
+    {
+      "test": "github/attachment/result-128KiB.zip",
+      "http": 422,
+      "bytes": 131215,
+      "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+      "interpretation": "ENDPOINT_REJECTED_CAUSE_NOT_DETERMINED"
+    }
+  ],
+  "limits": [
+    "Receipt claims rely on the two reported machines running separately; they are not cryptographic device identity.",
+    "403/400/422 are endpoint observations, not proof of a platform-wide file-size or file-type prohibition.",
+    "429 files remain unverified due to rate limiting.",
+    "GitCode Mac-to-Windows 32 KiB and automatic ZIP transfer are not verified."
+  ]
+}
