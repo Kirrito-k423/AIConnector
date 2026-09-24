@@ -1,0 +1,27 @@
+name: Live synthetic ZIP transfer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  windows-zip:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Receive Mac ZIP and publish a synthetic Windows CI ZIP
+        shell: pwsh
+        env:
+          PWSH: powershell.exe
+          PYTHONUTF8: '1'
+          AICONNECTOR_GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/validate_zip_transfer.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zip-transfer-evidence
+          path: zip-transfer-evidence/

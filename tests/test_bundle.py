@@ -75,7 +75,7 @@ class BundleTests(unittest.TestCase):
     def test_windows_checkout_line_endings_produce_identical_bundle(self):
         checkout = self.root / "windows checkout"
         checkout.mkdir()
-        for name in ("Probe.ps1", "Run-Windows.cmd", "Run-Windows-Write.cmd", "probe.config.json", "README.md"):
+        for name in ("Probe.ps1", "Run-Windows.cmd", "Run-Windows-Write.cmd", "Run-Windows-Resume.cmd", "probe.config.json", "README.md"):
             data = (ROOT / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
             (checkout / name).write_bytes(data)
         with patch.object(builder, "ROOT", checkout):

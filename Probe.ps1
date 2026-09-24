@@ -17,7 +17,9 @@ param(
     [ValidateRange(1, 60)][int]$TimeoutSeconds = 12,
     [ValidateRange(256, 32768)][int]$SizeBytes = 1024,
     [ValidateRange(1, 100)][int]$MaxPages = 10,
-    [switch]$PromptToken
+    [switch]$PromptToken,
+    [switch]$ResumeUploads,
+    [ValidateRange(0, 900)][int]$MaxUploadWaitSeconds = 180
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,7 +39,7 @@ $script:Tokens = @{}
 $script:Results = New-Object System.Collections.Generic.List[object]
 $script:DownloadLimit = 16 * 1024 * 1024
 $script:Report = [ordered]@{
-    schema = 'aiconnector.report.v1'; version = '0.1.4'; node = $Node; mode = $Mode
+    schema = 'aiconnector.report.v1'; version = '0.1.5'; node = $Node; mode = $Mode
     completed = $false
     generated_at = [DateTime]::UtcNow.ToString('o')
     platform = [Environment]::OSVersion.Platform.ToString()
@@ -119,7 +121,7 @@ function Save-Report {
     [IO.File]::WriteAllText($mdPath, ($lines -join "`n"), $script:Utf8)
     $htmlPath = Join-Path $OutputDir ($stem + '.html')
     $encoded = [Net.WebUtility]::HtmlEncode(($lines -join "`n"))
-    [IO.File]::WriteAllText($htmlPath, ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>AIConnector 检查报告</title><style>body{max-width:1100px;margin:32px auto;padding:0 24px;font:16px/1.7 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>AIConnector v0.1.4</h1><pre>' + $encoded + '</pre></html>'), $script:Utf8)
+    [IO.File]::WriteAllText($htmlPath, ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>AIConnector 检查报告</title><style>body{max-width:1100px;margin:32px auto;padding:0 24px;font:16px/1.7 system-ui}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style><h1>AIConnector v0.1.5</h1><pre>' + $encoded + '</pre></html>'), $script:Utf8)
     Add-Type -AssemblyName System.IO.Compression
     $zipPath = Join-Path $OutputDir ($stem + '.zip')
     $stream = [IO.File]::Create($zipPath)
@@ -138,7 +140,7 @@ function Save-Report {
 function Invoke-ProbeHttp {
     param([string]$Url, [string]$Method = 'GET', [hashtable]$Headers = @{},
         [string]$Body = '', [int]$Limit = 2097152, [bool]$Authenticated = $false,
-        [byte[]]$BinaryBody = $null, [string]$MultipartFileName = '')
+        [byte[]]$BinaryBody = $null, [string]$MultipartFileName = '', [string]$BinaryContentType = 'application/octet-stream')
     $u = Assert-Url $Url
     if ($Authenticated -and $u.Scheme -ne 'https' -and -not $u.IsLoopback) {
         Stop-Probe '带凭据的请求必须使用 HTTPS。'
@@ -170,7 +172,7 @@ function Invoke-ProbeHttp {
             if ($Method -eq 'POST') {
                 if ($null -ne $BinaryBody) {
                     $part = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $BinaryBody)
-                    $part.Headers.ContentType = [Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream')
+                    $part.Headers.ContentType = [Net.Http.Headers.MediaTypeHeaderValue]::Parse($BinaryContentType)
                     if ($MultipartFileName) {
                         $multi = New-Object Net.Http.MultipartFormDataContent
                         $multi.Add($part,'file',$MultipartFileName); $req.Content = $multi
@@ -508,20 +510,109 @@ function Save-WriteState($State,[string]$Path) {
     [IO.File]::WriteAllText($temp,(ConvertTo-Json -InputObject @($State) -Depth 8),$script:Utf8)
     Move-Item -LiteralPath $temp -Destination $Path -Force
 }
+function Initialize-UploadState($Row) {
+    foreach ($entry in @{retry_after='';next_attempt_at='';attempts=0;verified=$false}.GetEnumerator()) {
+        if ($null -eq $Row.PSObject.Properties[$entry.Key]) { $Row | Add-Member NoteProperty $entry.Key $entry.Value }
+    }
+    # v0.1.4 classified completed HTTP 429 responses as permanent rejections.
+    if ($Row.status -eq 'UPLOAD_REJECTED' -and $Row.http -eq 429) { $Row.status = 'RATE_LIMITED' }
+}
+function Get-UploadCooldown([string]$Header,[int]$Attempt) {
+    $now = [DateTime]::UtcNow
+    $seconds = 0L; $date = [DateTimeOffset]::MinValue
+    if ([long]::TryParse($Header,[ref]$seconds) -and $seconds -ge 0 -and $seconds -le 31536000) {
+        return $now.AddSeconds([Math]::Max(1,$seconds))
+    }
+    if ($Header.Length -le 128 -and [DateTimeOffset]::TryParse($Header,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal,[ref]$date)) {
+        if ($date.UtcDateTime -gt $now) { return $date.UtcDateTime }
+    }
+    return $now.AddSeconds(60 * [Math]::Pow(2,[Math]::Min(4,[Math]::Max(0,$Attempt-1))))
+}
+function Get-StoredUploadTime($Value) {
+    # PowerShell 7 can deserialize ISO dates as DateTime; 5.1 leaves strings.
+    if ($Value -is [DateTime]) { return $Value.ToUniversalTime() }
+    if ($Value -is [DateTimeOffset]) { return $Value.UtcDateTime }
+    $date = [DateTimeOffset]::MinValue
+    if ($Value -and [DateTimeOffset]::TryParse([string]$Value,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal,[ref]$date)) { return $date.UtcDateTime }
+    return [DateTime]::MinValue
+}
+function Wait-UploadSlot($Row) {
+    $next = $script:UploadNotBefore
+    $saved = Get-StoredUploadTime $Row.next_attempt_at
+    if ($saved -gt $next) { $next = $saved }
+    $seconds = [Math]::Max(0.0,($next - [DateTime]::UtcNow).TotalSeconds)
+    if ($seconds -gt $script:UploadWaitRemaining) {
+        $Row.next_attempt_at = $next.ToString('o')
+        if ($Row.status -ne 'RATE_LIMITED') { $Row.status = 'DEFERRED_RATE_LIMIT' }
+        return $false
+    }
+    if ($seconds -gt 0) { Write-Host ('等待上传冷却：约 {0} 秒，之后继续未完成项。' -f [Math]::Ceiling($seconds)) }
+    $script:UploadWaitRemaining -= $seconds
+    while ([DateTime]::UtcNow -lt $next) {
+        $ms = [Math]::Min(30000.0,[Math]::Max(1.0,[Math]::Ceiling(($next-[DateTime]::UtcNow).TotalMilliseconds)))
+        Start-Sleep -Milliseconds ([int]$ms)
+    }
+    return $true
+}
+function Get-GitHubRelease($C,[string]$Token) {
+    $tag = [string](Get-Field $C 'release_tag')
+    if ($tag -notmatch '^[A-Za-z0-9_.-]{1,64}$') { Stop-Probe 'ZIP 通道的 release_tag 无效。' }
+    $r = Invoke-ChannelApi $C ('/repos/'+$C.repository+'/releases/tags/'+$tag) 'GET' '' $Token
+    $id = [string](Get-Field $r.json 'id')
+    if ($r.status -ne 'HTTP_OK' -or $id -notmatch '^[1-9][0-9]*$' -or (Get-Field $r.json 'draft' $true)) { Stop-Probe '无法读取已公开的 ZIP 测试 Release；没有创建或修改发布。' }
+    $upload = ([string](Get-Field $r.json 'upload_url')) -replace '\{.*$',''
+    $uri = Assert-Url $upload; $api = Assert-Url $C.api_base
+    if (-not (($uri.Scheme -eq 'https' -and $uri.Host -eq 'uploads.github.com') -or ($api.IsLoopback -and $uri.IsLoopback -and $api.Authority -eq $uri.Authority))) { Stop-Probe 'Release 上传地址不在可信目标中。' }
+    $assets = New-Object System.Collections.Generic.List[object]
+    for ($page=1; $page -le $MaxPages; $page++) {
+        $a = Invoke-ChannelApi $C ('/repos/'+$C.repository+'/releases/'+$id+'/assets?per_page=100&page='+$page) 'GET' '' $Token
+        if ($a.status -ne 'HTTP_OK' -or $a.json -isnot [Array]) { Stop-Probe 'Release 资产列表未完整读取，停止上传以避免重复。' }
+        foreach ($asset in $a.json) { $assets.Add($asset) }
+        if ($a.json.Count -lt 100) { return [pscustomobject]@{upload_url=$upload;assets=$assets.ToArray()} }
+    }
+    Stop-Probe 'Release 资产列表达到分页上限，未上传。'
+}
+function Read-PeerReleaseZips($C,$Comments) {
+    $tag = [string](Get-Field $C 'release_tag')
+    if ($C.provider -ne 'github' -or -not $tag) { return }
+    $seen = @{}; $count = 0
+    foreach ($comment in $Comments) {
+        $p = Read-Packet ([string]$comment.body)
+        if ($null -eq $p -or $p.kind -ne 'attachment' -or $p.session -ne $Session -or $p.sender -ne $Peer -or $p.receiver -ne $Node) { continue }
+        if ([string]$p.name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.zip$' -or [string]$p.sha256 -cnotmatch '^[a-f0-9]{64}$') { continue }
+        $key = 'release|'+$tag+'|'+$p.name+'|'+$p.sha256
+        $id = Get-TextHash ('asset|'+$Session+'|'+$Peer+'|'+$key)
+        if ($p.message_id -cne $id -or $seen.ContainsKey($id)) { continue }
+        $seen[$id] = $true; $count++
+        if ($count -gt 5) { Add-Observation ($C.name+'/peer-zip') 'NOT_VERIFIED' '本次最多检查五个对端 ZIP；其余保留待查。'; break }
+        $test = $C.name+'/peer-zip/'+$id.Substring(0,12)
+        try {
+            $u = Assert-Url ([string]$p.url); $api = Assert-Url $C.api_base
+            $allowed = $u.Scheme -eq 'https' -and $u.Host -eq 'github.com' -and $u.AbsolutePath.StartsWith('/'+$C.repository+'/releases/download/'+$tag+'/',[StringComparison]::Ordinal)
+            $fixture = $api.IsLoopback -and $u.IsLoopback -and $api.Authority -eq $u.Authority
+            if ((-not $allowed -and -not $fixture) -or $u.Query -or $u.Fragment -or [long]$p.bytes -le 0 -or [long]$p.bytes -ge 5242880) { throw 'invalid peer artifact' }
+        } catch { Add-Observation $test 'INVALID_TARGET' '对端 ZIP 的目标、大小或协议字段无效，未发出下载请求。'; continue }
+        $back = Invoke-ProbeHttp -Url $u.AbsoluteUri -Limit 5242880
+        $status = $back.status
+        if ($status -eq 'HTTP_OK') {
+            $status = 'HASH_MISMATCH'
+            if ($back.bytes -eq [long]$p.bytes -and $back.sha256 -ceq [string]$p.sha256) { $status = 'EXACT_BYTES_VERIFIED' }
+        }
+        $evidence = Get-Evidence $back; $evidence['source_url']=$u.AbsoluteUri; $evidence['sender']=$Peer
+        Add-Observation $test $status '从对端评论中的指定 Release 下载 ZIP，并核对其字节数及 SHA-256。未解压或执行内容。' $evidence
+    }
+}
 function Invoke-WriteCheck($Settings) {
     if (-not $Session) { $Session = 'writecheck-v013' }
     if (-not $Peer) { $Peer = 'mac-outer'; if ($Node -eq 'mac-outer') { $Peer = 'windows-inner' } }
     if ($Session -notmatch '^[A-Za-z0-9_-]{1,64}$' -or $Peer -notmatch '^[A-Za-z0-9_-]{1,64}$' -or $Peer -eq $Node) { Stop-Probe 'Session 与节点标识无效。' }
     $files = New-WriteSamples
-    Write-Host '写入检查：仅向下列专用 Issue 发布合成评论、样本链接及回执。'
-    foreach ($c in $Settings.channels) { Write-Host ($c.name + ': ' + $c.repository + ' #' + $c.issue) }
-    # Collect credentials once, before the network checks.
+    Write-Host '写入检查：仅向下列专用目标发布合成评论、样本及回执。'
+    foreach ($c in $Settings.channels) { Write-Host ($c.name + ': ' + $c.repository + ' #' + $c.issue + ' Release=' + (Get-Field $c 'release_tag')) }
+    if ($ResumeUploads) { Write-Host '恢复模式：跳过评论容量测试；保留成功项，只恢复明确限流或尚未发送的附件，并检查 ZIP Release 通道。' }
     foreach ($c in $Settings.channels) {
         $token = Get-Token $c
-        if ($PromptToken -and -not $token) {
-            $secure = Read-Host ($c.name + ' Token（隐藏输入；回车跳过）') -AsSecureString
-            $token = (New-Object Net.NetworkCredential('', $secure)).Password
-        }
+        if ($PromptToken -and -not $token) { $secure = Read-Host ($c.name + ' Token（隐藏输入；回车跳过）') -AsSecureString; $token = (New-Object Net.NetworkCredential('', $secure)).Password }
         $script:Tokens[[string]$c.name] = $token
     }
     foreach ($c in $Settings.channels) {
@@ -530,42 +621,95 @@ function Invoke-WriteCheck($Settings) {
         $script:Token = $token
         try {
             $comments = Get-Comments $c $token
-            foreach ($size in @(1024,8192,32768)) {
-                $prefix = "AIConnector 通道测试`n中文 / JSON / code / newline`n"
-                $payload = $prefix + ('x' * ($size - $script:Utf8.GetByteCount($prefix)))
-                $id = Get-TextHash ($Session+'|'+$Node+'|'+$Peer+'|'+$size)
-                $packet = [ordered]@{schema='aiconnector.probe.v1';kind='sample';message_id=$id;session=$Session;sender=$Node;receiver=$Peer;payload_bytes=$size;payload_sha256=(Get-TextHash $payload);payload=$payload}
-                $posted = Publish-Packet $c $packet $comments $token
-                $comments = Get-Comments $c $token
-                $match = @($comments | Where-Object { [string]$_.id -eq $posted.comment_id })
-                if ($match.Count -ne 1 -or $match[0].body -cne (ConvertTo-PacketBody $packet)) { Stop-Probe '评论提交后独立读回不一致，停止该平台后续写入。' }
-                Add-Observation ($name+'/comment/'+$size) 'COMMENT_BYTES_VERIFIED' '独立 GET 读回的完整评论与发送内容一致。' @{payload_bytes=$size;sha256=$packet.payload_sha256;comment_id=$posted.comment_id;write_status=$posted.status}
-                if ($posted.status -eq 'POST_ACCEPTED') { Start-Sleep -Milliseconds 1100 }
+            Read-PeerReleaseZips $c $comments
+            if (-not $ResumeUploads) {
+                foreach ($size in @(1024,8192,32768)) {
+                    $prefix = "AIConnector 通道测试`n中文 / JSON / code / newline`n"
+                    $payload = $prefix + ('x' * ($size - $script:Utf8.GetByteCount($prefix)))
+                    $id = Get-TextHash ($Session+'|'+$Node+'|'+$Peer+'|'+$size)
+                    $packet = [ordered]@{schema='aiconnector.probe.v1';kind='sample';message_id=$id;session=$Session;sender=$Node;receiver=$Peer;payload_bytes=$size;payload_sha256=(Get-TextHash $payload);payload=$payload}
+                    $posted = Publish-Packet $c $packet $comments $token
+                    $comments = Get-Comments $c $token
+                    $match = @($comments | Where-Object { [string]$_.id -eq $posted.comment_id })
+                    if ($match.Count -ne 1 -or $match[0].body -cne (ConvertTo-PacketBody $packet)) { Stop-Probe '评论提交后独立读回不一致，停止该平台后续写入。' }
+                    Add-Observation ($name+'/comment/'+$size) 'COMMENT_BYTES_VERIFIED' '独立 GET 读回的完整评论与发送内容一致。' @{payload_bytes=$size;sha256=$packet.payload_sha256;comment_id=$posted.comment_id;write_status=$posted.status}
+                    if ($posted.status -eq 'POST_ACCEPTED') { Start-Sleep -Milliseconds 1100 }
+                }
+                $Channel = $name; $Mode = 'Receive'; $PromptToken = $false
+                Invoke-Exchange $Settings
             }
-            # Existing peer samples, if any, are validated and acknowledged in this run.
-            $Channel = $name; $Mode = 'Receive'; $PromptToken = $false
-            Invoke-Exchange $Settings
             $statePath = Join-Path $OutputDir ('write-state-' + (Get-TextHash ($c.api_base+'|'+$c.repository+'|'+$c.issue+'|'+$Session+'|'+$Node)).Substring(0,20) + '.local.json')
             $state = New-Object System.Collections.Generic.List[object]
-            if ([IO.File]::Exists($statePath)) {
+            $hasState = [IO.File]::Exists($statePath)
+            if ($hasState) {
                 $saved = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($statePath,$script:Utf8))
-                foreach ($r in @($saved)) { $state.Add($r) }
+                foreach ($r in @($saved)) { Initialize-UploadState $r; $state.Add($r) }
             }
-            $repoId = ''
-            if ($c.provider -eq 'github') {
-                $meta = Invoke-ChannelApi $c ('/repos/'+$c.repository) 'GET' '' $token
-                $repoId = [string](Get-Field $meta.json 'id')
-                if ($meta.status -ne 'HTTP_OK' -or $repoId -notmatch '^[1-9][0-9]*$') { Stop-Probe '无法确定附件所属仓库 ID。' }
+            $script:UploadNotBefore = [DateTime]::MinValue
+            $script:UploadWaitRemaining = [double]$MaxUploadWaitSeconds
+            $interval = 1.1; if ($c.provider -eq 'gitcode') { $interval = 15.0 }
+            $interval = [double](Get-Field $c 'upload_interval_seconds' $interval)
+            if ($interval -lt 0 -or $interval -gt 300) { Stop-Probe '上传间隔必须为 0 到 300 秒。' }
+            foreach ($r in $state) {
+                $date = Get-StoredUploadTime $r.next_attempt_at
+                if ($r.status -in @('RATE_LIMITED','DEFERRED_RATE_LIMIT') -and $date -gt $script:UploadNotBefore) { $script:UploadNotBefore = $date }
             }
-            foreach ($f in $files) {
-                $sha = Get-Sha256 $f.data; $key = $f.name+'|'+$sha
+            $targets = New-Object System.Collections.Generic.List[object]
+            if (-not $ResumeUploads -or $hasState) {
+                foreach ($f in $files) {
+                    $fileKey = $f.name+'|'+(Get-Sha256 $f.data)
+                    if ($ResumeUploads -and -not @($state | Where-Object { $_.key -ceq $fileKey }).Count) { continue }
+                    $targets.Add([pscustomobject]@{file=$f;transport='attachment';key=$fileKey})
+                }
+            } else { Add-Observation ($name+'/resume') 'NO_PREVIOUS_STATE' '未找到旧上传记录；请将新包覆盖到旧目录并保留 reports。未重跑附件容量测试。' }
+            $tag = [string](Get-Field $c 'release_tag')
+            if ($c.provider -eq 'github' -and $tag) {
+                $zip = @($files | Where-Object { $_.mime -eq 'application/zip' })[0]
+                $targets.Add([pscustomobject]@{file=$zip;transport='release';key=('release|'+$tag+'|'+$zip.name+'|'+(Get-Sha256 $zip.data))})
+            }
+            $repoId = ''; $release = $null
+            foreach ($target in $targets) {
+                $f = $target.file; $sha = Get-Sha256 $f.data; $key = $target.key
+                $test = $name+'/'+$target.transport+'/'+$f.name
                 $known = @($state | Where-Object { $_.key -eq $key })
-                $row = $null
                 if ($known.Count) { $row = $known[0] }
                 else {
-                    $row = [pscustomobject]@{key=$key;name=$f.name;sha256=$sha;bytes=$f.data.Length;status='WRITE_UNCERTAIN';url='';http=0}
-                    $state.Add($row); Save-WriteState $state.ToArray() $statePath
-                    if ($c.provider -eq 'github') {
+                    $row = [pscustomobject]@{key=$key;name=$f.name;sha256=$sha;bytes=$f.data.Length;status='PENDING';url='';http=0}
+                    Initialize-UploadState $row; $state.Add($row)
+                }
+                if ($row.url) {
+                    $savedUri = Assert-Url $row.url
+                    if ($savedUri.Query -or $savedUri.Fragment) { Stop-Probe '旧上传记录包含临时签名地址，未写入报告或评论。' }
+                }
+                if ($row.verified -and $row.status -eq 'UPLOADED') {
+                    Add-Observation $test 'PREVIOUSLY_VERIFIED' '保留上次字节校验结果，本次未重复上传或下载。' @{bytes=$row.bytes;sha256=$row.sha256;source_url=$row.url}; continue
+                }
+                $assetName = 'aiconnector-'+$Session+'-'+$Node+'-'+$sha+'-'+$f.name
+                if ($target.transport -eq 'release' -and $row.status -ne 'UPLOADED') {
+                    if ($null -eq $release) { $release = Get-GitHubRelease $c $token }
+                    $found = @($release.assets | Where-Object { $_.name -ceq $assetName })
+                    if ($found.Count -eq 1 -and $found[0].state -eq 'uploaded' -and $found[0].size -eq $f.data.Length) {
+                        $candidate = [string]$found[0].browser_download_url; $candidateUri = Assert-Url $candidate
+                        if ($candidateUri.Query -or $candidateUri.Fragment) { Stop-Probe 'Release 未返回可保存的稳定下载地址。' }
+                        $row.url = $candidate
+                        $row.status = 'UPLOADED'
+                    } elseif ($found.Count) { $row.status = 'ASSET_CONFLICT' }
+                }
+                $rateAttempts = 0
+                while ($row.status -in @('PENDING','RATE_LIMITED','DEFERRED_RATE_LIMIT')) {
+                    if (-not (Wait-UploadSlot $row)) { Save-WriteState $state.ToArray() $statePath; break }
+                    $row.status = 'WRITE_UNCERTAIN'; $row.attempts = [int]$row.attempts + 1; $row.next_attempt_at = ''
+                    Save-WriteState $state.ToArray() $statePath
+                    if ($target.transport -eq 'release') {
+                        $url = $release.upload_url+'?name='+[Uri]::EscapeDataString($assetName)
+                        $up = Invoke-ProbeHttp -Url $url -Method POST -BinaryBody $f.data -BinaryContentType 'application/zip' -Headers @{Authorization=('Bearer '+$token);Accept='application/vnd.github+json'} -Authenticated $true
+                        $row.url = [string](Get-Field $up.json 'browser_download_url')
+                    } elseif ($c.provider -eq 'github') {
+                        if (-not $repoId) {
+                            $meta = Invoke-ChannelApi $c ('/repos/'+$c.repository) 'GET' '' $token
+                            $repoId = [string](Get-Field $meta.json 'id')
+                            if ($meta.status -ne 'HTTP_OK' -or $repoId -notmatch '^[1-9][0-9]*$') { Stop-Probe '无法确定附件所属仓库 ID。' }
+                        }
                         $base = [string](Get-Field $c 'asset_upload_base' 'https://uploads.github.com')
                         $url = $base.TrimEnd('/')+'/user-attachments/assets?repository_id='+$repoId+'&name='+[Uri]::EscapeDataString($f.name)+'&content_type='+[Uri]::EscapeDataString($f.mime)
                         $up = Invoke-ProbeHttp -Url $url -Method POST -BinaryBody $f.data -Headers @{Authorization=('Bearer '+$token);Accept='application/vnd.github+json'} -Authenticated $true
@@ -578,39 +722,53 @@ function Invoke-WriteCheck($Settings) {
                         $up = Invoke-ChannelApi $c ('/repos/'+$c.repository+'/file/upload') 'POST' '' $token -BinaryBody $f.data -MultipartFileName $f.name
                         $row.url = [string](Get-Field $up.json 'full_path')
                     }
-                    $row.http = $up.http
-                    if ($up.status -eq 'HTTP_OK' -and $row.url) {
+                    $script:UploadNotBefore = [DateTime]::UtcNow.AddSeconds($interval)
+                    $row.http = $up.http; $row.retry_after = ''
+                    if ($up.status -eq 'RATE_LIMITED') {
+                        $rateAttempts++
+                        $row.status = 'RATE_LIMITED'; $row.url = ''
+                        $cooldown = Get-UploadCooldown $up.retry_after $rateAttempts
+                        # RetryAfter comes from the typed HTTP header, never an error body.
+                        $row.retry_after = $up.retry_after; $row.next_attempt_at = $cooldown.ToString('o')
+                        if ($cooldown -gt $script:UploadNotBefore) { $script:UploadNotBefore = $cooldown }
+                    } elseif ($up.status -eq 'HTTP_OK' -and $row.url) {
                         $assetUri = Assert-Url $row.url
-                        if ($assetUri.Query -or $assetUri.Fragment) { Stop-Probe '附件接口返回临时签名地址，未将其保存到报告。' }
+                        if ($assetUri.Query -or $assetUri.Fragment) { $row.url=''; Stop-Probe '附件接口返回临时签名地址，未将其保存到报告。' }
                         $row.status = 'UPLOADED'
-                    } elseif ($up.http -ge 400 -and $up.http -lt 500) { $row.status = 'UPLOAD_REJECTED'; $row.url = '' }
+                    } elseif ($up.http -ge 400 -and $up.http -lt 500 -and $up.status -notin @('TIMEOUT','NETWORK_ERROR','BODY_LIMIT_EXCEEDED')) { $row.status = 'UPLOAD_REJECTED'; $row.url = '' }
                     Save-WriteState $state.ToArray() $statePath
-                    Start-Sleep -Milliseconds 1100
+                    if ($row.status -ne 'RATE_LIMITED' -or $rateAttempts -ge 3) { break }
                 }
+                Save-WriteState $state.ToArray() $statePath
                 if ($row.status -ne 'UPLOADED') {
-                    Add-Observation ($name+'/attachment/'+$f.name) $row.status '记录服务端拒绝或未确认结果；不自动重复上传。' @{http=$row.http;bytes=$row.bytes;sha256=$row.sha256}; continue
+                    Add-Observation $test $row.status '限流项保留冷却时间与待测状态；其他拒绝或未知写入不自动重发。' @{http=$row.http;bytes=$row.bytes;sha256=$row.sha256;retry_after=$row.retry_after;next_attempt_at=$row.next_attempt_at;attempts=$row.attempts}; continue
                 }
-                # GitHub assets can remain private until referenced by a posted comment.
+                $assetUri = Assert-Url $row.url
+                if ($assetUri.Query -or $assetUri.Fragment) { Stop-Probe '不能将临时签名地址发布到评论。' }
                 $packet = [ordered]@{schema='aiconnector.probe.v1';kind='attachment';message_id=(Get-TextHash ('asset|'+$Session+'|'+$Node+'|'+$key));session=$Session;sender=$Node;receiver=$Peer;name=$f.name;bytes=$f.data.Length;sha256=$sha;url=$row.url}
-                $null = Publish-Packet $c $packet $comments $token
+                $posted = Publish-Packet $c $packet $comments $token
                 $comments = Get-Comments $c $token
+                $match = @($comments | Where-Object { [string]$_.id -eq $posted.comment_id })
+                if ($match.Count -ne 1 -or $match[0].body -cne (ConvertTo-PacketBody $packet)) { Stop-Probe '附件链接评论独立读回不一致，未验证传输成功。' }
                 $back = Invoke-ProbeHttp -Url $row.url -Limit $script:DownloadLimit
                 $status = $back.status
                 if ($status -eq 'HTTP_OK') {
                     $status = 'HASH_MISMATCH'
-                    if ($back.sha256 -ceq $sha -and $back.bytes -eq $f.data.Length) { $status = 'EXACT_BYTES_VERIFIED' }
+                    if ($back.sha256 -ceq $sha -and $back.bytes -eq $f.data.Length) { $status = 'EXACT_BYTES_VERIFIED'; $row.verified = $true }
                 }
-                Add-Observation ($name+'/attachment/'+$f.name) $status '上传后发布附件链接，再匿名 GET 下载核对原始字节。' (Get-Evidence $back)
+                Save-WriteState $state.ToArray() $statePath
+                $evidence = Get-Evidence $back; $evidence['source_url'] = $row.url
+                Add-Observation $test $status '发布稳定文件链接，再匿名下载核对字节及 SHA-256；对端应使用 source_url。' $evidence
             }
         } catch {
             $detail = '该平台写入未完成；其他平台继续。'
             $e = $_.Exception
             while ($null -ne $e) { if ($e.Data.Contains('probe_reason')) { $detail=[string]$e.Data['probe_reason'];break };$e=$e.InnerException }
-            Add-Observation ($name+'/write') 'NOT_VERIFIED' $detail
+            Add-Observation ($name+'/write') 'NOT_VERIFIED' $detail @{error_type=$_.Exception.GetType().Name;script_line=$_.InvocationInfo.ScriptLineNumber}
         }
     }
     $script:Token = ''; $script:Tokens.Clear()
-    $script:Report.limits += '附件接口拒绝不等于浏览器上传也被拒绝；单端写入读回不等于另一台机器收到。'
+    $script:Report.limits += '附件接口拒绝不等于浏览器上传也被拒绝；单端写入读回不等于另一台机器收到。仅明确 429 按冷却时间有限恢复；未知上传不自动重发。'
 }
 
 $exitCode = 0

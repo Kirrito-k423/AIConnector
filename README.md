@@ -2,7 +2,7 @@
 
 检查内外 PC 能通过哪些渠道交换实验任务和结果。Windows 使用系统自带 PowerShell 5.1，不需要 Python、管理员权限或联网安装依赖。
 
-[下载 Windows 检查包 v0.1.4](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.4/AIConnector-Probe.zip) · [SHA-256](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.4/AIConnector-Probe.zip.sha256) · [验证记录](VALIDATION.md)
+[下载 Windows 检查包 v0.1.5](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.5/AIConnector-Probe.zip) · [SHA-256](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.5/AIConnector-Probe.zip.sha256) · [验证记录](VALIDATION.md)
 
 ## 用户只需一次运行
 
@@ -28,6 +28,10 @@
 
 ## 一次完成写入检查
 
+**已运行过 v0.1.4：将 v0.1.5 解压覆盖原目录，保留原 `reports`，双击 `Run-Windows-Resume.cmd`。** 它跳过评论容量测试和已验证附件，恢复原记录中明确返回 429 或被冷却暂停的项目，并额外验证 ZIP Release 通道。不要删除 `write-state-*.local.json`；换了目录会缺少旧上传记录。缺少记录时不会重新发送旧附件测试，但仍可安全核对 ZIP Release。
+
+本次还会读取对端在同一测试 Session 发布的 Release ZIP，匿名下载并核对字节与 SHA-256，不解压或执行内容。预置探测只接受指定仓库和测试 Release 的稳定链接，每次最多五个、小于 5 MiB 的样本。
+
 双击 **Run-Windows-Write.cmd**。程序先显示两个专用测试目标，再分别询问 GitHub / GitCode Token（隐藏输入，各一次；已有环境变量则不询问）。请在本机输入，不要把 Token 发到 Issue 或聊天。
 
 已预置的目标：[GitHub #2](https://github.com/Kirrito-k423/AIConnector/issues/2)、[GitCode #1](https://gitcode.com/shaojiemike/AIConnector-Probe/issues/1)。使用相应账号已有的、获准写入这些仓库的凭据。
@@ -37,13 +41,22 @@
 - 1、8、32 KiB 合成中文评论的提交及独立读回校验。
 - 对已存在的 Mac 样本自动核对并发送回执。
 - TXT、JSON、CSV、PNG、128 KiB ZIP、1 MiB 二进制的附件接口，提交链接后再匿名下载核对 SHA-256。
+- GitHub 专用 [probe-artifacts Release](https://github.com/Kirrito-k423/AIConnector/releases/tag/probe-artifacts) 的 ZIP 上传、Issue 链接发布和匿名下载校验。此路径需要该仓库的 Contents 写权限；它与评论附件接口分开记录。
 - 自动生成一份 HTML / JSON / Markdown 报告和回传 ZIP；某个平台失败时继续另一个平台。
 
-文件全部在内存中合成，不读取用户实验文件。写入与附件下载默认每请求 60 秒；无自动上传重试。`write-state-*.local.json` 用于保存附件上传进度，未知写入不会在重跑时自动重复；请保留它。`UPLOAD_REJECTED` 表示当前 API 路径明确拒绝，不等于浏览器上传也不支持。GitHub 当前评论附件 API 实测支持 PNG，但对其他六个样本返回 422；GitCode 使用其官方图片与文件上传接口。
+文件全部在内存中合成，不读取用户实验文件。写入与附件下载默认每请求 60 秒。GitCode 上传默认间隔至少 15 秒；这只是保守初始设置，不是已测得的服务端配额。
+
+遇到明确的 HTTP 429，保存 `Retry-After` 和下次允许时间，暂停该平台后续上传；在每平台 180 秒总等待预算内恢复，每文件每次运行最多 3 次被限流的尝试。无有效 `Retry-After` 时按 60 / 120 / 240 秒退避。预算不足就将余项保留为待测，下次恢复仍遵守保存的冷却时间。401、403、400、422 以及超时或未知写入不会按此规则重发。
+
+`write-state-*.local.json` 保存附件进度。v0.1.4 的 `UPLOAD_REJECTED + HTTP 429` 会迁移为 `RATE_LIMITED`；其余拒绝保留。ZIP Release 文件名含完整 SHA-256，上传前检查已有资产；不覆盖或删除文件，未知上传只允许通过服务器已有资产及字节校验来恢复确认。
+
+GitHub 评论附件 API 的 TXT、JSON、CSV、ZIP 请求已被拒绝；Release ZIP 是独立通道。GitCode 文件接口的四个样本在内网返回 429，因此这些格式仍待验证。附件下载应使用报告里的 `source_url` 稳定链接；脱敏后的最终跳转地址未必可复用。
 
 没有 Token 的平台会标为 `NEEDS_TOKEN`，不能算测试完成。生成回执也不等于 Mac 已读到；Mac 还需要读取回执验证。无需重新执行只读扫描。
 
 命令行可使用 `Probe.ps1 -Mode Write -Node windows-inner -PromptToken`。Mac 可运行 `pwsh -File ./Probe.ps1 -Mode Write -Node mac-outer -PromptToken`。凭据也可由 `AICONNECTOR_GITCODE_TOKEN` / `AICONNECTOR_GITHUB_TOKEN` 提供，不写入报告。
+
+恢复命令为 `Probe.ps1 -Mode Write -ResumeUploads -Node windows-inner -PromptToken`；可用 `-MaxUploadWaitSeconds 300` 增加本次等待预算。恢复模式不会重跑 Scan、评论容量测试或样本回执。
 
 ## 下载标记与组织策略
 
@@ -67,6 +80,9 @@
 | `FORBIDDEN_OR_RATE_LIMITED` | 返回 403，不能仅凭这一项判定整个平台不可用 |
 | `UNEXPECTED_API_RESPONSE` / `HASH_MISMATCH` | 响应结构或文件内容不符，可能是登录页、拦截页或被修改 |
 | `NOT_TESTED` / `NOT_VERIFIED` | 尚无对应能力的充分证据 |
+| `RATE_LIMITED` / `DEFERRED_RATE_LIMIT` | 收到限流，或等待预算不足；保留冷却时间及待测状态 |
+| `PREVIOUSLY_VERIFIED` | 保留旧成功记录，本次没有再次上传和下载 |
+| `WRITE_UNCERTAIN` | 上传结果未知，不自动重复上传 |
 
 `completed=true` 表示本次检查运行完成，不表示所有通道通过。以每项状态为准。
 
@@ -109,6 +125,6 @@ python3 tools/build_bundle.py
 
 Windows CI 用系统 PowerShell 5.1 检查构建后的 ZIP、中文空格目录、真实 cmd 入口、NTFS 来源标记、信任确认、损坏包拒绝、AllSigned 和报告打包。HTTP 错误分支使用本地模拟服务。
 
-发布后额外执行 `tools/validate_release.py v0.1.4`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
+发布后额外执行 `tools/validate_release.py v0.1.5`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
 
-接口依据：[GitCode 文件上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-file-upload/)、[GitCode 图片上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-img-upload/)、[GitHub CLI 附件实现](https://github.com/cli/cli/blob/v2.101.0/internal/attachments/client.go)。
+接口依据：[GitCode 文件上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-file-upload/)、[GitCode 图片上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-img-upload/)、[GitHub CLI 附件实现](https://github.com/cli/cli/blob/v2.101.0/internal/attachments/client.go)、[GitHub Release 资产接口](https://docs.github.com/en/rest/releases/assets)、[GitHub 限流处理](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)。

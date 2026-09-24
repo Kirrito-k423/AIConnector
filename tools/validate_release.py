@@ -30,7 +30,7 @@ expected = (a.output / (archive.name + ".sha256")).read_text().split()[0]
 actual = hashlib.sha256(archive.read_bytes()).hexdigest()
 assert actual == expected, "Downloaded release checksum mismatch"
 with zipfile.ZipFile(archive) as z:
-    assert set(z.namelist()) == {"AIConnector-Probe/" + name for name in ("Probe.ps1", "Run-Windows.cmd", "Run-Windows-Write.cmd", "probe.config.json", "README.md")}
+    assert set(z.namelist()) == {"AIConnector-Probe/" + name for name in ("Probe.ps1", "Run-Windows.cmd", "Run-Windows-Write.cmd", "Run-Windows-Resume.cmd", "probe.config.json", "README.md")}
     z.extractall(a.output / "全新解压 with spaces")
 install = (a.output / "全新解压 with spaces/AIConnector-Probe").resolve()
 Path(str(install / "Probe.ps1") + ":Zone.Identifier").write_text("[ZoneTransfer]\r\nZoneId=3\r\n")

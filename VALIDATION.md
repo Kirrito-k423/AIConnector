@@ -2,6 +2,16 @@
 
 更新日期：2026-09-24；下面按日期保留历史证据。
 
+## v0.1.5：限流恢复与独立 ZIP 通道
+
+Issue #3 的真实 429 已在本地 HTTP 服务中复现：旧版将限流保存为永久拒绝并继续发送后续文件。修复后保存冷却时间，按 `Retry-After`（秒数或 HTTP 日期）暂停上传；无有效头时按 60 / 120 / 240 秒退避，在每平台 180 秒等待预算及每文件三次限流尝试内恢复。未完成项保留到下一次；超时和未知上传不自动重发。
+
+`Run-Windows-Resume.cmd` 使用原 `reports` 中的记录，迁移旧 429，跳过评论容量测试及成功上传；不重试旧 400 / 403 / 422。公开 Release ZIP 通道独立于原评论附件接口，按完整 SHA-256 命名，先核对服务器已有资产，未知上传可在读回现有文件并校验后确认，不删除或覆盖资产。
+
+Mac 已用真实 `Probe.ps1` 上传一个 131,190 字节的合成 ZIP，发布 Issue 链接后匿名下载校验成功：SHA-256 `f6f98c9176bc9ec555d3bf235121ad1f274570e0f1de0e90a1b02c7cbe1954ea`。[专用传输 Release](https://github.com/Kirrito-k423/AIConnector/releases/tag/probe-artifacts)。GitCode 的实际配额窗口仍未知；15 秒间隔是保守初值，不是限额结论。
+
+本地新增回归覆盖：秒数/日期冷却、跨运行暂停、旧状态迁移、成功项不重发、永久拒绝不重试、Release 上传超时后只读恢复、状态文件丢失后的资产去重、对端 ZIP 下载与非法目标拒绝。Windows 及公开包验收结果在完成后追加。内网 Windows 的 ZIP 新接口与 GitCode 冷却恢复仍需要真实运行证据，不能由托管 Windows 替代。
+
 ## 2026-09-24：内网 Windows 写入与跨机器回执确认
 
 已回收 [Issue #3 的 Windows 写入报告](https://github.com/Kirrito-k423/AIConnector/issues/3#issuecomment-5810898944)，并在外部 Mac 独立读取两个平台的评论、验证回执、下载附件。详细字节数、SHA-256、评论 ID 及失败 HTTP 状态见 [机器可读验证记录](docs/evidence/2026-09-24-write-verification.json)。本节更新 9 月 22 日“内网写入未测”的状态。
