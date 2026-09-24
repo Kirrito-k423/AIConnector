@@ -14,7 +14,11 @@ Mac 已用真实 `Probe.ps1` 上传一个 131,190 字节的合成 ZIP，发布 I
 
 [独立实网 ZIP 测试](https://github.com/Kirrito-k423/AIConnector/actions/runs/35983123728) 已通过：托管 Windows 下载并校验 Mac 发布的 ZIP，然后使用实际 `Probe.ps1` 上传自己的 ZIP，发布评论链接并匿名下载校验。Mac 随后独立下载 Windows CI 的文件，SHA-256、ZIP CRC 和内部 131,072 字节载荷均通过；Windows ZIP 为 131,215 字节，摘要 `38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12`。见 [ZIP 双向证据](docs/evidence/2026-09-24-zip-transfer.json)。不同 .NET ZIP 实现产生了不同封装字节，因此两端各自以实际文件 SHA-256 为准。
 
-恢复模式优先处理 GitCode ZIP，再补测其他限流文件。内网 Windows 的 Release 写权限及 GitCode 真实冷却恢复仍需要该机器的运行证据，不能由托管 Windows 替代。最终公开发布包验收结果在完成后追加。
+恢复模式优先处理 GitCode ZIP，再补测其他限流文件。内网 Windows 的 Release 写权限及 GitCode 真实冷却恢复仍需要该机器的运行证据，不能由托管 Windows 替代。
+
+最终 v0.1.5 标签对应 `c4b8ae5`，[最终包回归](https://github.com/Kirrito-k423/AIConnector/actions/runs/35983535387) 与 [公开发布包验收](https://github.com/Kirrito-k423/AIConnector/actions/runs/35983977114) 均通过：Windows PowerShell 5.1 下 41 项测试通过；匿名下载实际 Release、全新中文空格目录解压、默认配置不修改、真实入口启动后 7 个下载样本全部校验成功。公开包验收为只读；ZIP 实网写入的证据来自上面的独立工作流。
+
+Windows CI 构建、本地构建、公开下载的 ZIP 逐字节一致：26,123 字节，SHA-256 `e845da434c4208538289e1698d3c206edabe24403e8704c8f24531ace72e8e1f`。其余 8 个发布资产也与 Windows 构建一致。
 
 ## 2026-09-24：内网 Windows 写入与跨机器回执确认
 
