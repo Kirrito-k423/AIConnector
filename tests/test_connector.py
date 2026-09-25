@@ -300,6 +300,19 @@ class ConnectorTests(unittest.TestCase):
         self.result['summary']='changed'; self.write_inputs()
         self.assertEqual(self.run_cli('windows-inner','Complete','-Key',self.key,'-File',self.resultfile,ok=False)['code'],'RESULT_IS_IMMUTABLE')
 
+    def test_revision_content_cannot_change_by_renaming_run(self):
+        self.submit(); self.poll('mac-outer')
+        self.task['run_id']='run-002'; self.write_inputs()
+        self.submit()  # A deliberate repeat with identical experiment content is valid.
+        self.task['run_id']='run-003'; self.task['objective']='different experiment'; self.write_inputs()
+        self.assertEqual(self.run_cli('mac-outer','Submit','-File',self.taskfile,ok=False)['code'],'REVISION_IS_IMMUTABLE')
+        # A conflicting revision arriving from a fresh coordinator state is also stopped at the receiver.
+        (self.folder/'mac-outer').rename(self.folder/'previous-coordinator')
+        self.submit(); self.poll('mac-outer')
+        status=self.poll('windows-inner')
+        self.assertTrue(all(r['phase']=='conflict' for r in status['runs']))
+        self.assertEqual(len(self.ctx['posts']),2)
+
     def test_unauthorized_and_edited_comments_cannot_start_work(self):
         self.submit(); self.poll('mac-outer')
         self.ctx['comments'][0]['user']['login']='outsider'

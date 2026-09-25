@@ -348,6 +348,15 @@ function Runs {
         if ($run.events.ContainsKey($e.kind) -and $run.events[$e.kind].event_id -cne $e.event_id) { $script:State.conflicts[$key]='CONFLICTING_EVENT' }
         $run.events[$e.kind]=$e
     }
+    $revisions=@{}
+    foreach ($run in $result.Values) {
+        if (-not $run.events.ContainsKey('task')) { continue }
+        $task=$run.events.task; $revisionKey=$task.task_id+'/'+$task.revision
+        if (-not $revisions.ContainsKey($revisionKey)) { $revisions[$revisionKey]=@{sha=$task.payload_sha256;keys=@();conflict=$false} }
+        $group=$revisions[$revisionKey]; $group.keys+=,$run.key
+        if ($group.sha -cne $task.payload_sha256) { $group.conflict=$true }
+    }
+    foreach ($group in $revisions.Values) { if ($group.conflict) { foreach ($runKey in $group.keys) { $script:State.conflicts[$runKey]='REVISION_CONFLICT' } } }
     foreach ($run in $result.Values) {
         if ($script:State.conflicts.ContainsKey($run.key)) { $run.phase='conflict'; $run.error=$script:State.conflicts[$run.key]; continue }
         $previous=''; $phase='waiting_parent'
@@ -511,7 +520,9 @@ function Local-Action {
         foreach ($k in @('task_id','revision','run_id')) { $data.Remove($k) }
         $e=New-Event $identity 'task' '' $data; $key=Run-Key $e
         foreach ($other in @($script:State.events.Values)+@($script:State.outbox.Values | ForEach-Object { $_.event })) {
-            if ((Run-Key $other) -ceq $key -and $other.kind -eq 'task') { Need ($other.event_id -ceq $e.event_id) 'RUN_IS_IMMUTABLE' }
+            if ($other.kind -ne 'task') { continue }
+            if ((Run-Key $other) -ceq $key) { Need ($other.event_id -ceq $e.event_id) 'RUN_IS_IMMUTABLE' }
+            elseif ($other.task_id -ceq $e.task_id -and $other.revision -eq $e.revision) { Need ($other.payload_sha256 -ceq $e.payload_sha256) 'REVISION_IS_IMMUTABLE' }
         }
         Queue $e; return @{ok=$true;key=$key;event_id=$e.event_id;state='queued'}
     }
