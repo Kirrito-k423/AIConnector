@@ -2,6 +2,31 @@
 
 更新日期：2026-09-25；下面按日期保留历史证据，当前状态以最新日期为准。
 
+## v0.2.0：任务协议、持久化状态与两端轮询
+
+已发布 [任务交接包 v0.2.0](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.2.0)，代码固定在 `6e510a0269873d9bd608b161b3f924c5e798e6d7`。使用入口见 [两端启动与 AI 接入说明](docs/CONNECTOR.md)，事件字段、因果关系和恢复语义见 [任务协议](docs/PROTOCOL.md)。
+
+本阶段实现 `task → accepted → started → result → receipt`，任务修订不可变，重复实验使用独立运行 ID；同一状态目录的领取持久化后只返回一次执行许可。两端持续轮询 Issue，按消息摘要去重，并把本地待办、状态和结果保存为 JSON / Markdown。结果回执只证明完整收到，不代替实验验收结论。
+
+[最终 Windows PowerShell 5.1 回归](https://github.com/Kirrito-k423/AIConnector/actions/runs/36094262236) **72 项全部通过**，包括原探测器回归及新增的任务交接检查：
+
+- 任务发布、接收、领取、结果和回执完整流程；各动作使用新进程，验证重启后的持久化。
+- 相同事件去重、并发领取只授权一次、乱序恢复、同一修订跨运行内容一致性、冲突评论与作者检查。
+- 未知评论 / ZIP 写入只读回查证，明确限流后恢复，连续限流不因评论读取成功而丢失退避计数；明确拒绝只允许显式重新排队。
+- 任务与结果 ZIP 下载校验、成功结果代码版本比较、失败实验结果正常回传；损坏状态保留原文件并停止。
+- PowerShell 生成的事件摘要由 Python 独立重算；含中文的载荷与任意指标字段名（如 Keys / Values / Count）保持一致。
+- **解压后的真实 Windows 启动入口**：中文空格目录、NTFS 下载标记、一次信任确认、Watch / Claim / Complete / 重启完整流程、重复领取拒绝、包损坏拒绝和 AllSigned 不绕过。
+
+Mac 本地完整套件曾运行 68 项，55 项通过、13 项 Windows 专用检查跳过；之后的退避计数、摘要互通、修订一致性和指标字段修复分别通过针对性回归。最终代码的完整平台回归以上面 72 项 Windows 结果为准。
+
+另外在 Mac 启动两个**同时运行**的 PowerShell 7 Watch 进程，通过本地 HTTP 模拟通道完成任务交接，在轮询期间执行 Claim / Complete；双方均到达 receipt，远端共 5 条协议消息。终止并重启后没有增加消息或再次发放执行许可。最终 ZIP 的 Mac 启动脚本也在真实交互终端运行一轮，默认配置不修改，公开 GitHub Issue 读取成功；未发送外部消息。
+
+发布包为 **24,786 字节**，SHA-256 `d847877396ae1e21be1b4046780f0bec4a2ac129cbf5c04ab9abc4a0399bb209`。Windows CI 构建、本地构建和匿名公开下载逐字节一致。
+
+[公开发布包独立验收](https://github.com/Kirrito-k423/AIConnector/actions/runs/36094813967)也已通过：托管 Windows 匿名下载 v0.2.0、校验摘要、在全新中文空格目录解压，保持默认配置，经下载标记信任确认后从真实 cmd 入口完成公开 Issue 读取。该验收没有外部写入。Windows 再次下载到的包也与本地包逐字节一致。详见 [机器可读证据](docs/evidence/2026-09-25-task-connector.json)。
+
+证据边界：自动交接与故障测试使用模拟 GitHub / GitCode 接口，托管 Windows 不代表用户内网。真实通道的双向 ZIP 能力由下文 v0.1.5 内网证据支持；新 v0.2.0 的用户内网持续任务交接尚需两端实际启用，未声称已完成 NPU 实验。SSH 执行器、AI 自动决策及实验验收判断不在本次中间件实现内。
+
 ## 2026-09-25：内网恢复补测与真实双机 ZIP 验收
 
 已读取 [Issue #3 的最新结果](https://github.com/Kirrito-k423/AIConnector/issues/3#issuecomment-5825177873)，从 GitHub Release 匿名下载报告 ZIP：5,160 字节，SHA-256 `bfda37119e0ef0fcd583a1c08125619e55ef89d207e3be2996a76c26fd9ef2ed`，ZIP CRC 通过。报告来自用户内网 `windows-inner`，v0.1.5，Windows PowerShell 5.1.26100.7705；用户注明通过 `Run-Windows-Resume.cmd` 运行。

@@ -1,0 +1,59 @@
+{
+  "schema": "aiconnector.validation.v1",
+  "checked_at": "2026-09-25T04:34:06.304274+00:00",
+  "version": "0.2.0",
+  "code_commit": "6e510a0269873d9bd608b161b3f924c5e798e6d7",
+  "release": "https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.2.0",
+  "windows": {
+    "environment": "GitHub-hosted Windows PowerShell 5.1",
+    "workflow": "https://github.com/Kirrito-k423/AIConnector/actions/runs/36094262236",
+    "tests_passed": 72,
+    "tests_skipped": 0,
+    "extracted_package_full_handoff": true,
+    "real_cmd_entry": true,
+    "download_mark_trust": true,
+    "all_signed_enforced": true
+  },
+  "mac_package": {
+    "real_mac_starter": true,
+    "interactive_terminal": true,
+    "public_comment_read": true,
+    "default_config_unchanged": true,
+    "external_writes": false,
+    "zip_sha256": "d847877396ae1e21be1b4046780f0bec4a2ac129cbf5c04ab9abc4a0399bb209"
+  },
+  "parallel_polling": {
+    "environment": "macOS with two concurrent PowerShell 7 processes and local HTTP fixture",
+    "two_watch_loops": true,
+    "concurrent_local_claim_and_complete": true,
+    "first_claim_execute": true,
+    "duplicate_claim_execute": false,
+    "coordinator_phase": "receipt",
+    "worker_phase": "receipt",
+    "posts": 5,
+    "restart_did_not_duplicate": true
+  },
+  "public_windows_acceptance": {
+    "workflow": "https://github.com/Kirrito-k423/AIConnector/actions/runs/36094813967",
+    "tag": "v0.2.0",
+    "zip_bytes": 24786,
+    "sha256": "d847877396ae1e21be1b4046780f0bec4a2ac129cbf5c04ab9abc4a0399bb209",
+    "default_config_unchanged": true,
+    "actual_windows_entry": true,
+    "public_comment_read": true,
+    "external_writes": false
+  },
+  "package_identical_across": [
+    "mac_build",
+    "windows_build",
+    "anonymous_mac_download",
+    "anonymous_windows_download"
+  ],
+  "limits": [
+    "Protocol workflows and failure tests used local HTTP fixtures. Hosted Windows is not the user intranet.",
+    "User intranet v0.1.5 previously proved the underlying comment and ZIP channels; continuous v0.2.0 task exchange has not yet run on that machine.",
+    "The middleware does not execute SSH commands, NPU jobs or AI decisions. Receipt confirms transfer integrity, not experimental acceptance.",
+    "Less than 5 MiB is a software bound, not a measured network capacity.",
+    "One local claim per durable node store is guaranteed; lost state, multiple machines with the same node identity, and external execution are outside exactly-once guarantees."
+  ]
+}
