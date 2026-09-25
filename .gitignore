@@ -2,3 +2,4 @@ reports/
 dist/
 __pycache__/
 *.local.json
+connector-state/

@@ -1,4 +1,12 @@
-# AIConnector：一次运行的通道检查包
+# AIConnector：跨网段 AI 任务交接
+
+**v0.2.0 提供任务协议、持久化状态和两端轮询。** Mac 发布任务，Windows 生成本地待办并持久化领取；内侧 AI 提交结果后，Mac 下载 ZIP、校验并发布回执。中间件不自动执行 SSH 或评论里的命令。
+
+[下载任务交接包 v0.2.0](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.2.0/AIConnector.zip) · [两端启动与 AI 接入说明](docs/CONNECTOR.md) · [任务协议](docs/PROTOCOL.md)
+
+解压后，Windows 运行 `Start-Windows-Connector.cmd`，Mac 运行 `Start-Mac-Connector.command`。Token 在各自终端隐藏输入。默认复用已验证的 GitHub Issue / Release 通道；重启时保留 `connector-state`，AI 通过本地 JSON 和 `Submit / Claim / Complete` 命令接入。详细操作、未知写入恢复和容量证据边界见上面的说明。
+
+以下是独立的 v0.1.5 通道检查包，适合首次确认网络能力。
 
 检查内外 PC 能通过哪些渠道交换实验任务和结果。Windows 使用系统自带 PowerShell 5.1，不需要 Python、管理员权限或联网安装依赖。
 
@@ -116,7 +124,7 @@ GitHub 评论附件 API 的 TXT、JSON、CSV、ZIP 请求已被拒绝；Release 
 
 可交换 Node/Peer 测试反方向。正文上限 32 KiB，使用合成数据，包含字节数、SHA-256 和稳定消息 ID。顺序重跑会先查已有消息；不提供并发锁。写入结果不明确时不自动重发。回执用于连通性验证，不是设备身份认证。
 
-未实现内网浏览器自动化、持续轮询任务队列或 NPU 实验执行。
+v0.2.0 的独立任务交接入口已提供持续轮询和持久化状态；本节的 v0.1.5 探测入口仍用于通道检查。内网浏览器自动化和 NPU 实验执行器尚未实现。
 
 ## 开发者：发布前验收
 

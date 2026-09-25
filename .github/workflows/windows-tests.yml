@@ -6,6 +6,11 @@ on:
     paths:
       - '*.ps1'
       - '*.cmd'
+      - '*.command'
+      - 'examples/**'
+      - 'docs/CONNECTOR.md'
+      - 'docs/PROTOCOL.md'
+      - 'CONTEXT.md'
       - '*.json'
       - 'README.md'
       - 'tools/**'
@@ -35,6 +40,12 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Build release bundle and synthetic fixtures
         run: python tools/build_bundle.py
+      - name: Build connector delivery
+        run: python tools/build_connector.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-connector-package
+          path: dist/connector/*
       - uses: actions/upload-artifact@v4
         with:
           name: tested-windows-package

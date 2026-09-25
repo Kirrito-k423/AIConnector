@@ -1,0 +1,22 @@
+{
+  "task_id": "smoke",
+  "revision": 1,
+  "run_id": "run-001",
+  "title": "合成任务交接",
+  "objective": "验证任务接收、领取、结果和回执。",
+  "code": {
+    "repository": "local-synthetic",
+    "revision": "synthetic-v1"
+  },
+  "environment": {
+    "target": "local-manual"
+  },
+  "invocation": {
+    "entry": "manual-smoke",
+    "arguments": []
+  },
+  "acceptance": [
+    "收到结果和回执；不访问 NPU。"
+  ],
+  "artifacts": []
+}

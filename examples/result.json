@@ -1,0 +1,10 @@
+{
+  "outcome": "succeeded",
+  "exit_code": 0,
+  "actual_revision": "synthetic-v1",
+  "summary": "本地人工确认完成任务交接。",
+  "metrics": {
+    "checks": 1
+  },
+  "artifacts": []
+}

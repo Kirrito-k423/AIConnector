@@ -1,0 +1,28 @@
+name: Connector public package acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published connector tag
+        required: true
+        default: v0.2.0
+        type: string
+permissions:
+  contents: read
+jobs:
+  public-package:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clean download, extraction, trust, real entry and read-only public poll
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python tools/validate_connector_release.py $env:RELEASE_TAG
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: connector-public-acceptance
+          path: connector-acceptance/
