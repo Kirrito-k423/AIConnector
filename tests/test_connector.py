@@ -67,7 +67,7 @@ class TaskAPI(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers['Content-Length']))
         self.ctx['posts'].append(u.path)
         if self.ctx['post_rate']:
-            self.ctx['post_rate'] = False
+            if self.ctx['post_rate'] != 'always': self.ctx['post_rate'] = False
             return self.reply({}, 429, {'Retry-After': '2'})
         if self.ctx['reject']:
             return self.reply({'message': 'MUST_NOT_LOG_TOKEN'}, self.ctx['reject'])
@@ -219,6 +219,28 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'], 'confirmed')
         self.assertEqual(len(self.ctx['posts']), 2)
         self.assertEqual(len(self.ctx['comments']), 1)
+
+    def test_repeated_write_rate_limit_keeps_backoff_across_successful_reads(self):
+        self.submit(); self.ctx['post_rate']='always'
+        self.poll('mac-outer')
+        self.assertEqual(self.read_state('mac-outer')['failures'],1)
+        time.sleep(3.1)
+        self.poll('mac-outer')
+        self.assertEqual(self.read_state('mac-outer')['failures'],2)
+        self.assertEqual(len(self.ctx['posts']),2)
+
+    def test_wire_digest_is_independent_of_powershell_json_reader(self):
+        self.complete_flow()
+        for comment in self.ctx['comments']:
+            e=json.loads(re.search(r'```json\n(.*?)\n```',comment['body'],re.S).group(1))
+            identifier=e.pop('event_id')
+            self.assertEqual(identifier,sha(json.dumps(e,sort_keys=True,separators=(',',':')).encode()))
+            raw=base64.b64decode(e['payload_b64'])
+            self.assertEqual(e['payload_sha256'],sha(raw))
+            if e['kind']=='task':
+                self.assertEqual(json.loads(raw)['title'],self.task['title'])
+                self.assertIn('synthetic-v1',comment['body'])
+                self.assertIn(self.task['objective'],comment['body'])
 
     def test_read_limit_blocks_network_after_restart(self):
         self.ctx['get_rate'] = True

@@ -59,7 +59,9 @@ function Atomic([string]$Path,[string]$Text) {
 }
 function Save {
     $body=Canonical $script:State
-    Atomic (Join-Path $StateDir 'state.json') (Json @{schema='aiconnector.store.v1';sha256=(Hash $body);data_base64=[Convert]::ToBase64String($script:Utf8.GetBytes($body))})
+    $serialized=Json @{schema='aiconnector.store.v1';sha256=(Hash $body);data_base64=[Convert]::ToBase64String($script:Utf8.GetBytes($body))}
+    Need ($script:Utf8.GetByteCount($serialized) -le 16777216) 'STATE_CAPACITY_REACHED'
+    Atomic (Join-Path $StateDir 'state.json') $serialized
 }
 function Open-State {
     [IO.Directory]::CreateDirectory($StateDir)|Out-Null
@@ -447,15 +449,17 @@ function Snapshot {
     Atomic (Join-Path $StateDir 'status.json') (Json $snapshot)
     $lines=@('# AIConnector '+$Node,'','| 运行 | 状态 | 本地已领取 | 异常 |','|---|---|---|---|')
     foreach ($r in $list) { $lines+='| '+$r.key+' | '+$r.phase+' | '+$r.claimed+' | '+$r.error+' |' }
-    $lines+=@('','待发消息：'+$outbox.Count,'最后通道异常：'+$script:State.last_error,'','回执只确认结果和产物完整收到；实验结论由 AI 或人评估。')
+    $pending=@($outbox | Where-Object { $_.status -ne 'confirmed' })
+    $lines+=@('','未确认消息：'+$pending.Count,'最后通道异常：'+$script:State.last_error,'','回执只确认结果和产物完整收到；实验结论由 AI 或人评估。')
     Atomic (Join-Path $StateDir 'status.md') ($lines -join "`n")
     Save; return $snapshot
 }
 function Poll-Once {
     if ($script:State.next_poll -gt (Epoch)) { return Snapshot }
     Import-Comments (Read-Comments)
-    $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.failures=0; $script:State.next_poll=0L
+    $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
     Auto-Transitions; Flush-One
+    if (-not $script:State.last_error) { $script:State.failures=0 }
     return Snapshot
 }
 function Upload-Zip([string]$Path) {
