@@ -26,7 +26,7 @@ function Get-Field($O,[string]$K,$Default=$null) {
 function As-Map($O) {
     if ($null -eq $O) { return $null }
     if ($O -is [Collections.IDictionary] -or $O -is [pscustomobject]) {
-        $m=@{}; $keys=$O.Keys; if ($O -is [pscustomobject]) { $keys=@($O.PSObject.Properties | ForEach-Object { $_.Name }) }
+        $m=@{}; $keys=@(); if ($O -is [Collections.IDictionary]) { $keys=@($O.get_Keys()) } else { $keys=@($O.PSObject.Properties | ForEach-Object { $_.Name }) }
         foreach ($k in $keys) { $m[$k]=As-Map (Get-Field $O $k) }; return $m
     }
     if ($O -is [Array]) { $a=@(); foreach ($v in $O) { $a+=,(As-Map $v) }; return ,$a }
@@ -36,7 +36,7 @@ function Json($O) { return ConvertTo-Json -InputObject $O -Depth 50 -Compress }
 function Canonical($O) {
     if ($null -eq $O) { return 'null' }
     if ($O -is [Collections.IDictionary] -or $O -is [pscustomobject]) {
-        [string[]]$keys=@($O.Keys); if ($O -is [pscustomobject]) { $keys=@($O.PSObject.Properties | ForEach-Object { $_.Name }) }
+        [string[]]$keys=@(); if ($O -is [Collections.IDictionary]) { $keys=@($O.get_Keys()) } else { $keys=@($O.PSObject.Properties | ForEach-Object { $_.Name }) }
         [Array]::Sort($keys,[StringComparer]::Ordinal); $parts=@()
         foreach ($k in $keys) { $parts+=((Json $k)+':'+(Canonical (Get-Field $O $k))) }
         return '{'+($parts -join ',')+'}'
@@ -274,7 +274,7 @@ function Validate-Event($E) {
     if ($E.kind -in @('task','receipt')) { $sender='mac-outer'; $receiver='windows-inner' }
     Need ($E.sender -ceq $sender -and $E.receiver -ceq $receiver) 'INVALID_EVENT_ROLE'
     Need ($E.event_id -is [string] -and $E.event_id -cmatch '^[a-f0-9]{64}$') 'INVALID_EVENT_ID'
-    $unsigned=@{}; foreach ($k in $E.Keys) { if ($k -ne 'event_id') { $unsigned[$k]=$E[$k] } }
+    $unsigned=@{}; foreach ($k in $E.get_Keys()) { if ($k -ne 'event_id') { $unsigned[$k]=$E[$k] } }
     Need ((Hash (Canonical $unsigned)) -ceq $E.event_id) 'EVENT_HASH_MISMATCH'
     Need (($E.kind -eq 'task' -and $E.parent -ceq '') -or ($E.kind -ne 'task' -and $E.parent -cmatch '^[a-f0-9]{64}$')) 'INVALID_PARENT'
     $bytes=[Convert]::FromBase64String($E.payload_b64)

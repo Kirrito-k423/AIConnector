@@ -168,6 +168,12 @@ class ConnectorTests(unittest.TestCase):
         for node in ('mac-outer', 'windows-inner'):
             self.assertNotIn('TOKEN', json.dumps(self.read_state(node)))
 
+    def test_metric_names_matching_dictionary_properties_are_preserved(self):
+        self.result['metrics']={'Keys':3,'Values':[1,2],'Count':4,'nested':{'keys':'original','values':5}}
+        self.write_inputs(); self.complete_flow()
+        status=self.run_cli('mac-outer','Status')
+        self.assertEqual(status['runs'][0]['result']['metrics'],self.result['metrics'])
+
     def test_result_artifact_download_required_before_receipt(self):
         z = io.BytesIO()
         with zipfile.ZipFile(z, 'w') as f: f.writestr('result.txt', 'synthetic')
