@@ -1,0 +1,258 @@
+{
+  "schema": "aiconnector.validation.v1",
+  "checked_at": "2026-09-25T01:39:26.462176+00:00",
+  "source_issue": "https://github.com/Kirrito-k423/AIConnector/issues/3#issuecomment-5825177873",
+  "source_zip": "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/aiconnector-report-20260925-013006-bfda37119e0ef0fc.zip",
+  "source_zip_bytes": 5160,
+  "source_zip_sha256": "bfda37119e0ef0fcd583a1c08125619e55ef89d207e3be2996a76c26fd9ef2ed",
+  "source_zip_crc": "PASS",
+  "windows": {
+    "version": "0.1.5",
+    "node": "windows-inner",
+    "mode": "Write",
+    "platform": "Win32NT",
+    "powershell": "5.1.26100.7705",
+    "generated_at": "2026-09-25T01:25:54.6100253Z",
+    "completed": true
+  },
+  "report_summary": {
+    "completed": true,
+    "checked": 16,
+    "verified": 9,
+    "conclusion": "完整检查记录已生成；只将明确验证的能力列为通过。未验证项目及原因见下表。",
+    "peer_verified": false
+  },
+  "mac_to_windows_release_zip": {
+    "test": "github/peer-zip/6a3c89eb0aa1",
+    "source_url": "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/aiconnector-writecheck-v013-mac-outer-f6f98c9176bc9ec555d3bf235121ad1f274570e0f1de0e90a1b02c7cbe1954ea-result-128KiB.zip",
+    "http": 200,
+    "bytes": 131190,
+    "sha256": "f6f98c9176bc9ec555d3bf235121ad1f274570e0f1de0e90a1b02c7cbe1954ea",
+    "content_type": "application/octet-stream",
+    "comment_id": "5811605497",
+    "created_at": "2026-09-24T09:34:48Z",
+    "message_id": "6a3c89eb0aa1d22670fa213e5ec87d5c5a68d1f377505a31982f990f8ddccfb5",
+    "status": "MAC_SOURCE_REVERIFIED",
+    "zip_crc": "PASS",
+    "payload_bytes": 131072,
+    "synthetic_payload": "EXACT_BYTES_VERIFIED",
+    "windows_report_status": "EXACT_BYTES_VERIFIED"
+  },
+  "windows_to_mac": [
+    {
+      "test": "gitcode/attachment/result-128KiB.zip",
+      "source_url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/80031fb9-d6a7-4714-b289-4e7cb7e02b22/result-128KiB.zip",
+      "http": 200,
+      "bytes": 131215,
+      "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+      "content_type": "image/*",
+      "comment_id": "191644336",
+      "created_at": "2026-09-25T09:25:57+08:00",
+      "message_id": "ca1694b1bd26e7b52f38da4ccc11b34b01cdfaad0a3eb9af4b12d4cbd4c67b25",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "zip_crc": "PASS",
+      "payload_bytes": 131072,
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/pixel.png",
+      "source_url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/7e958d0e-8669-4eb4-90cf-6ff56412031c/pixel.png",
+      "http": 200,
+      "bytes": 69,
+      "sha256": "e11c7b056593ce0041e2f75a89ec8ea81b19f2261b1021d2ab61da2133ff342f",
+      "content_type": "image/png",
+      "comment_id": "191579126",
+      "created_at": "2026-09-24T16:45:29+08:00",
+      "message_id": "81a41ad253290378f53e72cd6cb2f9545669e3a24216de450757fd942e7fb572",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/text-1024.txt",
+      "source_url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/9d43b6f0-0f8c-4039-b44a-7b3c9f2df7a7/text-1024.txt",
+      "http": 200,
+      "bytes": 1024,
+      "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+      "content_type": "image/*",
+      "comment_id": "191579058",
+      "created_at": "2026-09-24T16:45:19+08:00",
+      "message_id": "e8f793e3239b21a12e3b5a9c198137e070e0e2645b8947e4fc5d210e338dd938",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/text-32768.txt",
+      "source_url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/912438c2-3cc9-4c14-8c6d-ed46560827d9/text-32768.txt",
+      "http": 200,
+      "bytes": 32768,
+      "sha256": "427965f49a857174e308658227325dbd23ff4eccbe399d5ad4817dda3ec79f87",
+      "content_type": "image/*",
+      "comment_id": "191644425",
+      "created_at": "2026-09-25T09:27:13+08:00",
+      "message_id": "e575203df32ecd3616b409d6126db52ba659187e93c65154d4cd85fa83abd297",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/metrics.json",
+      "source_url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/f5aa6316-f1cf-468c-884f-1e36225ce133/metrics.json",
+      "http": 200,
+      "bytes": 52,
+      "sha256": "f7f2912d04359b00ca0d6061f8b366fb654f83690d02cfd67dec705e9a35f737",
+      "content_type": "image/*",
+      "comment_id": "191644468",
+      "created_at": "2026-09-25T09:28:29+08:00",
+      "message_id": "7bcd17c9b3883137ca808884ccdf7ec5df458b0eedb5d7a6cab73c2a99535ab0",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/metrics.csv",
+      "source_url": "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/f8fa31c4-2083-41b4-8f91-fbf768b8ea68/metrics.csv",
+      "http": 200,
+      "bytes": 23,
+      "sha256": "8698f7decdcda7eeeddbff496f44a1e90070db30ed65211db008a728c8871b38",
+      "content_type": "image/*",
+      "comment_id": "191644528",
+      "created_at": "2026-09-25T09:29:46+08:00",
+      "message_id": "2dacbe3df414f04f672c5d43e6518f42b2055ffb3dcda03e3e7b9d5107b6d24f",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "github/attachment/pixel.png",
+      "source_url": "https://github.com/user-attachments/assets/43471a4a-c150-427e-afb1-f552ef38bd60",
+      "http": 200,
+      "bytes": 69,
+      "sha256": "e11c7b056593ce0041e2f75a89ec8ea81b19f2261b1021d2ab61da2133ff342f",
+      "content_type": "image/png",
+      "comment_id": "5810835378",
+      "created_at": "2026-09-24T08:43:46Z",
+      "message_id": "81a41ad253290378f53e72cd6cb2f9545669e3a24216de450757fd942e7fb572",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    },
+    {
+      "test": "github/release/result-128KiB.zip",
+      "source_url": "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/aiconnector-writecheck-v013-windows-inner-38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12-result-128KiB.zip",
+      "http": 200,
+      "bytes": 131215,
+      "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+      "content_type": "application/octet-stream",
+      "comment_id": "5825176683",
+      "created_at": "2026-09-25T01:29:59Z",
+      "message_id": "c9bd0ff1a302493ebbe0599627237e628621e4aeb5bc9f599e7ca33b26faeccc",
+      "status": "WINDOWS_TO_MAC_VERIFIED",
+      "zip_crc": "PASS",
+      "payload_bytes": 131072,
+      "synthetic_payload": "EXACT_BYTES_VERIFIED"
+    }
+  ],
+  "recovered_previous_429": [
+    {
+      "test": "gitcode/attachment/text-32768.txt",
+      "previous_http": 429,
+      "current_windows_status": "EXACT_BYTES_VERIFIED",
+      "mac_status": "WINDOWS_TO_MAC_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/metrics.json",
+      "previous_http": 429,
+      "current_windows_status": "EXACT_BYTES_VERIFIED",
+      "mac_status": "WINDOWS_TO_MAC_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/metrics.csv",
+      "previous_http": 429,
+      "current_windows_status": "EXACT_BYTES_VERIFIED",
+      "mac_status": "WINDOWS_TO_MAC_VERIFIED"
+    },
+    {
+      "test": "gitcode/attachment/result-128KiB.zip",
+      "previous_http": 429,
+      "current_windows_status": "EXACT_BYTES_VERIFIED",
+      "mac_status": "WINDOWS_TO_MAC_VERIFIED"
+    }
+  ],
+  "retained_rejections_not_retried": [
+    {
+      "test": "gitcode/attachment/binary-1MiB.bin",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+      "bytes": 1048576,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 400,
+      "attempts": 0
+    },
+    {
+      "test": "github/attachment/text-1024.txt",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+      "bytes": 1024,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 422,
+      "attempts": 0
+    },
+    {
+      "test": "github/attachment/text-32768.txt",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "427965f49a857174e308658227325dbd23ff4eccbe399d5ad4817dda3ec79f87",
+      "bytes": 32768,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 422,
+      "attempts": 0
+    },
+    {
+      "test": "github/attachment/metrics.json",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "f7f2912d04359b00ca0d6061f8b366fb654f83690d02cfd67dec705e9a35f737",
+      "bytes": 52,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 422,
+      "attempts": 0
+    },
+    {
+      "test": "github/attachment/metrics.csv",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "8698f7decdcda7eeeddbff496f44a1e90070db30ed65211db008a728c8871b38",
+      "bytes": 23,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 422,
+      "attempts": 0
+    },
+    {
+      "test": "github/attachment/binary-1MiB.bin",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83",
+      "bytes": 1048576,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 403,
+      "attempts": 0
+    },
+    {
+      "test": "github/attachment/result-128KiB.zip",
+      "status": "UPLOAD_REJECTED",
+      "sha256": "38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12",
+      "bytes": 131215,
+      "retry_after": "",
+      "next_attempt_at": "",
+      "http": 422,
+      "attempts": 0
+    }
+  ],
+  "limits": [
+    "The evidence combines the user-provided windows-inner report, public manifests, and independent anonymous Mac downloads; node names are not device identity authentication.",
+    "Four items previously limited by HTTP 429 now pass. This report does not record a new 429 or the live Retry-After waiting sequence, and does not establish the server quota window.",
+    "The ZIP sample contains 128 KiB synthetic data. Maximum capacity, arbitrary experiment archives, and sustained polling were not tested.",
+    "The report summary peer_verified=false is based on PEER_RECEIPT_VERIFIED text receipt observations; it is not a failed ZIP download. ZIP manifests and downloaded hashes were checked independently.",
+    "GitCode ZIP is verified Windows to Mac; the reverse ZIP direction was verified only on GitHub Release.",
+    "Retained HTTP 400/403/422 rows have attempts=0 and are previous rejection records, not seven new failed uploads.",
+    "The report ZIP was actually returned through a Release link; the comment describes an additional local return script, which is not claimed as a shipped v0.1.5 capability."
+  ]
+}

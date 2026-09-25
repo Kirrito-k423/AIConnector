@@ -4,6 +4,8 @@
 
 [下载 Windows 检查包 v0.1.5](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.5/AIConnector-Probe.zip) · [SHA-256](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.1.5/AIConnector-Probe.zip.sha256) · [验证记录](VALIDATION.md)
 
+**2026-09-25 实测：** 用户内网 Windows 与外部 Mac 的 GitHub Release ZIP 双向传输通过；GitCode 原先限流的 ZIP、32 KiB TXT、JSON、CSV 补测通过，并在 Mac 独立下载核对。ZIP 样本含 128 KiB 合成数据，容量上限尚未测定。见 [本次结果](docs/evidence/2026-09-25-intranet-resume.json)；已完成这轮补测的用户无需重复运行。
+
 ## 用户只需一次运行
 
 1. **完整解压** ZIP，双击 `Run-Windows.cmd`。
@@ -50,7 +52,7 @@
 
 `write-state-*.local.json` 保存附件进度。v0.1.4 的 `UPLOAD_REJECTED + HTTP 429` 会迁移为 `RATE_LIMITED`；其余拒绝保留。ZIP Release 文件名含完整 SHA-256，上传前检查已有资产；不覆盖或删除文件，未知上传只允许通过服务器已有资产及字节校验来恢复确认。
 
-GitHub 评论附件 API 的 TXT、JSON、CSV、ZIP 请求已被拒绝；Release ZIP 是独立通道。GitCode 文件接口的四个样本在内网返回 429，因此这些格式仍待验证。附件下载应使用报告里的 `source_url` 稳定链接；脱敏后的最终跳转地址未必可复用。
+GitHub 评论附件 API 的 TXT、JSON、CSV、ZIP 请求已被拒绝；Release ZIP 是独立通道，已通过真实内外双机验证。GitCode 原先返回 429 的四个样本已于 2026-09-25 补测通过，平台限流窗口仍未知。附件下载应使用报告里的 `source_url` 稳定链接；脱敏后的最终跳转地址未必可复用。
 
 没有 Token 的平台会标为 `NEEDS_TOKEN`，不能算测试完成。生成回执也不等于 Mac 已读到；Mac 还需要读取回执验证。无需重新执行只读扫描。
 

@@ -1,6 +1,27 @@
 # 本次验证记录
 
-更新日期：2026-09-24；下面按日期保留历史证据。
+更新日期：2026-09-25；下面按日期保留历史证据，当前状态以最新日期为准。
+
+## 2026-09-25：内网恢复补测与真实双机 ZIP 验收
+
+已读取 [Issue #3 的最新结果](https://github.com/Kirrito-k423/AIConnector/issues/3#issuecomment-5825177873)，从 GitHub Release 匿名下载报告 ZIP：5,160 字节，SHA-256 `bfda37119e0ef0fcd583a1c08125619e55ef89d207e3be2996a76c26fd9ef2ed`，ZIP CRC 通过。报告来自用户内网 `windows-inner`，v0.1.5，Windows PowerShell 5.1.26100.7705；用户注明通过 `Run-Windows-Resume.cmd` 运行。
+
+Mac 随后独立读取 GitHub / GitCode 评论中的附件清单，核对 Session、发送接收节点、消息 ID、字节数、SHA-256 和稳定链接，并匿名下载全部 9 个已验证项对应的文件。详细来源、评论 ID 及摘要见 [本次机器可读证据](docs/evidence/2026-09-25-intranet-resume.json)。
+
+| 实际链路 / 项目 | 本次结果 |
+|---|---|
+| Mac → 内网 Windows，GitHub Release ZIP | Windows 下载 131,190 字节并校验；Mac 重新核对原文件，SHA-256 一致 |
+| 内网 Windows → Mac，GitHub Release ZIP | 131,215 字节，双方下载校验通过；Mac 另验 ZIP CRC 和内部 128 KiB 合成载荷 |
+| 内网 Windows → Mac，GitCode ZIP | 131,215 字节，SHA-256、ZIP CRC 和内部合成载荷通过 |
+| GitCode 原先返回 429 的 32 KiB TXT / JSON / CSV | 本次 Windows 校验通过，Mac 独立下载及合成原始字节比对通过 |
+| 之前成功的 GitCode 1 KiB TXT / PNG、GitHub PNG | 原附件链接和评论 ID 保持不变；本次重新下载校验通过 |
+| 本次报告 ZIP 回传 | 已实际通过 Release 链接回收并校验；评论注明由本机额外脚本回传，不据此声称发布包已内置自动回传功能 |
+
+此前 GitCode 的四个限流项目全部恢复为通过。GitHub Release 已有真实 Mac 与用户内网 Windows 的双向 ZIP 证据，更新下文 9 月 24 日的待测状态；GitCode ZIP 目前只确认 Windows → Mac 方向。Windows 生成 ZIP 的 SHA-256 为 `38a4961eb964c34bd8fc746a18c5a784c24b0a2b513e6aab393b8f9102bf3d12`，两个平台下载到相同字节。
+
+报告的 **16 项中 9 项验证通过，7 项为保留的旧拒绝记录**：GitCode 1 MiB 二进制 HTTP 400；GitHub 评论附件接口两档 TXT / JSON / CSV / ZIP HTTP 422、1 MiB 二进制 HTTP 403。这 7 项的 `attempts=0`，此次未重试，不能解读为七次新上传失败，也不影响独立 Release ZIP 通道的通过。`summary.peer_verified=false` 只统计文本 `PEER_RECEIPT_VERIFIED`，恢复模式不重跑文本回执；本次 ZIP 接收成功由单项记录及独立下载证据确认。
+
+仍需保留的边界：报告未记录成功项完整的重试响应与等待过程，不能据此确认本次是否再次收到 429、实际 `Retry-After` 或平台配额窗口。已验 ZIP 只含 128 KiB 合成载荷，未证明接近 5 MiB 的容量或任意实验包可用。持续轮询、任务状态协议与 NPU 实验执行器尚未实现。这一轮通道补测已完成，无需为已通过项目再次运行检查包。
 
 ## v0.1.5：限流恢复与独立 ZIP 通道
 
