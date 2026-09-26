@@ -1,60 +1,79 @@
 {
-  "key": "relay-layout-smoke/1/run-20260926-020238",
+  "key": "relay-layout-smoke/1/run-20260926-021719",
   "issue": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1",
-  "release": "https://github.com/Kirrito-k423/AIConnector-Relay/releases/tag/aic-v1.experiments-v1.relay-layout-smoke.r1.run-20260926-020238",
+  "release": "https://github.com/Kirrito-k423/AIConnector-Relay/releases/tag/aic-v1.experiments-v1.relay-layout-smoke.r1.run-20260926-021719",
   "phase": "receipt",
   "timeline": [
     {
-      "published_at": "2026-09-26T02:03:15.000Z",
+      "observed_at": 1790389067,
       "author": "Kirrito-k423",
-      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842216237",
-      "observed_at": 1790388200,
+      "event_id": "4e2d03a6bedd5e9008bbd1b87b2dd706100b5a6ffcef306a99604d182693cc8e",
+      "sender": "mac-outer",
+      "published_at": "2026-09-26T02:17:42.000Z",
       "kind": "task",
-      "sender": "mac-outer",
-      "event_id": "6f8b306daeabeeb6e19552d2705a466c93230d12c5dc3448f4dd2d96e1ce5df6"
+      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842308188"
     },
     {
-      "published_at": "2026-09-26T02:03:33.000Z",
+      "observed_at": 1790389137,
       "author": "Kirrito-k423",
-      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842218174",
-      "observed_at": 1790388266,
+      "event_id": "898b3265dcf82d205d91a7c918b4c3a8f314afd0d5dc28654484167f2c99d048",
+      "sender": "windows-inner",
+      "published_at": "2026-09-26T02:18:00.000Z",
       "kind": "accepted",
-      "sender": "windows-inner",
-      "event_id": "e95328e60cdce26ca5fe32ae0f8a7f36d2fcb524514769878659599ba4464f1d"
+      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842310069"
     },
     {
-      "published_at": "2026-09-26T02:03:56.000Z",
+      "observed_at": 1790389137,
       "author": "Kirrito-k423",
-      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842220717",
-      "observed_at": 1790388266,
+      "event_id": "3b8d76872ad811a75c406da81b7af03a2709910042ede37219b07481aad6acfa",
+      "sender": "windows-inner",
+      "published_at": "2026-09-26T02:18:27.000Z",
       "kind": "started",
-      "sender": "windows-inner",
-      "event_id": "80cc5e9669ef7d15415bd5e068b125a45adcce27655fecbd676f21bf51ff63c4"
+      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842312738"
     },
     {
-      "published_at": "2026-09-26T02:04:16.000Z",
+      "observed_at": 1790389137,
       "author": "Kirrito-k423",
-      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842222742",
-      "observed_at": 1790388266,
+      "event_id": "b313a3ade85403510b69f99cca6f96d3d8ed6e088f9e14328868dec6c3e9a393",
+      "sender": "windows-inner",
+      "published_at": "2026-09-26T02:18:46.000Z",
       "kind": "result",
-      "sender": "windows-inner",
-      "event_id": "d8dfbc943b0081d645286eea9bbcff6015dfa18338976b97160b6e27b1afb0bc"
+      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842314578"
     },
     {
-      "published_at": "2026-09-26T02:04:31.000Z",
+      "observed_at": 1790389150,
       "author": "Kirrito-k423",
-      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842224231",
-      "observed_at": 1790388276,
-      "kind": "receipt",
+      "event_id": "5385b2c602c728a3a5348962083bce129088eb685a1b0c93974339a61a3e551b",
       "sender": "mac-outer",
-      "event_id": "949ffc19e33acdc9b3729fc0d170406a6a35efb452d86741061520be3dc5b0ea"
+      "published_at": "2026-09-26T02:19:05.000Z",
+      "kind": "receipt",
+      "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/1#issuecomment-5842316506"
     }
   ],
-  "zip_bytes": 191,
+  "input_zip_bytes": 191,
+  "result_zip_bytes": 190,
+  "distinct_input_and_result": true,
   "actual_github_write_readback": true,
   "two_processes_same_mac": true,
   "user_intranet": false,
   "npu": false,
-  "code_commit": "4d19fde",
-  "timestamp_readback_after_fix": true
+  "code_commit": "0548cb9940424f14da19053daf5a51b1ea3240c0",
+  "package_sha256": "eb0650d0e359bf62bbe62c751c637d900bbf0fbc839b4ac0e83672a10a971272",
+  "package_bytes": 33543,
+  "windows_ci": {
+    "url": "https://github.com/Kirrito-k423/AIConnector/actions/runs/36211213575",
+    "powershell": "5.1",
+    "tests": 91,
+    "conclusion": "success"
+  },
+  "public_windows_acceptance": {
+    "tag": "v0.3.0-rc.1",
+    "zip_bytes": 33543,
+    "sha256": "eb0650d0e359bf62bbe62c751c637d900bbf0fbc839b4ac0e83672a10a971272",
+    "default_config_unchanged": true,
+    "actual_windows_entry": true,
+    "public_comment_read": true,
+    "external_writes": false,
+    "url": "https://github.com/Kirrito-k423/AIConnector/actions/runs/36211347383"
+  }
 }

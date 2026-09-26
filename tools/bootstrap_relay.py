@@ -66,7 +66,7 @@ def bootstrap(apply=False):
 - 输入 ZIP：`input--mac-outer--<SHA256>.zip`；结果 ZIP：`result--windows-inner--<SHA256>.zip`。
 - 每个 ZIP 小于 5 MiB；协议载荷给出字节数、SHA-256 和稳定下载链接。
 
-[查看任务](https://github.com/{repo}/issues?q=is%3Aissue) · [查看运行文件](https://github.com/{repo}/releases) · [完整格式与恢复规则](https://github.com/Kirrito-k423/AIConnector/blob/codex/relay-task-layout/docs/RELAY.md)
+[查看任务](https://github.com/{repo}/issues?q=is%3Aissue) · [查看运行文件](https://github.com/{repo}/releases) · [完整格式与恢复规则](https://github.com/Kirrito-k423/AIConnector/blob/v0.3.0-rc.1/docs/RELAY.md)
 
 普通评论、标题、标签和 Issue 开关不触发执行。`started` 表示持久化领取；`receipt` 表示交付件完整收到；它们不证明实验实际启动或验收通过。修改协议评论或固定登记正文会触发冲突检查。
 

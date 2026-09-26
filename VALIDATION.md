@@ -208,6 +208,6 @@ Windows 验收包含两层：
 默认任务通道改为公开的 `Kirrito-k423/AIConnector-Relay`；程序自动管理每任务 Issue、每运行 Release 和不可覆盖的 ZIP。任务事件格式保持 v1，旧单 Issue 配置兼容。完整格式见 [RELAY.md](docs/RELAY.md)。
 
 - 本机 PS7：旧协议 27 项回归通过；新布局覆盖多任务、修订与重跑、错误归属、重复/修改的 Issue、Release 元数据、分页失败、创建超时、限流和 UTC 时间规范化。
-- 真实 GitHub：完成一个合成运行的五阶段事件和双向 191 字节 ZIP，重启领取返回 execute=false。[任务 Issue](https://github.com/Kirrito-k423/AIConnector-Relay/issues/1)；[机器证据](docs/evidence/2026-09-26-relay-layout.json)。
-- 实网两端均是 Mac 上独立 PowerShell 进程；没有调用用户内网、SSH 或 NPU。Windows PS5.1 和实际 cmd 包入口由 PR CI 验证，公开包还需独立下载验收。
+- 真实 GitHub：同一任务完成两次合成运行；最终运行使用内容不同的输入/结果 ZIP，分别为 191 / 190 字节，完成五阶段事件及两端下载校验，重启领取返回 execute=false。[任务 Issue](https://github.com/Kirrito-k423/AIConnector-Relay/issues/1)；[机器证据](docs/evidence/2026-09-26-relay-layout.json)。
+- 实网两端均是 Mac 上独立 PowerShell 进程；没有调用用户内网、SSH 或 NPU。[Windows PS5.1 的 91 项测试通过](https://github.com/Kirrito-k423/AIConnector/actions/runs/36211213575)，包含新旧布局的真实 cmd 包入口；[公开包全新下载验收通过](https://github.com/Kirrito-k423/AIConnector/actions/runs/36211347383)，默认配置未修改。候选包 v0.3.0-rc.1：33,543 字节，SHA-256 `eb0650d0e359bf62bbe62c751c637d900bbf0fbc839b4ac0e83672a10a971272`。
 - v0.3 新默认状态目录为 connector-state-relay，原 v0.2 状态目录保留。新布局只支持公开 GitHub；API Token 需授权专用仓库的 Issues 与 Contents。
