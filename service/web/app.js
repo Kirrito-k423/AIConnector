@@ -31,7 +31,8 @@ function render(){
   const links=el('div',undefined,'links');link(links,'任务 Issue ↗',r.issue_url);link(links,'本次 Release ↗',r.release_url);detail.append(links);
   const list=el('ol',undefined,'timeline');
   const events=(r.timeline||[]).map(e=>({at:e.published_at,title:(labels[e.kind]||e.kind)+' · 远端记录',meta:`${e.sender} · GitHub @${e.author||'未知'}`,url:e.url}));
-  for(const [title,at]of [['实际开始执行',r.job?.worker?.execution_started_at||r.result?.execution?.started_at],['实际执行结束',r.job?.worker?.execution_ended_at||r.result?.execution?.ended_at]])if(at)events.push({title,at,meta:'执行器本机时间'});
+  const observed=(r.job?.worker?.execution_time_source||r.result?.execution?.time_source)==='controller_observed';
+  for(const [title,at]of [[observed?'服务器提交记录':'实际开始执行',r.job?.worker?.execution_started_at||r.result?.execution?.started_at],[observed?'服务器退出确认':'实际执行结束',r.job?.worker?.execution_ended_at||r.result?.execution?.ended_at]])if(at)events.push({title,at,meta:observed?'控制器记录时间，非远端精确时间':'执行器本机时间'});
   for(const e of r.job?.worker?.events||[])if(['compaction_start','compaction_end','server_task_submitting','server_result_collected','web_fetched'].includes(e.type))events.push({title:({compaction_start:'正在压缩上下文',compaction_end:e.success?'上下文压缩完成':'上下文压缩未完成',server_task_submitting:'提交服务器任务',server_result_collected:'服务器结果已回收',web_fetched:'已读取参考网页'})[e.type],at:e.at,meta:e.id||e.host||e.reason||''});
   events.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
   for(const e of events){const li=el('li');li.append(el('strong',e.title),el('span',`${date(e.at)} · ${e.meta}`));if(e.url)link(li,'查看原始记录',e.url);list.append(li);}

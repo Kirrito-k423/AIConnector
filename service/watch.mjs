@@ -62,6 +62,7 @@ export class WatchExecution {
   get record(){return read(this.file);}
   remember(job) {
     const record=this.record;need(record&&record.id===job.id,'WATCH_TASK_ID_MISMATCH');
+    need(job.shell===record.request.shell&&(job.machineId||'')===(record.request.machineId||'')&&(job.group||'')===(record.request.group||''),'WATCH_TASK_CONTENT_MISMATCH');
     record.job=publicJob(job);record.observed_at=now();save(this.file,record);this.event('server_task_observed',{id:job.id,status:job.status,machine:job.selectedMachineId});return record.job;
   }
   async submit() {

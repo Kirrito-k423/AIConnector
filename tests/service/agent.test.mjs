@@ -53,6 +53,12 @@ test('SHW unknown task remains query-only across repeated calls',async()=>{
   finally{await fixture.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 
+test('SHW reconciliation rejects a task ID whose remote command changed',async()=>{
+  const fixture=await watchFixture({losePost:true}),dir=temp();
+  try{const w=new WatchExecution(watchSpec(fixture.url,dir),dir);await assert.rejects(w.submit());fixture.tamper({shell:'different command'});await assert.rejects(new WatchExecution(watchSpec(fixture.url,dir),dir).submit(),/WATCH_TASK_CONTENT_MISMATCH/);assert.equal(fixture.posts,1);assert.ok(!read(path.join(dir,'execution.json')));}
+  finally{await fixture.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
 for(const transport of ['node','curl'])test(`web ${transport}: fetch/search, exact redirect grants, size limit and no credential inheritance`,async()=>{
   const requests=[];const server=http.createServer((req,res)=>{requests.push(req);if(req.url==='/redirect'){res.writeHead(302,{Location:'http://localhost:'+server.address().port+'/private'});res.end();return;}res.writeHead(200,{'Content-Type':'text/html'});res.end(req.url==='/big'?'x'.repeat(600000):'<p>公开资料 中文</p><script>UNTRUSTED_SCRIPT</script>');});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;

@@ -29,9 +29,13 @@ export async function work(dir,secrets={}) {
   const baseEnv=safeEnv({AICONNECTOR_RUN_DIR:workspace,AICONNECTOR_TASK_FILE:path.join(workspace,'task.json'),AICONNECTOR_INPUT_DIR:path.join(dir,'inputs')});
   status.context={sha256:agent.contextDigest,captured_at:agent.capturedAt,files:agent.contexts?.map(c=>({name:c.name,sha256:c.sha256}))||[]};
   status.compaction={enabled:agent.compaction.enabled,count:0};
-  const watch=spec.profile.kind==='simplehtmlwatch'&&agent.simpleHtmlWatch.enabled?new WatchExecution(spec,dir,{signal:abort.signal,redact,event:(type,data)=>{status.server_task=data;event(type,data);}}):null;
+  const watch=spec.profile.kind==='simplehtmlwatch'&&agent.simpleHtmlWatch.enabled?new WatchExecution(spec,dir,{signal:abort.signal,redact,event:(type,data)=>{
+    status.server_task={...status.server_task,...data};
+    if(type==='server_task_submitting'){status.state='executing';status.execution_started_at=now();status.execution_time_source='controller_observed';}
+    event(type,data);
+  }}):null;
   function rememberExecution(value) {
-    execution=value;status.execution_started_at=value.started_at;status.execution_ended_at=value.ended_at;status.state='summarizing';
+    execution=value;status.execution_started_at=value.started_at;status.execution_ended_at=value.ended_at;status.execution_time_source=value.time_source;status.state='summarizing';
     event('execution_finished',{exit_code:value.exit_code});return value;
   }
   async function execute() {
@@ -128,7 +132,7 @@ export async function work(dir,secrets={}) {
     const resultData={outcome:failure?'blocked':execution.outcome,exit_code:failure?(execution?.exit_code===0?-1:execution?.exit_code??-1):execution.exit_code,
       actual_revision:execution?.actual_revision||'not-executed',summary:failure?`执行或分析未完成：${failure}。${execution?'已有执行证据，请查看 ZIP。':'未取得实验结果。'}`:report.summary,
       metrics:failure?{runner_error:failure}:report.metrics,artifacts:[],
-      execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,engine:'pi-0.87.1',profile:spec.task.environment.target,unknown:execution?.unknown||Boolean(watch?.record&&!execution)},
+      execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,time_source:execution?.time_source||'executor',engine:'pi-0.87.1',profile:spec.task.environment.target,unknown:execution?.unknown||Boolean(watch?.record&&!execution)},
       agent:{context_sha256:agent.contextDigest,context_captured_at:agent.capturedAt,compactions:status.compaction.count}};
     const entries={'result.json':strToU8(JSON.stringify(resultData,null,2)),
       'execution.json':strToU8(JSON.stringify(execution?{...execution,stdout:undefined,stderr:undefined}:{executed:false},null,2)),

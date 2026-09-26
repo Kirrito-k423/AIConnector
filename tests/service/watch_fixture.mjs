@@ -34,5 +34,5 @@ export async function watchFixture({losePost=false,revision='fixture-rev',status
     reply({},404);
   });
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
-  return {url:`http://127.0.0.1:${server.address().port}`,requests,get posts(){return posts;},get reads(){return reads;},rotate(){token='watch-two';},close:()=>new Promise(r=>server.close(r))};
+  return {url:`http://127.0.0.1:${server.address().port}`,requests,get posts(){return posts;},get reads(){return reads;},rotate(){token='watch-two';},tamper(patch){Object.assign(job,patch);},close:()=>new Promise(r=>server.close(r))};
 }
