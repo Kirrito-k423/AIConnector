@@ -59,7 +59,7 @@ try {
     const info=JSON.parse(fs.readFileSync(path.join(c.dataDir,'service-info.json')));if(alive(info.pid))process.kill(info.pid,'SIGTERM');console.log('已请求退出。已派出的实验继续执行；安装了自启时系统会重启服务。');
   }else if(command==='open'||command==='background'){
     await background(c);
-    if(command==='open'){
+    if(command==='open'&&!args.includes('--no-browser')){
       const token=fs.readFileSync(path.join(c.dataDir,'dashboard.token'),'utf8');const url=`http://127.0.0.1:${c.port}/#token=${token}`;
       if(process.platform==='win32')await run('rundll32.exe',['url.dll,FileProtocolHandler',url]);else if(process.platform==='darwin')await run('/usr/bin/open',[url]);else console.log('服务已启动。访问凭据位于本地 dashboard.token。');
     }

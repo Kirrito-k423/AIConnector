@@ -193,4 +193,19 @@ class ServiceTests(unittest.TestCase):
             cli('uninstall')
             if info.exists():cli('stop')
 
+    @unittest.skipUnless(os.name=='nt' and 'AIC_SERVICE_ROOT' in os.environ,'real Windows package launcher')
+    def test_windows_cmd_starts_bundled_runtime_without_node_on_path(self):
+        node='windows-inner';path,c=self.configs[node];info=Path(c['dataDir'])/'service-info.json'
+        env=dict(os.environ,AICONNECTOR_NO_PAUSE='1')
+        # The actual .cmd must choose its bundled node.exe.
+        for key in list(env):
+            if key.lower()=='path':del env[key]
+        env['PATH']=os.environ['SystemRoot']+'\\System32;'+os.environ['SystemRoot']+'\\System32\\WindowsPowerShell\\v1.0'
+        try:
+            p=subprocess.run(['cmd.exe','/d','/c','Open-Windows-Dashboard.cmd','--no-browser','--config',str(path)],cwd=SERVICE_ROOT,env=env,capture_output=True,encoding='utf-8',timeout=30)
+            self.assertEqual(p.returncode,0,p.stdout+p.stderr);self.until(lambda:info.exists(),15)
+            self.tokens[node]=(Path(c['dataDir'])/'dashboard.token').read_text();self.until(lambda:self.get(node),15)
+        finally:
+            if info.exists():subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),'stop','--config',str(path)],capture_output=True,timeout=30)
+
 if __name__=='__main__':unittest.main()
