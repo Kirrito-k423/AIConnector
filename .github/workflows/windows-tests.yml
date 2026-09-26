@@ -1,6 +1,7 @@
 name: Windows PowerShell tests
 
 on:
+  pull_request:
   push:
     branches: [main]
     paths:
@@ -10,6 +11,7 @@ on:
       - 'examples/**'
       - 'docs/CONNECTOR.md'
       - 'docs/PROTOCOL.md'
+      - 'docs/RELAY.md'
       - 'CONTEXT.md'
       - '*.json'
       - 'README.md'

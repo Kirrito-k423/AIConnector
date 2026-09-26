@@ -1,6 +1,6 @@
 # 任务协议 v1
 
-协议标记为 `aiconnector.task.v1`，与只读/写入探测的 `aiconnector.probe.v1` 分开。单个 Issue 是一条通道的追加记录；普通人类评论和旧探测评论均不会作为任务导入。
+协议标记为 `aiconnector.task.v1`，与只读/写入探测的 `aiconnector.probe.v1` 分开。新默认布局为一项任务一个 Issue、一次运行一个 Release，具体标题和元数据见 [专用运行仓库](RELAY.md)。旧 config.v1 仍使用单个 Issue 通道。普通人类评论和旧探测评论均不会作为任务导入。
 
 ## 事件与身份
 
@@ -43,6 +43,6 @@
 
 ZIP 清单包含 `name`、`bytes`、`sha256`、`url`，最多五个，各小于 5 MiB。稳定地址必须匹配配置中的 HTTPS 路径前缀；本地 HTTP 仅允许 loopback 测试。下载不携带平台 Token，禁止 HTTPS 降级；写入请求不跟随重定向。缓存以 SHA-256 命名，不解压或执行产物。
 
-GitHub Release 上传使用 namespace、节点、完整 SHA-256 命名，先完整分页检查已有资产；未知上传仅可用现有资产下载校验后恢复确认。平台拒绝、容量上限和持续运行吞吐均需单独实测。
+新布局的 GitHub Release 按 namespace/task/revision/run 归档，资产使用 input/result、节点、完整 SHA-256 命名，先完整分页检查已有资产；未知上传仅可用现有资产下载校验后恢复确认。平台拒绝、容量上限和持续运行吞吐均需单独实测。
 
 依据：[GitHub Issue 评论接口](https://docs.github.com/en/rest/issues/comments)、[GitHub API 限流建议](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)、[GitCode 评论列表接口](https://docs.gitcode.com/docs/apis/get-api-v-5-repos-owner-repo-issues-number-comments/)。

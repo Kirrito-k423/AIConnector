@@ -1,8 +1,11 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.2.0 提供任务协议、持久化状态和两端轮询。** Mac 发布任务，Windows 生成本地待办并持久化领取；内侧 AI 提交结果后，Mac 下载 ZIP、校验并发布回执。中间件不自动执行 SSH 或评论里的命令。
+**v0.3.0 将任务与交付件组织到独立 Relay 仓库。** Mac 发布任务，Windows 生成本地待办并持久化领取；内侧 AI 提交结果后，Mac 下载 ZIP、校验并发布回执。中间件不自动执行 SSH 或评论里的命令。
 
-[下载任务交接包 v0.2.0](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.2.0/AIConnector.zip) · [两端启动与 AI 接入说明](docs/CONNECTOR.md) · [任务协议](docs/PROTOCOL.md)
+[下载任务交接包 v0.3.0-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.3.0-rc.1/AIConnector.zip) · [两端启动与 AI 接入说明](docs/CONNECTOR.md) · [专用运行仓库规则](docs/RELAY.md) · [任务协议](docs/PROTOCOL.md)
+
+
+v0.3.0 的任务通道默认迁移到专用公开仓库 [AIConnector-Relay](https://github.com/Kirrito-k423/AIConnector-Relay)：一项任务一个 Issue，一次运行一个 Release，标题、协议元数据和 ZIP 命名均由程序生成。旧版下载仍保留旧通道；升级须使用新包并保留旧状态。
 
 解压后，Windows 运行 `Start-Windows-Connector.cmd`，Mac 运行 `Start-Mac-Connector.command`。Token 在各自终端隐藏输入。默认复用已验证的 GitHub Issue / Release 通道；重启时保留 `connector-state`，AI 通过本地 JSON 和 `Submit / Claim / Complete` 命令接入。详细操作、未知写入恢复和容量证据边界见上面的说明。
 

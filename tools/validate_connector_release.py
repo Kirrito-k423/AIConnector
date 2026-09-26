@@ -34,7 +34,7 @@ def validate(tag, out):
         (out/'launch.log').write_text(p.stdout+p.stderr,encoding='utf-8')
         assert p.returncode==0,p.stdout+p.stderr
         assert original==(install/'connector.config.json').read_bytes()
-        state=json.loads((install/'connector-state/windows-inner/status.json').read_text(encoding='utf-8'))
+        state=json.loads((install/('connector-state-relay' if json.loads(original)['schema']=='aiconnector.config.v2' else 'connector-state')/'windows-inner/status.json').read_text(encoding='utf-8'))
         assert state['last_poll']>0 and not state['last_error'],state
         assert all(x['status'] in ('pending','confirmed') for x in state['outbox'])
         summary=dict(tag=tag,zip_bytes=len(data),sha256=digest,default_config_unchanged=True,

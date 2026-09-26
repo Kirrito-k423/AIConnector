@@ -3,3 +3,4 @@ dist/
 __pycache__/
 *.local.json
 connector-state/
+connector-state-relay/
