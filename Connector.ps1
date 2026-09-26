@@ -13,6 +13,7 @@ $script:Utf8=New-Object Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Net.Http
 $root=[IO.Path]::GetDirectoryName($PSCommandPath)
 if (-not $Config) { $Config=Join-Path $root 'connector.config.json' }
+$defaultStateDir=-not $StateDir
 if (-not $StateDir) { $StateDir=Join-Path (Join-Path $root 'connector-state') $Node }
 $StateDir=[IO.Path]::GetFullPath($StateDir)
 $script:Token=''; $script:State=$null; $script:Lock=$null; $script:WatchLock=$null
@@ -49,6 +50,16 @@ function Hash([string]$Text) { return Get-Sha256 ($script:Utf8.GetBytes($Text)) 
 function Parse([string]$Text) { return As-Map (ConvertFrom-Json -InputObject $Text) }
 function Read-Json([string]$Path) { Need ([IO.FileInfo]::new($Path).Length -le 16777216) 'FILE_TOO_LARGE'; return Parse ([IO.File]::ReadAllText($Path,$script:Utf8)) }
 function Epoch { return [long]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) }
+function Source-Time($Value) {
+    if ($null -eq $Value -or [string]$Value -eq '') { return '' }
+    # PS7 parses ISO JSON dates into DateTime; PS5.1 leaves strings. Never locale-format either.
+    if ($Value -is [DateTime] -or $Value -is [DateTimeOffset]) { $date=[DateTimeOffset]$Value }
+    else {
+        $date=[DateTimeOffset]::MinValue
+        Need ([DateTimeOffset]::TryParse([string]$Value,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal,[ref]$date)) 'INVALID_SOURCE_TIME'
+    }
+    return $date.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'",[Globalization.CultureInfo]::InvariantCulture)
+}
 function Atomic([string]$Path,[string]$Text) {
     $tmp=$Path+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'; $data=$script:Utf8.GetBytes($Text)
     try {
@@ -80,6 +91,7 @@ function Open-State {
         $script:State=@{binding=$script:Binding;events=@{};comments=@{};outbox=@{};claims=@{};uploads=@{};conflicts=@{};ignored=@{};artifact_errors=@{};next_poll=0L;failures=0;last_error='';last_poll=0L}
         Save
     }
+    foreach ($field in @('routes','provisions')) { if (-not $script:State.ContainsKey($field)) { $script:State[$field]=@{} } }
 }
 function Close-State { if ($null -ne $script:Lock) { $script:Lock.Dispose(); $script:Lock=$null } }
 function Assert-Url([string]$Url) {
@@ -119,7 +131,7 @@ function Invoke-WireHttp {
     try {
         for ($hop = 0; $hop -le 5; $hop++) {
             $req = New-Object System.Net.Http.HttpRequestMessage(([System.Net.Http.HttpMethod]::new($Method)), $u)
-            $req.Headers.TryAddWithoutValidation('User-Agent', 'AIConnector/0.2') | Out-Null
+            $req.Headers.TryAddWithoutValidation('User-Agent', 'AIConnector/0.3') | Out-Null
             foreach ($key in $Headers.Keys) { $req.Headers.TryAddWithoutValidation($key, [string]$Headers[$key]) | Out-Null }
             if ($Method -eq 'POST') {
                 if ($null -ne $BinaryBody) {
@@ -221,15 +233,27 @@ function Require-Response($R) {
     else { $script:State.next_poll=(Epoch)+[Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,$script:State.failures))) }
     Save; Fail $script:State.last_error
 }
-function Read-Comments {
+function Read-List([string]$Path,[string]$Query='') {
     $all=@()
     for ($page=1;$page -le $script:C.max_pages;$page++) {
-        $r=Api ($script:CommentsPath+'?per_page=100&page='+$page); Require-Response $r
+        $r=Api ($Path+'?per_page=100&page='+$page+$Query); Require-Response $r
         Need ($r.json -is [Array]) 'INVALID_COMMENT_LIST'
         $all+=@($r.json)
         if ($r.json.Count -lt 100) { return ,$all }
     }
     Fail 'PAGINATION_INCOMPLETE'
+}
+function Read-Comments {
+    if (-not $script:Relay) { return ,(Read-List $script:CommentsPath) }
+    Assert-Relay
+    $routes=Read-Routes; $all=@()
+    foreach ($route in $routes.Values) {
+        foreach ($comment in (Read-List ($script:RepoPath+'/issues/'+$route.number+'/comments'))) {
+            $row=As-Map $comment; $row.relay_task_id=$route.task_id; $row.relay_issue=$route.number; $all+=,$row
+        }
+    }
+    # Do not import any event unless every required page has been read.
+    return ,$all
 }
 function Is-Integer($V) { return ($V -is [int] -or $V -is [long]) }
 function Valid-Id($V) { return ($V -is [string] -and $V -cmatch '^[a-z0-9][a-z0-9_-]{0,63}$') }
@@ -249,7 +273,14 @@ function Validate-Data($E,$D) {
     Need ($D -is [Collections.IDictionary]) 'INVALID_PAYLOAD'
     if ($E.kind -in @('task','result')) {
         Need ($D.artifacts -is [Array] -and $D.artifacts.Count -le 5) 'INVALID_ARTIFACT_LIST'
-        $names=@{}; foreach ($a in $D.artifacts) { Artifact-Valid $a; Need (-not $names.ContainsKey($a.name)) 'DUPLICATE_ARTIFACT_NAME'; $names[$a.name]=$true }
+        $names=@{}; foreach ($a in $D.artifacts) {
+            Artifact-Valid $a; Need (-not $names.ContainsKey($a.name)) 'DUPLICATE_ARTIFACT_NAME'; $names[$a.name]=$true
+            if ($script:Relay) {
+                $role='input'; if ($E.kind -eq 'result') { $role='result' }
+                $expected=$script:C.artifact_prefixes[0]+(Run-Tag $E)+'/'+$role+'--'+$E.sender+'--'+$a.sha256+'.zip'
+                Need ($a.url -ceq $expected) 'ARTIFACT_RUN_MISMATCH'
+            }
+        }
     }
     if ($E.kind -eq 'task') {
         foreach ($field in @('title','objective')) { Need ($D[$field] -is [string] -and $D[$field].Length -gt 0 -and $D[$field].Length -le 4096) 'INVALID_TASK_TEXT' }
@@ -291,11 +322,124 @@ function Display-Text($Text,[int]$Limit=512) {
     if ($clean.Length -gt $Limit) { return $clean.Substring(0,$Limit)+'...' }
     return $clean
 }
+function Relay-Descriptor {
+    return @{schema='aiconnector.relay.v1';repository=$script:C.repository;namespace=$script:C.namespace;layout='task-issues-run-releases-v1';protocol='aiconnector.task.v1';max_artifact_bytes=5242879}
+}
+function Assert-Relay {
+    $r=Api ($script:RepoPath+'/contents/.aiconnector/relay.json'); Require-Response $r
+    Need ($r.json.encoding -ceq 'base64') 'INVALID_RELAY_MANIFEST'
+    try { $d=Parse ($script:Utf8.GetString([Convert]::FromBase64String($r.json.content))) } catch { Fail 'INVALID_RELAY_MANIFEST' }
+    Need ((Canonical $d) -ceq (Canonical (Relay-Descriptor))) 'RELAY_MANIFEST_MISMATCH'
+}
+function Metadata-Body([string]$Marker,[string]$Text,$Metadata) {
+    return $Marker+"`n`n"+$Text+"`n`n"+'```json'+"`n"+(Canonical $Metadata)+"`n"+'```'
+}
+function Read-Metadata([string]$Body,[string]$Marker) {
+    Need ($script:Utf8.GetByteCount($Body) -le 32768) 'INVALID_RELAY_METADATA'
+    $pattern='(?s)\A'+[Regex]::Escape($Marker)+'\r?\n.*?```json\r?\n(.*?)\r?\n```\s*\z'
+    Need ($Body -match $pattern) 'INVALID_RELAY_METADATA'
+    return Parse $Matches[1]
+}
+function Issue-Metadata([string]$TaskId) {
+    return @{schema='aiconnector.task-issue.v1';namespace=$script:C.namespace;task_id=$TaskId;coordinator='mac-outer';worker='windows-inner'}
+}
+function Read-Routes {
+    $routes=@{}
+    foreach ($issue in (Read-List ($script:RepoPath+'/issues') '&state=all&sort=created&direction=asc')) {
+        if ((Get-Field $issue 'pull_request') -or -not ([string]$issue.body).StartsWith('AIConnector task issue v1')) { continue }
+        if (@($script:C.authors['mac-outer']) -cnotcontains [string]$issue.user.login) { continue }
+        try { $m=Read-Metadata ([string]$issue.body) 'AIConnector task issue v1' } catch { continue }
+        if ($m.namespace -cne $script:C.namespace) { continue }
+        Need ((Valid-Id $m.task_id) -and (Canonical $m) -ceq (Canonical (Issue-Metadata $m.task_id))) 'INVALID_TASK_ISSUE'
+        Need (-not $routes.ContainsKey($m.task_id)) 'DUPLICATE_TASK_ISSUE'
+        Need ([string]$issue.number -cmatch '^[1-9][0-9]*$') 'INVALID_TASK_ISSUE'
+        $route=@{task_id=$m.task_id;number=[string]$issue.number;url=[string]$issue.html_url;digest=(Hash ([string]$issue.body));author=[string]$issue.user.login;created_at=(Source-Time $issue.created_at)}
+        if ($script:State.routes.ContainsKey($m.task_id)) {
+            $old=$script:State.routes[$m.task_id]
+            Need ($old.number -ceq $route.number -and $old.digest -ceq $route.digest -and $old.author -ceq $route.author) 'TASK_ISSUE_CHANGED'
+        }
+        $routes[$m.task_id]=$route
+    }
+    foreach ($id in $script:State.routes.Keys) { Need ($routes.ContainsKey($id)) 'TASK_ISSUE_MISSING_OR_CHANGED' }
+    $script:State.routes=$routes; Save
+    return $routes
+}
+function Provision([string]$Id,[string]$Path,$Body) {
+    Need ($script:Token) 'TOKEN_REQUIRED'
+    Need ($script:State.next_poll -le (Epoch)) 'CHANNEL_COOLDOWN'
+    if (-not $script:State.provisions.ContainsKey($Id)) { $script:State.provisions[$Id]=@{status='pending';http=0}; Save }
+    $row=$script:State.provisions[$Id]
+    Need ($row.status -in @('pending','rate_limited')) 'PROVISION_UNCERTAIN_OR_REJECTED'
+    if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return $false }
+    $row.status='uncertain'; Save
+    $r=Api $Path POST (Json $Body); $row.http=$r.http
+    $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
+    if (Limited $r) { $row.status='rate_limited'; $script:State.next_poll=Cooldown $r; $script:State.last_error='RATE_LIMITED' }
+    elseif ($r.http -ge 400 -and $r.http -lt 500) { $row.status='rejected'; $script:State.last_error='PROVISION_REJECTED_'+$r.http }
+    Save
+    # Even a timeout may have created the object. Only the next independent GET confirms it.
+    return $true
+}
+function Ensure-TaskIssue($E) {
+    $routes=Read-Routes; $id='issue:'+ $E.task_id
+    if ($routes.ContainsKey($E.task_id)) {
+        if ($script:State.provisions.ContainsKey($id)) { $script:State.provisions[$id].status='confirmed'; Save }
+        return $routes[$E.task_id]
+    }
+    Need ($E.kind -ceq 'task' -and $Node -ceq 'mac-outer') 'TASK_ISSUE_NOT_FOUND'
+    $d=Payload $E
+    $title='[AIC]['+$E.task_id+'] '+(Display-Text $d.title 120)
+    $text='## '+(Display-Text $d.title 120)+"`n`n"+'任务 ID：`'+$E.task_id+'`；命名空间：`'+$script:C.namespace+'`。'+"`n`n"+
+        '初始目标：'+(Display-Text $d.objective 1500)+"`n`n"+'本 Issue 汇集这项任务的全部修订和运行。下方协议评论是追加记录；普通评论、标题、标签与开关状态不触发执行。'+"`n`n"+
+        '每次运行对应一个 Release；任务和结果评论提供交付件链接。已领取不等于实验启动，回执不等于实验通过。'
+    $body=Metadata-Body 'AIConnector task issue v1' $text (Issue-Metadata $E.task_id)
+    $null=Provision $id ($script:RepoPath+'/issues') @{title=$title;body=$body;labels=@('aiconnector:task','aiconnector:protocol-v1')}
+    if ($script:State.next_poll -gt (Epoch)) { return $null }
+    $routes=Read-Routes
+    if ($routes.ContainsKey($E.task_id)) { $script:State.provisions[$id].status='confirmed'; Save; return $routes[$E.task_id] }
+    return $null
+}
+function Identity-FromKey([string]$RunKey) {
+    Need ($RunKey -cmatch '^([a-z0-9][a-z0-9_-]{0,63})/([1-9][0-9]{0,9})/([a-z0-9][a-z0-9_-]{0,63})$') 'RUN_KEY_REQUIRED'
+    $revision=[long]$Matches[2]; Need ($revision -le 2147483647) 'INVALID_RUN_ID'
+    return @{task_id=$Matches[1];revision=$revision;run_id=$Matches[3]}
+}
+function Run-Tag($E) { return 'aic-v1.'+$script:C.namespace+'.'+$E.task_id+'.r'+$E.revision+'.'+$E.run_id }
+function Release-Metadata($E) { return @{schema='aiconnector.run-release.v1';namespace=$script:C.namespace;task_id=$E.task_id;revision=$E.revision;run_id=$E.run_id} }
+function Release-Link($E) {
+    return 'https://github.com/'+$script:C.repository+'/releases/tag/'+(Run-Tag $E)
+}
+function Ensure-RunRelease($E) {
+    $tag=Run-Tag $E; $id='release:'+(Run-Key $E)
+    $r=Api ($script:RepoPath+'/releases/tags/'+$tag)
+    if ($r.http -eq 404) {
+        $text='运行：`'+(Run-Key $E)+'`。'+"`n`n"+'任务记录： https://github.com/'+$script:C.repository+'/issues?q='+[Uri]::EscapeDataString('[AIC]['+$E.task_id+']')+"`n`n"+
+            'input--mac-outer--SHA256.zip 为输入；result--windows-inner--SHA256.zip 为结果。每个文件小于 5 MiB；已上传文件不覆盖。文件名中的完整 SHA-256 与任务/结果评论中的清单对应。'
+        $body=Metadata-Body 'AIConnector run release v1' $text (Release-Metadata $E)
+        $null=Provision $id ($script:RepoPath+'/releases') @{tag_name=$tag;name=('[AIC]['+$E.task_id+'][r'+$E.revision+']['+$E.run_id+']');body=$body;draft=$false;prerelease=$true;make_latest='false';target_commitish='main'}
+        if ($script:State.next_poll -gt (Epoch)) { return $null }
+        $r=Api ($script:RepoPath+'/releases/tags/'+$tag)
+        if ($r.http -eq 404) { return $null }
+    }
+    Require-Response $r; $release=$r.json
+    Need ($release.id -and -not $release.draft -and $release.tag_name -ceq $tag) 'INVALID_RUN_RELEASE'
+    Need (@($script:C.authors['mac-outer']) -ccontains [string]$release.author.login -or @($script:C.authors['windows-inner']) -ccontains [string]$release.author.login) 'RELEASE_AUTHOR_NOT_ALLOWED'
+    $m=Read-Metadata ([string]$release.body) 'AIConnector run release v1'
+    Need ((Canonical $m) -ceq (Canonical (Release-Metadata $E))) 'RELEASE_IDENTITY_MISMATCH'
+    $digest=Hash ([string]$release.body)
+    if ($script:State.provisions.ContainsKey($id)) {
+        $previous=Get-Field $script:State.provisions[$id] 'digest'
+        Need (-not $previous -or $previous -ceq $digest) 'RUN_RELEASE_CHANGED'
+    } else { $script:State.provisions[$id]=@{http=200} }
+    $script:State.provisions[$id].status='confirmed'; $script:State.provisions[$id].digest=$digest; Save
+    return $release
+}
 function Event-Body($E) {
     $labels=@{task='待接收';accepted='已接收';started='已领取执行';result='结果已回传';receipt='结果已校验'}
     $d=Payload $E; $summary=$d.title; if ($E.kind -eq 'result') { $summary=$d.summary }
     $summary=([string]$summary -replace '[\r\n`<>]',' '); if ($summary.Length -gt 240) { $summary=$summary.Substring(0,240) }
     $details=@()
+    if ($script:Relay) { $details+=('运行文件：['+(Run-Tag $E)+']('+(Release-Link $E)+')') }
     if ($E.kind -eq 'task') {
         $details+=('目标：'+(Display-Text $d.objective 1500))
         $details+=('代码：'+(Display-Text $d.code.repository)+' @ '+(Display-Text $d.code.revision))
@@ -313,7 +457,7 @@ function Event-Body($E) {
 function Queue($E) {
     $body=Event-Body $E
     if ($script:State.outbox.ContainsKey($E.event_id)) { return }
-    $script:State.outbox[$E.event_id]=@{event=$E;body=$body;status='pending';attempts=0;http=0}
+    $script:State.outbox[$E.event_id]=@{event=$E;body=$body;status='pending';attempts=0;http=0;queued_at=(Epoch)}
     Save
 }
 function Import-Comments($Comments) {
@@ -321,7 +465,8 @@ function Import-Comments($Comments) {
         $id=[string]$c.id; $body=[string]$c.body; $digest=Hash $body
         if ($script:State.comments.ContainsKey($id)) {
             $old=$script:State.comments[$id]
-            if ($old.digest -cne $digest -or $old.author -cne [string]$c.user.login) { $script:State.conflicts[$old.key]='COMMENT_CHANGED' }
+            if ($old.digest -cne $digest -or $old.author -cne [string]$c.user.login -or ($script:Relay -and $old.issue -cne [string]$c.relay_issue)) { $script:State.conflicts[$old.key]='COMMENT_CHANGED' }
+            else { $old.created_at=Source-Time $c.created_at; $old.updated_at=Source-Time $c.updated_at }
             continue
         }
         if (-not $body.StartsWith('AIConnector task v1')) { continue }
@@ -329,15 +474,23 @@ function Import-Comments($Comments) {
             Need ($body -match '(?s)\AAIConnector task v1\r?\n.*?```json\r?\n(.*?)\r?\n```\s*\z' -and $script:Utf8.GetByteCount($body) -le 32768) 'INVALID_FRAME'
             $e=Parse $Matches[1]; Validate-Event $e
             Need (@($script:C.authors[$e.sender]) -ccontains [string]$c.user.login) 'AUTHOR_NOT_ALLOWED'
+            if ($script:Relay) { Need ($e.task_id -ceq $c.relay_task_id) 'EVENT_ISSUE_MISMATCH' }
             $key=Run-Key $e
             $script:State.events[$e.event_id]=$e
-            $script:State.comments[$id]=@{digest=$digest;key=$key;event_id=$e.event_id;author=[string]$c.user.login}
+            $script:State.comments[$id]=@{digest=$digest;key=$key;event_id=$e.event_id;author=[string]$c.user.login;issue=[string]$c.relay_issue;created_at=(Source-Time $c.created_at);updated_at=(Source-Time $c.updated_at);url=[string]$c.html_url;observed_at=(Epoch)}
         } catch { $script:State.ignored[$id]='INVALID_OR_UNTRUSTED_EVENT' }
     }
     foreach ($item in $script:State.outbox.Values) {
         if ($script:State.events.ContainsKey($item.event.event_id)) { $item.status='confirmed' }
     }
     Save
+}
+function Revision-Digest($E) {
+    if (-not $script:Relay) { return $E.payload_sha256 }
+    $data=Payload $E
+    # A repeat run has its own Release URL; the immutable input is still the same bytes.
+    foreach ($a in $data.artifacts) { $a.Remove('url') }
+    return Hash (Canonical $data)
 }
 function Runs {
     $result=@{}
@@ -352,9 +505,10 @@ function Runs {
     foreach ($run in $result.Values) {
         if (-not $run.events.ContainsKey('task')) { continue }
         $task=$run.events.task; $revisionKey=$task.task_id+'/'+$task.revision
-        if (-not $revisions.ContainsKey($revisionKey)) { $revisions[$revisionKey]=@{sha=$task.payload_sha256;keys=@();conflict=$false} }
+        $digest=Revision-Digest $task
+        if (-not $revisions.ContainsKey($revisionKey)) { $revisions[$revisionKey]=@{sha=$digest;keys=@();conflict=$false} }
         $group=$revisions[$revisionKey]; $group.keys+=,$run.key
-        if ($group.sha -cne $task.payload_sha256) { $group.conflict=$true }
+        if ($group.sha -cne $digest) { $group.conflict=$true }
     }
     foreach ($group in $revisions.Values) { if ($group.conflict) { foreach ($runKey in $group.keys) { $script:State.conflicts[$runKey]='REVISION_CONFLICT' } } }
     foreach ($run in $result.Values) {
@@ -382,14 +536,14 @@ function Write-Bytes([string]$Path,[byte[]]$Data) {
         if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp,$Path,[NullString]::Value) } else { [IO.File]::Move($tmp,$Path) }
     } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
 }
-function Fetch-Artifacts($Artifacts) {
+function Fetch-Artifacts($Artifacts,[bool]$Refresh=$false) {
     $paths=@()
     foreach ($a in $Artifacts) {
         Artifact-Valid $a
         $cache=Join-Path $StateDir 'artifacts'; [IO.Directory]::CreateDirectory($cache)|Out-Null
         $path=Join-Path $cache ($a.sha256+'.zip'); $valid=$false
         if ([IO.File]::Exists($path)) { $bytes=[IO.File]::ReadAllBytes($path); $valid=($bytes.Length -eq $a.bytes -and (Get-Sha256 $bytes) -ceq $a.sha256) }
-        if (-not $valid) {
+        if ($Refresh -or -not $valid) {
             $r=Invoke-WireHttp -Url $a.url -Limit 5242879
             Require-Response $r
             Need ($r.bytes -eq $a.bytes -and $r.sha256 -ceq $a.sha256) 'ARTIFACT_HASH_MISMATCH'
@@ -429,8 +583,16 @@ function Flush-One {
         if ($script:State.conflicts.ContainsKey($key) -or ($runs.ContainsKey($key) -and $runs[$key].phase -eq 'conflict')) { continue }
         if ($e.parent -and -not $script:State.events.ContainsKey($e.parent)) { continue }
         if (-not $script:Token) { $script:State.last_error='TOKEN_REQUIRED'; Save; return }
+        $commentsPath=$script:CommentsPath
+        if ($script:Relay) {
+            $route=Ensure-TaskIssue $e; if ($null -eq $route) { return }
+            if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
+            $release=Ensure-RunRelease $e; if ($null -eq $release) { return }
+            if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
+            $commentsPath=$script:RepoPath+'/issues/'+$route.number+'/comments'
+        }
         $item.status='uncertain'; $item.attempts++; Save
-        $r=Api $script:CommentsPath 'POST' (Json @{body=$item.body})
+        $r=Api $commentsPath 'POST' (Json @{body=$item.body})
         $item.http=$r.http
         $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
         if (Limited $r) {
@@ -446,6 +608,18 @@ function Snapshot {
     $runs=Runs; $list=@(); $inbox=Join-Path $StateDir 'inbox'; [IO.Directory]::CreateDirectory($inbox)|Out-Null
     foreach ($run in @($runs.Values | Sort-Object key)) {
         $row=@{key=$run.key;phase=$run.phase;error=$run.error;task=(Get-Field $run 'task');result=(Get-Field $run 'result');claimed=$script:State.claims.ContainsKey($run.key);inbox_file=(Join-Path $inbox ((Hash $run.key)+'.json'))}
+        $row.timeline=@()
+        foreach ($kind in @('task','accepted','started','result','receipt')) {
+            if (-not $run.events.ContainsKey($kind)) { continue }
+            $e=$run.events[$kind]
+            $sources=@($script:State.comments.Values | Where-Object { $_.event_id -ceq $e.event_id } | Sort-Object created_at,url)
+            $source=$null; if ($sources.Count -gt 0) { $source=$sources[0] }
+            $row.timeline+=@{kind=$kind;sender=$e.sender;event_id=$e.event_id;author=(Get-Field $source 'author');published_at=(Source-Time (Get-Field $source 'created_at'));observed_at=(Get-Field $source 'observed_at');url=(Get-Field $source 'url')}
+        }
+        if ($script:Relay -and $run.events.ContainsKey('task')) {
+            $task=$run.events.task; $route=Get-Field $script:State.routes $task.task_id
+            $row.issue_url=Get-Field $route 'url'; $row.release_url=Release-Link $task
+        }
         $row.local_artifacts=@()
         foreach ($which in @('task','result')) {
             $d=Get-Field $run $which
@@ -453,8 +627,8 @@ function Snapshot {
         }
         Atomic $row.inbox_file (Json $row); $list+=,$row
     }
-    $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http} }
-    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count}
+    $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http;queued_at=(Get-Field $item 'queued_at')} }
+    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count}
     Atomic (Join-Path $StateDir 'status.json') (Json $snapshot)
     $lines=@('# AIConnector '+$Node,'','| 运行 | 状态 | 本地已领取 | 异常 |','|---|---|---|---|')
     foreach ($r in $list) { $lines+='| '+$r.key+' | '+$r.phase+' | '+$r.claimed+' | '+$r.error+' |' }
@@ -479,13 +653,24 @@ function Upload-Zip([string]$Path) {
     $bytes=[IO.File]::ReadAllBytes($info.FullName); $sha=Get-Sha256 $bytes
     Add-Type -AssemblyName System.IO.Compression
     try { $mem=[IO.MemoryStream]::new($bytes,$false); $zip=[IO.Compression.ZipArchive]::new($mem,[IO.Compression.ZipArchiveMode]::Read); $zip.Dispose(); $mem.Dispose() } catch { Fail 'INVALID_ZIP_FILE' }
+    $uploadKey=$sha; $identity=$null
     $name='aiconnector-'+$script:C.namespace+'-'+$Node+'-'+$sha+'.zip'
-    if (-not $script:State.uploads.ContainsKey($sha)) { $script:State.uploads[$sha]=@{status='pending';bytes=$bytes.Length;name=$name;manifest=$null;http=0}; Save }
-    $row=$script:State.uploads[$sha]
+    if ($script:Relay) {
+        $identity=Identity-FromKey $Key; Assert-Relay
+        if ($Node -eq 'windows-inner') { Need ($script:State.claims.ContainsKey($Key)) 'RESULT_UPLOAD_REQUIRES_CLAIM' }
+        $role='input'; if ($Node -eq 'windows-inner') { $role='result' }
+        $name=$role+'--'+$Node+'--'+$sha+'.zip'; $uploadKey='upload:'+$Key+':'+$sha
+    }
+    if (-not $script:State.uploads.ContainsKey($uploadKey)) { $script:State.uploads[$uploadKey]=@{status='pending';bytes=$bytes.Length;name=$name;manifest=$null;http=0}; Save }
+    $row=$script:State.uploads[$uploadKey]
     if ($row.status -eq 'confirmed') { return $row.manifest }
-    $r=Api ('/repos/'+$script:C.repository+'/releases/tags/'+$script:C.release_tag); Require-Response $r
-    Need ($r.json.id -and -not $r.json.draft) 'RELEASE_NOT_PUBLIC'
-    $release=$r.json; $upload=([string]$release.upload_url) -replace '\{.*$',''; $u=Assert-Url $upload; $api=Assert-Url $script:C.api_base
+    if ($script:Relay) {
+        $release=Ensure-RunRelease $identity; Need ($null -ne $release) 'RELEASE_NOT_CONFIRMED'
+    } else {
+        $r=Api ('/repos/'+$script:C.repository+'/releases/tags/'+$script:C.release_tag); Require-Response $r
+        Need ($r.json.id -and -not $r.json.draft) 'RELEASE_NOT_PUBLIC'; $release=$r.json
+    }
+    $upload=([string]$release.upload_url) -replace '\{.*$',''; $u=Assert-Url $upload; $api=Assert-Url $script:C.api_base
     Need (($u.Host -ceq 'uploads.github.com' -and $u.AbsolutePath -ceq ('/repos/'+$script:C.repository+'/releases/'+$release.id+'/assets')) -or ($api.IsLoopback -and $u.IsLoopback -and $api.Authority -ceq $u.Authority)) 'INVALID_UPLOAD_TARGET'
     $assets=@(); $complete=$false
     for ($page=1;$page -le $script:C.max_pages;$page++) {
@@ -498,17 +683,26 @@ function Upload-Zip([string]$Path) {
     Need ($found.Count -le 1) 'ASSET_CONFLICT'
     if ($found.Count -eq 0) {
         Need ($row.status -in @('pending','rate_limited')) 'UPLOAD_UNCERTAIN_NO_RETRY'
+        if ($script:Relay) {
+            $delay=[int]((Get-Field $script:State 'post_not_before' 0)-(Epoch))
+            Need ($delay -le 60) 'WRITE_COOLDOWN'
+            if ($delay -gt 0) { Start-Sleep -Seconds $delay }
+        }
         $row.status='uncertain'; Save
         $r=Invoke-WireHttp -Url ($upload+'?name='+[Uri]::EscapeDataString($name)) -Method POST -BinaryBody $bytes -BinaryContentType 'application/zip' -Headers @{Authorization=('Bearer '+$script:Token);Accept='application/vnd.github+json'} -Authenticated $true
         $row.http=$r.http
+        $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
         if (Limited $r) { $row.status='rate_limited'; $script:State.next_poll=Cooldown $r; Save; Fail 'RATE_LIMITED' }
         if ($r.http -ge 400 -and $r.http -lt 500) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
         Save; Require-Response $r
         $asset=$r.json
     } else { $asset=$found[0] }
     Need ($asset.state -ceq 'uploaded' -and $asset.size -eq $bytes.Length -and $asset.name -ceq $name) 'ASSET_CONFLICT'
-    $manifest=@{name='artifact.zip';bytes=$bytes.Length;sha256=$sha;url=[string]$asset.browser_download_url}
-    Artifact-Valid $manifest; $null=Fetch-Artifacts @($manifest)
+    $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }
+    $manifest=@{name=$manifestName;bytes=$bytes.Length;sha256=$sha;url=[string]$asset.browser_download_url}
+    if ($script:Relay) { Need ($manifest.url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $identity)+'/'+$name)) 'ARTIFACT_RUN_MISMATCH' }
+    # An identical cached ZIP proves content, but not that this new Release URL works.
+    Artifact-Valid $manifest; $null=Fetch-Artifacts @($manifest) $true
     $row.status='confirmed'; $row.manifest=$manifest; Save
     return $manifest
 }
@@ -522,16 +716,16 @@ function Local-Action {
         foreach ($other in @($script:State.events.Values)+@($script:State.outbox.Values | ForEach-Object { $_.event })) {
             if ($other.kind -ne 'task') { continue }
             if ((Run-Key $other) -ceq $key) { Need ($other.event_id -ceq $e.event_id) 'RUN_IS_IMMUTABLE' }
-            elseif ($other.task_id -ceq $e.task_id -and $other.revision -eq $e.revision) { Need ($other.payload_sha256 -ceq $e.payload_sha256) 'REVISION_IS_IMMUTABLE' }
+            elseif ($other.task_id -ceq $e.task_id -and $other.revision -eq $e.revision) { Need ((Revision-Digest $other) -ceq (Revision-Digest $e)) 'REVISION_IS_IMMUTABLE' }
         }
         Queue $e; return @{ok=$true;key=$key;event_id=$e.event_id;state='queued'}
     }
     if ($Action -eq 'Upload') { return Upload-Zip $File }
     if ($Action -eq 'RetryRejected') {
-        Need ($Key -cmatch '^[a-f0-9]{64}$') 'MESSAGE_OR_ARTIFACT_HASH_REQUIRED'
         $row=$null
         if ($script:State.outbox.ContainsKey($Key)) { $row=$script:State.outbox[$Key] }
         elseif ($script:State.uploads.ContainsKey($Key)) { $row=$script:State.uploads[$Key] }
+        elseif ($script:State.provisions.ContainsKey($Key)) { $row=$script:State.provisions[$Key] }
         Need ($null -ne $row -and $row.status -eq 'rejected') 'ONLY_REJECTED_WRITES_CAN_BE_REQUEUED'
         $row.status='pending'; Save
         return @{ok=$true;key=$Key;state='pending'}
@@ -558,22 +752,33 @@ function Local-Action {
 }
 try {
     $script:C=Read-Json $Config
-    Need ($script:C.schema -ceq 'aiconnector.config.v1' -and $script:C.provider -cin @('github','gitcode')) 'INVALID_CONFIG'
-    Need ((Valid-Id $script:C.namespace) -and $script:C.repository -cmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -and [string]$script:C.issue -cmatch '^[1-9][0-9]*$') 'INVALID_CHANNEL'
+    Need ($script:C.schema -cin @('aiconnector.config.v1','aiconnector.config.v2') -and $script:C.provider -cin @('github','gitcode')) 'INVALID_CONFIG'
+    $script:Relay=$script:C.schema -ceq 'aiconnector.config.v2'
+    if ($defaultStateDir -and $script:Relay) { $StateDir=Join-Path (Join-Path $root 'connector-state-relay') $Node }
+    Need ((Valid-Id $script:C.namespace) -and $script:C.repository -cmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') 'INVALID_CHANNEL'
+    if ($script:Relay) { Need ($script:C.provider -ceq 'github' -and $script:C.layout -ceq 'task-issues-run-releases-v1') 'INVALID_RELAY_LAYOUT' }
+    else { Need ([string]$script:C.issue -cmatch '^[1-9][0-9]*$') 'INVALID_CHANNEL' }
     $api=Assert-Url $script:C.api_base
     Need (-not $api.Query -and -not $api.Fragment) 'INVALID_API_URL'
     Need ($script:C.token_env -cmatch '^AICONNECTOR_[A-Z0-9_]+$') 'INVALID_TOKEN_ENV'
-    Need ($script:C.release_tag -cmatch '^[A-Za-z0-9_.-]{1,64}$') 'INVALID_RELEASE_TAG'
+    if (-not $script:Relay) { Need ($script:C.release_tag -cmatch '^[A-Za-z0-9_.-]{1,64}$') 'INVALID_RELEASE_TAG' }
     Need ((Is-Integer $script:C.poll_seconds) -and $script:C.poll_seconds -ge 1 -and $script:C.poll_seconds -le 3600) 'INVALID_POLL_INTERVAL'
     Need ($api.IsLoopback -or $script:C.poll_seconds -ge 15) 'POLL_INTERVAL_TOO_SHORT'
     Need ((Is-Integer $script:C.max_pages) -and $script:C.max_pages -ge 1 -and $script:C.max_pages -le 100) 'INVALID_PAGE_LIMIT'
     Need ((Is-Integer $script:C.write_interval_seconds) -and $script:C.write_interval_seconds -ge 0 -and $script:C.write_interval_seconds -le 300) 'INVALID_WRITE_INTERVAL'
     foreach ($n in @('mac-outer','windows-inner')) { Need ($script:C.authors[$n] -is [Array] -and $script:C.authors[$n].Count -ge 1) 'MISSING_ALLOWED_AUTHORS' }
     Need ($script:C.artifact_prefixes -is [Array]) 'INVALID_ARTIFACT_PREFIXES'
+    if ($script:Relay) {
+        $expectedPrefix='https://github.com/'+$script:C.repository+'/releases/download/'
+        Need ($script:C.artifact_prefixes.Count -eq 1 -and ($script:C.artifact_prefixes[0] -ceq $expectedPrefix -or ($api.IsLoopback -and $script:C.artifact_prefixes[0] -ceq ($script:C.api_base+'/assets/')))) 'INVALID_RELAY_ARTIFACT_PREFIX'
+    }
     foreach ($prefix in $script:C.artifact_prefixes) { $u=Assert-Url $prefix; Need (-not $u.Query -and -not $u.Fragment -and $prefix.EndsWith('/')) 'INVALID_ARTIFACT_PREFIX' }
-    $script:CommentsPath='/repos/'+$script:C.repository+'/issues/'+$script:C.issue+'/comments'
+    $script:RepoPath='/repos/'+$script:C.repository
+    $script:CommentsPath=$script:RepoPath+'/issues/'+$script:C.issue+'/comments'
     $script:Peer='mac-outer'; if ($Node -eq 'mac-outer') { $script:Peer='windows-inner' }
-    $script:Binding=Hash (Canonical @{node=$Node;namespace=$script:C.namespace;api=$script:C.api_base;provider=$script:C.provider;repository=$script:C.repository;issue=[string]$script:C.issue;authors=$script:C.authors;artifact_prefixes=$script:C.artifact_prefixes})
+    $bindingData=@{node=$Node;namespace=$script:C.namespace;api=$script:C.api_base;provider=$script:C.provider;repository=$script:C.repository;issue=[string]$script:C.issue;authors=$script:C.authors;artifact_prefixes=$script:C.artifact_prefixes}
+    if ($script:Relay) { $bindingData.layout=$script:C.layout }
+    $script:Binding=Hash (Canonical $bindingData)
     $script:Token=[Environment]::GetEnvironmentVariable($script:C.token_env)
     if ($PromptToken -and -not $script:Token) { $secure=Read-Host '平台 Token（隐藏输入，回车只读）' -AsSecureString; $script:Token=(New-Object Net.NetworkCredential('', $secure)).Password }
     if ($Action -eq 'Watch') {

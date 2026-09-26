@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from test_probe import ROOT, PWSH
 from test_connector import TaskAPI
+from test_relay import RelayAPI
 
 spec=importlib.util.spec_from_file_location('build_connector',ROOT/'tools/build_connector.py')
 builder=importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
@@ -53,19 +54,31 @@ class ConnectorBundleTests(unittest.TestCase):
                          capture_output=True,encoding='utf-8',timeout=20)
         self.assertEqual(p.returncode,0,p.stdout+p.stderr)
         self.assertEqual(json.loads(p.stdout)['runs'],[])
-        self.assertTrue((self.install/'connector-state/windows-inner/state.json').exists())
+        self.assertTrue((self.install/'connector-state-relay/windows-inner/state.json').exists())
 
     @unittest.skipUnless(os.name=='nt','requires actual Windows cmd and execution policies')
     def test_actual_windows_entry_watch_claim_complete_and_restart(self):
-        server=ThreadingHTTPServer(('127.0.0.1',0),TaskAPI); server.daemon_threads=True
+        self.check_windows_entry(False)
+
+    @unittest.skipUnless(os.name=='nt','requires actual Windows cmd and execution policies')
+    def test_actual_windows_relay_entry_watch_claim_complete_and_restart(self):
+        self.check_windows_entry(True)
+
+    def check_windows_entry(self, relay):
+        server=ThreadingHTTPServer(('127.0.0.1',0),RelayAPI if relay else TaskAPI); server.daemon_threads=True
         base=f'http://127.0.0.1:{server.server_port}'
         server.ctx=dict(base=base,comments=[],posts=[],gets=[],assets={},release_assets=[],artifact_auth=[],
                         fail_page=0,get_rate=False,post_rate=False,reject=0,timeout_before=False,timeout_after=False,corrupt_asset=False)
         thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
         try:
-            c=json.loads((self.install/'connector.config.json').read_text())
+            c=json.loads((self.install/('connector.config.json' if relay else 'examples/connector.legacy.config.json')).read_text())
             c.update(api_base=base,repository='test/tasks',issue='1',poll_seconds=1,write_interval_seconds=0,
                      artifact_prefixes=[base+'/assets/'],authors={'mac-outer':['mac-user'],'windows-inner':['win-user']})
+            if relay:
+                c.pop('issue')
+                server.ctx.update(issues=[],releases={},provision_mode={},descriptor=dict(
+                    schema='aiconnector.relay.v1',repository='test/tasks',namespace=c['namespace'],layout=c['layout'],
+                    protocol='aiconnector.task.v1',max_artifact_bytes=5242879))
             (self.install/'connector.config.json').write_text(json.dumps(c))
             script=self.install/'Connector.ps1'
             Path(str(script)+':Zone.Identifier').write_text('[ZoneTransfer]\r\nZoneId=3\r\n')
@@ -92,15 +105,15 @@ class ConnectorBundleTests(unittest.TestCase):
             win('Connector-Windows.cmd','-Action','Complete','-Key',key,'-File','examples/result.json')
             win('Start-Windows-Connector.cmd','-Cycles','2','-Proxy','direct')
             mac('Poll'); win('Start-Windows-Connector.cmd','-Cycles','1','-Proxy','direct')
-            status=json.loads((self.install/'connector-state/windows-inner/status.json').read_text(encoding='utf-8'))
+            status=json.loads((self.install/('connector-state-relay' if relay else 'connector-state')/'windows-inner/status.json').read_text(encoding='utf-8'))
             self.assertEqual(status['runs'][0]['phase'],'receipt')
-            self.assertEqual(len(server.ctx['posts']),5)
+            self.assertEqual(len(server.ctx['posts']),7 if relay else 5)
             # Tampering stops before any network or state action.
             script.write_bytes(script.read_bytes()+b'\n# modified\n')
             p=subprocess.run(['cmd.exe','/d','/c','Connector-Windows.cmd','-Action','Poll'],cwd=self.install,env=env,
                              capture_output=True,encoding='utf-8',errors='replace',timeout=30)
             self.assertNotEqual(p.returncode,0); self.assertIn('CHECKSUM_MISMATCH',p.stdout)
-            self.assertEqual(len(server.ctx['posts']),5)
+            self.assertEqual(len(server.ctx['posts']),7 if relay else 5)
         finally:
             server.shutdown(); server.server_close(); thread.join()
 
@@ -110,6 +123,6 @@ class ConnectorBundleTests(unittest.TestCase):
         p=subprocess.run(['cmd.exe','/d','/c','Connector-Windows.cmd','-Action','Status'],cwd=self.install,env=env,
                          capture_output=True,encoding='utf-8',errors='replace',timeout=30)
         self.assertNotEqual(p.returncode,0)
-        self.assertFalse((self.install/'connector-state/windows-inner/state.json').exists())
+        self.assertFalse((self.install/'connector-state-relay/windows-inner/state.json').exists())
 
 if __name__=='__main__':unittest.main(verbosity=2)

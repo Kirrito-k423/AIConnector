@@ -103,7 +103,7 @@ class ConnectorTests(unittest.TestCase):
         self.server.ctx = self.ctx
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-        self.config = json.loads((ROOT/'connector.config.json').read_text())
+        self.config = json.loads((ROOT/'examples/connector.legacy.config.json').read_text())
         self.config.update(api_base=self.base, repository='test/tasks', issue='1', poll_seconds=1,
                            write_interval_seconds=0, artifact_prefixes=[self.base+'/assets/'],
                            authors={'mac-outer': ['mac-user'], 'windows-inner': ['win-user']})

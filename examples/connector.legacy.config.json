@@ -1,10 +1,12 @@
 {
-  "schema": "aiconnector.config.v2",
+  "schema": "aiconnector.config.v1",
   "namespace": "experiments-v1",
   "provider": "github",
   "api_base": "https://api.github.com",
-  "repository": "Kirrito-k423/AIConnector-Relay",
+  "repository": "Kirrito-k423/AIConnector",
+  "issue": "2",
   "token_env": "AICONNECTOR_GITHUB_TOKEN",
+  "release_tag": "probe-artifacts",
   "poll_seconds": 60,
   "write_interval_seconds": 3,
   "max_pages": 10,
@@ -17,7 +19,7 @@
     ]
   },
   "artifact_prefixes": [
-    "https://github.com/Kirrito-k423/AIConnector-Relay/releases/download/"
-  ],
-  "layout": "task-issues-run-releases-v1"
+    "https://github.com/Kirrito-k423/AIConnector/releases/download/probe-artifacts/",
+    "https://raw.gitcode.com/shaojiemike/AIConnector-Probe/attachment/uploads/"
+  ]
 }

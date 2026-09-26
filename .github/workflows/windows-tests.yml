@@ -1,6 +1,7 @@
 name: Windows PowerShell tests
 
 on:
+  pull_request:
   push:
     branches: [main]
     paths:
@@ -10,6 +11,7 @@ on:
       - 'examples/**'
       - 'docs/CONNECTOR.md'
       - 'docs/PROTOCOL.md'
+      - 'docs/RELAY.md'
       - 'CONTEXT.md'
       - '*.json'
       - 'README.md'
@@ -37,7 +39,7 @@ jobs:
         env:
           PWSH: powershell.exe
           PYTHONUTF8: '1'
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -p 'test_[!r]*.py' -v
       - name: Build release bundle and synthetic fixtures
         run: python tools/build_bundle.py
       - name: Build connector delivery
@@ -68,3 +70,14 @@ jobs:
         with:
           name: release-acceptance-evidence
           path: release-acceptance/
+  windows-relay:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test relay routing, recovery and timestamps on Windows PowerShell 5.1
+        shell: pwsh
+        env:
+          PWSH: powershell.exe
+          PYTHONUTF8: '1'
+        run: python -m unittest discover -s tests -p 'test_relay.py' -v
