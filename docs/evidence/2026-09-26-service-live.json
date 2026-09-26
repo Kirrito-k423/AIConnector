@@ -1,0 +1,159 @@
+{
+  "schema": "aiconnector.service-validation.v1",
+  "date": "2026-09-26",
+  "scope": "Actual GitHub, Pi SDK, CPU subprocess, and browser UI. Both service roles on one Mac; controlled model API. No user intranet or NPU.",
+  "runs": [
+    {
+      "key": "service-pi-smoke/1/run-20260926024626",
+      "issue": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/2",
+      "release": "https://github.com/Kirrito-k423/AIConnector-Relay/releases/tag/aic-v1.experiments-v1.service-pi-smoke.r1.run-20260926024626",
+      "timeline": [
+        {
+          "kind": "task",
+          "sender": "mac-outer",
+          "author": "Kirrito-k423",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/2#issuecomment-5842508359",
+          "event_id": "a4dcdc063c6f7e89e4e97169493842cebaf73a49d3ea6dce56db2f5b14c4439f",
+          "observed_at": 1790390851,
+          "published_at": "2026-09-26T02:47:24.000Z"
+        },
+        {
+          "kind": "accepted",
+          "sender": "windows-inner",
+          "author": "Kirrito-k423",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/2#issuecomment-5842510313",
+          "event_id": "b2e29349ce182d58c62a193b804b7a0f925df2aa83fe2048ee6506b4d0c744d7",
+          "observed_at": 1790390873,
+          "published_at": "2026-09-26T02:47:38.000Z"
+        },
+        {
+          "kind": "started",
+          "sender": "windows-inner",
+          "author": "Kirrito-k423",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/2#issuecomment-5842512671",
+          "event_id": "f099ea299fecc09c413fe227ad8f88cc4bb519a620ecf63542ff0c6b10187b4a",
+          "observed_at": 1790390888,
+          "published_at": "2026-09-26T02:47:57.000Z"
+        },
+        {
+          "kind": "result",
+          "sender": "windows-inner",
+          "author": "Kirrito-k423",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/2#issuecomment-5842516427",
+          "event_id": "aa055e8ea8fe546321f717cc3f84f5d611abb839708badc25bd3e3ab78c7b28d",
+          "observed_at": 1790390918,
+          "published_at": "2026-09-26T02:48:26.000Z"
+        },
+        {
+          "kind": "receipt",
+          "sender": "mac-outer",
+          "author": "Kirrito-k423",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/2#issuecomment-5842519057",
+          "event_id": "60d7f9308b40462dc5aa99f9362d09daedbf548d36e3942b3afd815b490d22c5",
+          "observed_at": 1790390933,
+          "published_at": "2026-09-26T02:48:46.000Z"
+        }
+      ],
+      "execution": {
+        "profile": "local-smoke",
+        "unknown": false,
+        "ended_at": "2026-09-26T02:47:46.692Z",
+        "engine": "pi-0.87.1",
+        "started_at": "2026-09-26T02:47:46.633Z"
+      },
+      "artifact": {
+        "bytes": 1331,
+        "sha256": "59bafcbd0ef2103ba746379746231d17d554caf52e95f0339733897d1b636528",
+        "url": "https://github.com/Kirrito-k423/AIConnector-Relay/releases/download/aic-v1.experiments-v1.service-pi-smoke.r1.run-20260926024626/result--windows-inner--59bafcbd0ef2103ba746379746231d17d554caf52e95f0339733897d1b636528.zip",
+        "name": "result--windows-inner--59bafcbd0ef2103ba746379746231d17d554caf52e95f0339733897d1b636528.zip"
+      },
+      "zip_sha256": "59bafcbd0ef2103ba746379746231d17d554caf52e95f0339733897d1b636528",
+      "model_requests": 3,
+      "real_github": true,
+      "real_pi": true,
+      "real_cpu": true,
+      "two_services_same_mac": true,
+      "fixture_model": true,
+      "user_windows": false,
+      "npu": false,
+      "completed_at": "2026-09-26T02:48:56.930Z"
+    },
+    {
+      "ui_publish": true,
+      "browser_verified": true,
+      "two_services_same_mac": true,
+      "fixture_model": true,
+      "npu": false,
+      "key": "service-ui-smoke/1/run-20260926-ui",
+      "issue": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/3",
+      "release": "https://github.com/Kirrito-k423/AIConnector-Relay/releases/tag/aic-v1.experiments-v1.service-ui-smoke.r1.run-20260926-ui",
+      "timeline": [
+        {
+          "event_id": "5a379934847cc9c9557f8e5ef245c839ba4f0b5c0d46a230984b35df3aa9500c",
+          "author": "Kirrito-k423",
+          "published_at": "2026-09-26T02:52:35.000Z",
+          "kind": "task",
+          "sender": "mac-outer",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/3#issuecomment-5842541521",
+          "observed_at": 1790391163
+        },
+        {
+          "event_id": "ccd782f77ea8f7cf6a8a29a0bfba216a365a0bab7c6ef74892e53c63dd2466e2",
+          "author": "Kirrito-k423",
+          "published_at": "2026-09-26T02:52:46.000Z",
+          "kind": "accepted",
+          "sender": "windows-inner",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/3#issuecomment-5842542529",
+          "observed_at": 1790391170
+        },
+        {
+          "event_id": "16140a499bd58f48404f1cff7e2b20a9e0c39223d4cd8b475346d0d0ed0f5664",
+          "author": "Kirrito-k423",
+          "published_at": "2026-09-26T02:53:07.000Z",
+          "kind": "started",
+          "sender": "windows-inner",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/3#issuecomment-5842544562",
+          "observed_at": 1790391201
+        },
+        {
+          "event_id": "659b4b5e666cca5c95b89ab1eba7614587b1e9580f021ca930cfff97ebf7ef0b",
+          "author": "Kirrito-k423",
+          "published_at": "2026-09-26T02:53:37.000Z",
+          "kind": "result",
+          "sender": "windows-inner",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/3#issuecomment-5842547468",
+          "observed_at": 1790391230
+        },
+        {
+          "event_id": "22e7fecdc2b7d0118ea28a7bf6795e30c977053c79fc2316cad7b9f034c35e91",
+          "author": "Kirrito-k423",
+          "published_at": "2026-09-26T02:53:57.000Z",
+          "kind": "receipt",
+          "sender": "mac-outer",
+          "url": "https://github.com/Kirrito-k423/AIConnector-Relay/issues/3#issuecomment-5842549376",
+          "observed_at": 1790391245
+        }
+      ],
+      "execution": {
+        "ended_at": "2026-09-26T02:52:55.437Z",
+        "engine": "pi-0.87.1",
+        "started_at": "2026-09-26T02:52:55.376Z",
+        "profile": "local-smoke",
+        "unknown": false
+      },
+      "artifact": {
+        "name": "result--windows-inner--f024ff733abd79f506958ca948a1a9a5f70bbcb4aec92431e00313a5a7b64510.zip",
+        "bytes": 1328,
+        "url": "https://github.com/Kirrito-k423/AIConnector-Relay/releases/download/aic-v1.experiments-v1.service-ui-smoke.r1.run-20260926-ui/result--windows-inner--f024ff733abd79f506958ca948a1a9a5f70bbcb4aec92431e00313a5a7b64510.zip",
+        "sha256": "f024ff733abd79f506958ca948a1a9a5f70bbcb4aec92431e00313a5a7b64510"
+      },
+      "phase": "receipt",
+      "outcome": "succeeded",
+      "metrics": {
+        "npu": false,
+        "sum": 50005000,
+        "fixture_model": true
+      }
+    }
+  ]
+}

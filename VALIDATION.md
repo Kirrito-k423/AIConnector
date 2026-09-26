@@ -2,6 +2,21 @@
 
 更新日期：2026-09-25；下面按日期保留历史证据，当前状态以最新日期为准。
 
+
+## 2026-09-26：后台服务、任务看板与 Pi Runner
+
+实现了两端本机 HTTP 看板、持久化发送/领取/执行/交付账本、独立 Pi 工作进程和用户登录自启。任务通道继续使用公开的 `AIConnector-Relay`，格式与文件命名由程序生成。
+
+- **真实 GitHub 与真实执行：** [Relay Issue #2](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2) 和[由浏览器页面发布的 Issue #3](https://github.com/Kirrito-k423/AIConnector-Relay/issues/3) 各完成 task → accepted → started → result → receipt。Pi 0.87.1 实际调用工具，真实 CPU 子进程计算 `sum=50005000`；返回的 ZIP 分别为 1331 / 1328 字节，两端 SHA-256 一致。[去除本地路径后的证据](docs/evidence/2026-09-26-service-live.json)。
+- **Windows 实际安装包：** [CI 全部通过](https://github.com/Kirrito-k423/AIConnector/actions/runs/36214230805)，代码 `454a949`。10 项 Node 测试、全新解压后的 6 项端到端测试，以及下载标记信任与包损坏拒绝检查通过；使用包内 Node 24.14.0 / Pi 0.87.1、系统 PowerShell 5.1。计划任务在主进程被杀及正常停止后都重新拉起；实际 cmd 在 PATH 没有 Node 时仍能启动。ZIP 为 57,824,731 字节，SHA-256 `a42a956d5e180ed6f9d17539c4966a5d88718336ab556a835760b601f53a969a`。[机器证据](docs/evidence/2026-09-26-service-windows-package.json)。原协议与通道的 [Windows 91 项回归](https://github.com/Kirrito-k423/AIConnector/actions/runs/36214230680) 也通过。
+- **Mac 实际安装包：** 9 项 Node 测试通过，1 项 Windows DPAPI 检查交给 Windows；全新中文空格目录解压，包内 Node / Pi / PowerShell 7.6.6 的 5 项端到端测试通过，1 项 Windows cmd 检查交给 Windows。含实际 launchd 安装、进程被杀及正常停止后自动拉起。ZIP 为 203,601,707 字节，SHA-256 `37476315e7eabfbf147c999d8e05f01b55fd66bd5531c3468e69c57c514f0554`。[机器证据](docs/evidence/2026-09-26-service-macos-package.json)。
+- **浏览器验收：** 实际打开本机页面、发布第二项任务，看到五阶段时间、事件作者、执行开始/结束、Issue / Release / ZIP 链接；检查任务筛选与空列表，结果最终显示已回执。
+- **凭据：** macOS 钥匙串实际写入、读回与删除合成凭据；Windows DPAPI 在 Windows CI 检查密文文件和回读。发布证据与 ZIP 不含真实凭据。
+- **证据范围：** 实网两端角色运行在同一台 Mac，模型使用受控 API 回复。不是商业模型推理、用户内网 Windows、SSH / NPU 实验或操作系统重新启动验收。进程被杀后的系统拉起与重新开机是不同测试。
+
+安装和可信实验入口的配置见 [SERVICE.md](docs/SERVICE.md)。程序保留未知执行状态，不因重启或失联重新提交实验；人工核对后可交付 blocked 结果。通道回执证明文件到达，不代表科学结论已通过人工验收。
+
+
 ## v0.2.0：任务协议、持久化状态与两端轮询
 
 已发布 [任务交接包 v0.2.0](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.2.0)，代码固定在 `6e510a0269873d9bd608b161b3f924c5e798e6d7`。使用入口见 [两端启动与 AI 接入说明](docs/CONNECTOR.md)，事件字段、因果关系和恢复语义见 [任务协议](docs/PROTOCOL.md)。
@@ -211,3 +226,14 @@ Windows 验收包含两层：
 - 真实 GitHub：同一任务完成两次合成运行；最终运行使用内容不同的输入/结果 ZIP，分别为 191 / 190 字节，完成五阶段事件及两端下载校验，重启领取返回 execute=false。[任务 Issue](https://github.com/Kirrito-k423/AIConnector-Relay/issues/1)；[机器证据](docs/evidence/2026-09-26-relay-layout.json)。
 - 实网两端均是 Mac 上独立 PowerShell 进程；没有调用用户内网、SSH 或 NPU。[Windows PS5.1 的 91 项测试通过](https://github.com/Kirrito-k423/AIConnector/actions/runs/36211213575)，包含新旧布局的真实 cmd 包入口；[公开包全新下载验收通过](https://github.com/Kirrito-k423/AIConnector/actions/runs/36211347383)，默认配置未修改。候选包 v0.3.0-rc.1：33,543 字节，SHA-256 `eb0650d0e359bf62bbe62c751c637d900bbf0fbc839b4ac0e83672a10a971272`。
 - v0.3 新默认状态目录为 connector-state-relay，原 v0.2 状态目录保留。新布局只支持公开 GitHub；API Token 需授权专用仓库的 Issues 与 Contents。
+
+## 2026-09-26：Pi 环境与工具集成 0.5.0
+
+Issue #6 的 Windows 报告确认现有回环模型网关与 Relay 轮询工作；本次保留该配置，并新增本地上下文快照、simpleHtmlWatch 工具、独立网页传输与 Pi 自动压缩。
+
+- 本机 Node 集成测试：20 项通过；Windows DPAPI 1 项按平台跳过。使用锁定的真实 Pi SDK，自动产生压缩记录后继续任务，CPU 实验只启动一次。
+- 两端服务回归：5 项通过；Windows 启动器 1 项按平台跳过。覆盖输入/结果 ZIP、五阶段回执、主服务重启、网络中断和 worker 异常退出。
+- SHW 受控 HTTP 验收：提交响应丢失后重建客户端只查原任务、Token 轮换、实际版本证据、未知状态、受限 tar 解析与按 outputs 导出。
+- 网页受控 HTTP 验收：Node 与 curl 两种传输，搜索 URL 编码、跨主机重定向拒绝、响应大小上限、不继承业务凭据。
+- 浏览器验收：填写全局说明、修改轮数与 curl 选项，保存成功并只读检查到 SHW fixture；未触发真实 SSH。页面检查不代表公司网络通行。
+- Windows 安装包与 Mac 安装包的最终结果、SHA-256 和 CI 链接随 v0.5.0-rc.1 Release 提供。未以本机结果代替真实 Windows 内网、真实供应商长上下文或 NPU 实验验收。
