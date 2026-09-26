@@ -101,7 +101,7 @@ class ServiceTests(unittest.TestCase):
             with urllib.request.urlopen(request,timeout=3) as r:return json.load(r)
         except (ConnectionError,urllib.error.URLError) as e:
             if isinstance(e,urllib.error.HTTPError):
-                e.reason=e.read().decode();e.close();raise
+                e.msg=e.read().decode();e.close();raise
             return None
     def until(self,fn,seconds=100):
         end=time.monotonic()+seconds
@@ -173,5 +173,24 @@ class ServiceTests(unittest.TestCase):
         self.task['environment']['target']='unapproved';self.publish();self.until(lambda:self.phase('windows-inner','accepted'))
         self.until(lambda:self.get('windows-inner')['service']['runner_error']=='PROFILE_NOT_ALLOWED')
         self.assertEqual(len(self.model.calls),0);self.assertEqual(self.get('windows-inner')['jobs'],[])
+
+    @unittest.skipUnless(os.name=='nt' or sys.platform=='darwin','native user service')
+    def test_native_login_service_restarts_after_process_failure(self):
+        node='windows-inner' if os.name=='nt' else 'mac-outer';path,c=self.configs[node]
+        # This test creates only a temporary, uniquely named per-user service.
+        def cli(action):
+            return subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),action,'--config',str(path)],capture_output=True,encoding='utf-8',timeout=30)
+        info=Path(c['dataDir'])/'service-info.json'
+        try:
+            r=cli('install');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+            self.until(lambda:info.exists(),35)
+            first=json.loads(info.read_text())['pid'];self.tokens[node]=(Path(c['dataDir'])/'dashboard.token').read_text()
+            self.until(lambda:self.get(node),20)
+            os.kill(first,9)
+            self.until(lambda:json.loads(info.read_text())['pid']!=first,110)
+            self.until(lambda:self.get(node),20)
+        finally:
+            cli('uninstall')
+            if info.exists():cli('stop')
 
 if __name__=='__main__':unittest.main()

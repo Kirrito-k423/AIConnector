@@ -1,7 +1,7 @@
 const $=id=>document.getElementById(id);
 function adoptToken(){const hash=new URLSearchParams(location.hash.slice(1));if(hash.has('token')){sessionStorage.setItem('aic-token',hash.get('token'));history.replaceState(null,'',location.pathname);}}
 adoptToken();window.addEventListener('hashchange',()=>{adoptToken();void refresh();});
-let state,selected='',rows=[];
+let state,selected='',rows=[],settingsLoaded=false;
 const labels={task:'已发布',accepted:'接收端已校验',started:'已领取',result:'结果已发布',receipt:'已回执',claiming:'登记领取',launching:'启动执行器',running:'Pi 处理中',delivering:'交付 ZIP 中',submitted:'等待回执',confirmed:'已回执',blocked:'需要处理',unknown:'执行状态未知',pending:'等待发布',queued:'已加入发送队列'};
 const date=t=>t?new Date(typeof t==='number'?t*1000:t).toLocaleString('zh-CN',{hour12:false}):'尚未发生';
 const el=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
@@ -10,6 +10,7 @@ async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',h
 function notice(s){$('notice').textContent=s;}
 function render(){
   const s=state.service;$('node').textContent=s.node==='mac-outer'?'Mac · 发送端':'Windows · 执行端';$('repo').href='https://github.com/'+s.repository;
+  if(!settingsLoaded){if(s.model){$('model-api').value=s.model.api;$('model-base').value=s.model.baseUrl;$('model-id').value=s.model.id;}settingsLoaded=true;}
   const jobs=new Map(state.jobs.map(j=>[j.key,j]));rows=state.channel.runs.map(r=>({...r,job:jobs.get(r.key)}));
   for(const d of state.submissions)if(!rows.some(r=>r.key===d.key))rows.push({...d,phase:d.state});
   rows.sort((a,b)=>b.key.localeCompare(a.key));
@@ -22,14 +23,16 @@ function render(){
   $('submit').hidden=s.node!=='mac-outer';$('runs').replaceChildren();
   const filter=$('filter').value,visible=rows.filter(r=>filter==='all'||filter==='confirmed'&&done(r)||filter==='error'&&error(r)||filter==='active'&&!done(r)&&!error(r));
   if(!visible.length)$('runs').append(el('p','还没有符合条件的任务。','empty'));
-  if(!selected&&visible[0])selected=visible[0].key;
+  if(!visible.some(r=>r.key===selected))selected=visible[0]?.key||'';
   for(const row of visible){const b=el('button',undefined,'run'+(row.key===selected?' selected':''));b.append(el('strong',row.task?.title||row.key),el('small',row.key),el('div',labels[phase(row)]||phase(row),'status'+(error(row)?' error':'')));b.onclick=()=>{selected=row.key;render();};$('runs').append(b);}
-  const r=rows.find(r=>r.key===selected);if(!r)return;
+  const r=rows.find(r=>r.key===selected);if(!r){$('detail').replaceChildren(el('p','选择一个运行，查看时间线和交付件。','empty'));return;}
   const detail=$('detail');detail.replaceChildren(el('h2',r.task?.title||r.key),el('div',r.key,'meta'),el('p',r.task?.objective||''));
   const links=el('div',undefined,'links');link(links,'任务 Issue ↗',r.issue_url);link(links,'本次 Release ↗',r.release_url);detail.append(links);
   const list=el('ol',undefined,'timeline');
-  for(const e of r.timeline||[]){const li=el('li');li.append(el('strong',labels[e.kind]||e.kind),el('span',`${date(e.published_at)} · ${e.sender} · GitHub @${e.author||'未知'}`));link(li,'查看原始记录',e.url);list.append(li);}
-  for(const [name,time]of [['实际开始执行',r.job?.worker?.execution_started_at||r.result?.execution?.started_at],['实际执行结束',r.job?.worker?.execution_ended_at||r.result?.execution?.ended_at]])if(time){const li=el('li');li.append(el('strong',name),el('span',date(time)));list.append(li);}
+  const events=(r.timeline||[]).map(e=>({at:e.published_at,title:(labels[e.kind]||e.kind)+' · 远端记录',meta:`${e.sender} · GitHub @${e.author||'未知'}`,url:e.url}));
+  for(const [title,at]of [['实际开始执行',r.job?.worker?.execution_started_at||r.result?.execution?.started_at],['实际执行结束',r.job?.worker?.execution_ended_at||r.result?.execution?.ended_at]])if(at)events.push({title,at,meta:'执行器本机时间'});
+  events.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
+  for(const e of events){const li=el('li');li.append(el('strong',e.title),el('span',`${date(e.at)} · ${e.meta}`));if(e.url)link(li,'查看原始记录',e.url);list.append(li);}
   if(!(r.timeline||[]).length)list.append(el('li','本地已排队，远端发布时间尚未确认。'));
   detail.append(list);
   if(error(r))detail.append(el('p',String(r.error||r.job?.error||'需要检查执行状态'),'error'));
