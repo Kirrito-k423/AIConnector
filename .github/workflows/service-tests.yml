@@ -11,6 +11,7 @@ permissions:
   contents: read
 jobs:
   windows-runtime-diagnostic:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
@@ -25,18 +26,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         with:
           node-version: '24.14.0'
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
       - run: npm test
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
       - name: Build offline Windows delivery
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         run: python tools/build_service.py
       - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         shell: pwsh
         env:
           PYTHONUTF8: '1'
         run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         with:
           name: tested-service-windows-x64
           path: dist/service/*

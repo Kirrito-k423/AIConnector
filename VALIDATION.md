@@ -8,6 +8,8 @@
 实现了两端本机 HTTP 看板、持久化发送/领取/执行/交付账本、独立 Pi 工作进程和用户登录自启。任务通道继续使用公开的 `AIConnector-Relay`，格式与文件命名由程序生成。
 
 - **真实 GitHub 与真实执行：** [Relay Issue #2](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2) 和[由浏览器页面发布的 Issue #3](https://github.com/Kirrito-k423/AIConnector-Relay/issues/3) 各完成 task → accepted → started → result → receipt。Pi 0.87.1 实际调用工具，真实 CPU 子进程计算 `sum=50005000`；返回的 ZIP 分别为 1331 / 1328 字节，两端 SHA-256 一致。[去除本地路径后的证据](docs/evidence/2026-09-26-service-live.json)。
+- **Windows 实际安装包：** [CI 全部通过](https://github.com/Kirrito-k423/AIConnector/actions/runs/36214230805)，代码 `454a949`。10 项 Node 测试、全新解压后的 6 项端到端测试，以及下载标记信任与包损坏拒绝检查通过；使用包内 Node 24.14.0 / Pi 0.87.1、系统 PowerShell 5.1。计划任务在主进程被杀及正常停止后都重新拉起；实际 cmd 在 PATH 没有 Node 时仍能启动。ZIP 为 57,824,731 字节，SHA-256 `a42a956d5e180ed6f9d17539c4966a5d88718336ab556a835760b601f53a969a`。[机器证据](docs/evidence/2026-09-26-service-windows-package.json)。原协议与通道的 [Windows 91 项回归](https://github.com/Kirrito-k423/AIConnector/actions/runs/36214230680) 也通过。
+- **Mac 实际安装包：** 9 项 Node 测试通过，1 项 Windows DPAPI 检查交给 Windows；全新中文空格目录解压，包内 Node / Pi / PowerShell 7.6.6 的 5 项端到端测试通过，1 项 Windows cmd 检查交给 Windows。含实际 launchd 安装、进程被杀及正常停止后自动拉起。ZIP 为 203,601,707 字节，SHA-256 `37476315e7eabfbf147c999d8e05f01b55fd66bd5531c3468e69c57c514f0554`。[机器证据](docs/evidence/2026-09-26-service-macos-package.json)。
 - **浏览器验收：** 实际打开本机页面、发布第二项任务，看到五阶段时间、事件作者、执行开始/结束、Issue / Release / ZIP 链接；检查任务筛选与空列表，结果最终显示已回执。
 - **凭据：** macOS 钥匙串实际写入、读回与删除合成凭据；Windows DPAPI 在 Windows CI 检查密文文件和回读。发布证据与 ZIP 不含真实凭据。
 - **证据范围：** 实网两端角色运行在同一台 Mac，模型使用受控 API 回复。不是商业模型推理、用户内网 Windows、SSH / NPU 实验或操作系统重新启动验收。进程被杀后的系统拉起与重新开机是不同测试。
