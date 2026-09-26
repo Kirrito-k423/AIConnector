@@ -98,7 +98,10 @@ class ServiceTests(unittest.TestCase):
         c=self.configs[node][1]
         request=urllib.request.Request(f'http://127.0.0.1:{c["port"]}{path}',data=json.dumps(data).encode() if data is not None else None,headers=dict(Authorization='Bearer '+(token or self.tokens[node]),**({'Content-Type':'application/json'} if data is not None else {}),**(headers or {})))
         try:
-            with urllib.request.urlopen(request,timeout=3) as r:return json.load(r)
+            # These requests target the fixture's loopback daemon, including
+            # intentionally invalid Host headers. Never send them through the
+            # public-download proxy and mistake its response for our server's.
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as r:return json.load(r)
         except (ConnectionError,urllib.error.URLError) as e:
             if isinstance(e,urllib.error.HTTPError):
                 e.msg=e.read().decode();e.close();raise
