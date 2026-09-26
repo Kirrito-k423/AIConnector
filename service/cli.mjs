@@ -21,6 +21,12 @@ function init(){
 function tag(c){return 'AIConnector-'+sha(c.dataDir).slice(0,12);}
 const xml=s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 async function install(c){
+  // Transfer an existing foreground/background instance to the OS supervisor.
+  if(await health(c)) {
+    await shutdown(c);
+    for(let i=0;i<180&&fs.existsSync(path.join(c.dataDir,'service.lock'));i++)await new Promise(r=>setTimeout(r,250));
+    need(!fs.existsSync(path.join(c.dataDir,'service.lock')),'SERVICE_STOP_TIMEOUT');
+  }
   if(process.platform==='win32'){
     const r=await run(c.powershell,['-NoProfile','-NonInteractive','-File',path.join(ROOT,'service','install-windows.ps1'),'-NodeExe',process.execPath,'-Cli',cli,'-Config',file,'-Name',tag(c)]);
     need(r.code===0,'SERVICE_INSTALL_FAILED');
@@ -32,9 +38,21 @@ async function install(c){
   }else throw new Error('SERVICE_INSTALL_UNSUPPORTED');
   console.log('已安装当前用户登录时启动的后台服务。');
 }
+async function health(c) {
+  try {
+    const token=fs.readFileSync(path.join(c.dataDir,'dashboard.token'),'utf8');
+    const response=await fetch(`http://127.0.0.1:${c.port}/api/status`,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(1500)});
+    if(!response.ok)return false;const value=await response.json();return value.schema==='aiconnector.dashboard.v1'&&value.service.node===c.node;
+  }catch{return false;}
+}
+async function shutdown(c) {
+  const token=fs.readFileSync(path.join(c.dataDir,'dashboard.token'),'utf8');
+  const response=await fetch(`http://127.0.0.1:${c.port}/api/shutdown`,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(3000)});
+  need(response.ok,'SERVICE_STOP_FAILED');
+}
 async function background(c){
   const infoFile=path.join(c.dataDir,'service-info.json');
-  if(fs.existsSync(infoFile)&&alive(JSON.parse(fs.readFileSync(infoFile)).pid))return;
+  if(await health(c))return;
   fs.mkdirSync(c.dataDir,{recursive:true,mode:0o700});const log=fs.openSync(path.join(c.dataDir,'service.log'),'a',0o600);
   const child=spawn(process.execPath,[cli,'start','--config',file],{detached:true,windowsHide:true,stdio:['ignore',log,log]});child.unref();fs.closeSync(log);
   for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,250));if(fs.existsSync(infoFile)&&JSON.parse(fs.readFileSync(infoFile)).pid===child.pid)return;if(!alive(child.pid))break;}
@@ -54,9 +72,9 @@ try {
     console.log('已取消登录自启；任务数据和密钥保留。');
   }else if(command==='status'){
     const info=fs.existsSync(path.join(c.dataDir,'service-info.json'))?JSON.parse(fs.readFileSync(path.join(c.dataDir,'service-info.json'))):{};
-    console.log(JSON.stringify({node:c.node,running:alive(info.pid),url:info.url,jobs:Object.keys(read(path.join(c.dataDir,'service.json'),{jobs:{}}).jobs).length}));
+    console.log(JSON.stringify({node:c.node,running:await health(c),url:info.url,jobs:Object.keys(read(path.join(c.dataDir,'service.json'),{jobs:{}}).jobs).length}));
   }else if(command==='stop'){
-    const info=JSON.parse(fs.readFileSync(path.join(c.dataDir,'service-info.json')));if(alive(info.pid))process.kill(info.pid,'SIGTERM');console.log('已请求退出。已派出的实验继续执行；安装了自启时系统会重启服务。');
+    if(await health(c))await shutdown(c);console.log('已请求退出。已派出的实验继续执行；安装了自启时系统会重启服务。');
   }else if(command==='open'||command==='background'){
     await background(c);
     if(command==='open'&&!args.includes('--no-browser')){

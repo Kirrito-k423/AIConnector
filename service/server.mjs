@@ -76,6 +76,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       }
       need(req.method==='POST'&&req.headers['content-type']==='application/json','INVALID_REQUEST');
       const data=await body(req);
+      if(url.pathname==='/api/shutdown') {reply(202,{stopping:true});setImmediate(()=>void close());return;}
       if(url.pathname==='/api/tasks') {
         need(c.node==='mac-outer','SENDER_ONLY');const task=data.task;
         need(task&&/^[a-z0-9][a-z0-9_-]{0,63}$/.test(task.task_id)&&/^[a-z0-9][a-z0-9_-]{0,63}$/.test(task.run_id)&&Number.isInteger(task.revision)&&task.revision>0,'INVALID_TASK_ID');
