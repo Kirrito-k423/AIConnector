@@ -54,8 +54,12 @@ def validate(pwsh, out):
     taskfile=out/'task.json'; taskfile.write_text(json.dumps(task,ensure_ascii=False))
     call('mac-outer','Submit','-File',taskfile); until('mac-outer','task'); until('windows-inner','accepted')
     assert call('windows-inner','Claim','-Key',key)['execute'] is True
-    result_artifact=call('windows-inner','Upload','-Key',key,'-File',archive)
-    assert result_artifact['sha256']==hashlib.sha256(archive.read_bytes()).hexdigest()
+    result_zip=out/'result.zip'
+    with zipfile.ZipFile(result_zip,'w') as z:
+        z.writestr(zipfile.ZipInfo('result.json',(2026,1,1,0,0,0)), b'{"synthetic":true,"npu":false,"result":"transport fixture completed"}\n')
+    result_artifact=call('windows-inner','Upload','-Key',key,'-File',result_zip)
+    assert result_artifact['sha256']==hashlib.sha256(result_zip.read_bytes()).hexdigest()
+    assert artifact['sha256']!=result_artifact['sha256']
     result=dict(outcome='succeeded',exit_code=0,actual_revision='relay-layout-v1',
                 summary='合成通道验收：输入 ZIP 已接收，输出 ZIP 已上传。没有运行 NPU 实验。',
                 metrics=dict(synthetic=True,real_npu=False),artifacts=[result_artifact])
@@ -64,7 +68,8 @@ def validate(pwsh, out):
     until('windows-inner','result'); completed=until('mac-outer','receipt'); until('windows-inner','receipt')
     assert call('windows-inner','Claim','-Key',key)['execute'] is False
     summary=dict(key=key,issue=completed['issue_url'],release=completed['release_url'],
-                 phase=completed['phase'],timeline=completed['timeline'],zip_bytes=archive.stat().st_size,
+                 phase=completed['phase'],timeline=completed['timeline'],input_zip_bytes=archive.stat().st_size,
+                 result_zip_bytes=result_zip.stat().st_size,distinct_input_and_result=True,
                  actual_github_write_readback=True,two_processes_same_mac=True,user_intranet=False,npu=False)
     (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n')
     print(json.dumps(summary,ensure_ascii=False,indent=2))

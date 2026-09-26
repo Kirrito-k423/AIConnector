@@ -249,6 +249,9 @@ class RelayTests(unittest.TestCase):
         self.task['artifacts'] = [second]; self.write_inputs(); self.submit(); self.poll('mac-outer')
         self.assertEqual(len(self.ctx['releases']), 2)
         self.assertEqual(len(self.ctx['release_assets']), 3)
+        # Each new asset URL must be downloaded even when its bytes are already cached.
+        downloads=[p for p in self.ctx['gets'] if p.startswith('/assets/')]
+        self.assertEqual(len(downloads),4)  # input upload + peer input + result upload + repeated-run input
 
     def test_wrong_run_artifact_and_missing_upload_key_fail_locally(self):
         path = self.zip_path()

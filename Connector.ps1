@@ -536,14 +536,14 @@ function Write-Bytes([string]$Path,[byte[]]$Data) {
         if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp,$Path,[NullString]::Value) } else { [IO.File]::Move($tmp,$Path) }
     } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
 }
-function Fetch-Artifacts($Artifacts) {
+function Fetch-Artifacts($Artifacts,[bool]$Refresh=$false) {
     $paths=@()
     foreach ($a in $Artifacts) {
         Artifact-Valid $a
         $cache=Join-Path $StateDir 'artifacts'; [IO.Directory]::CreateDirectory($cache)|Out-Null
         $path=Join-Path $cache ($a.sha256+'.zip'); $valid=$false
         if ([IO.File]::Exists($path)) { $bytes=[IO.File]::ReadAllBytes($path); $valid=($bytes.Length -eq $a.bytes -and (Get-Sha256 $bytes) -ceq $a.sha256) }
-        if (-not $valid) {
+        if ($Refresh -or -not $valid) {
             $r=Invoke-WireHttp -Url $a.url -Limit 5242879
             Require-Response $r
             Need ($r.bytes -eq $a.bytes -and $r.sha256 -ceq $a.sha256) 'ARTIFACT_HASH_MISMATCH'
@@ -701,7 +701,8 @@ function Upload-Zip([string]$Path) {
     $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }
     $manifest=@{name=$manifestName;bytes=$bytes.Length;sha256=$sha;url=[string]$asset.browser_download_url}
     if ($script:Relay) { Need ($manifest.url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $identity)+'/'+$name)) 'ARTIFACT_RUN_MISMATCH' }
-    Artifact-Valid $manifest; $null=Fetch-Artifacts @($manifest)
+    # An identical cached ZIP proves content, but not that this new Release URL works.
+    Artifact-Valid $manifest; $null=Fetch-Artifacts @($manifest) $true
     $row.status='confirmed'; $row.manifest=$manifest; Save
     return $manifest
 }
