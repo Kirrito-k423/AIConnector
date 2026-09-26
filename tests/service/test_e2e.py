@@ -199,6 +199,10 @@ class ServiceTests(unittest.TestCase):
                     details['task']=subprocess.run(['powershell.exe','-NoProfile','-Command',f"$env:PSModulePath=$PSHOME+'\\Modules'; Get-ScheduledTaskInfo -TaskName '{name}' | ConvertTo-Json"],capture_output=True,text=True,timeout=20).stdout
                 raise AssertionError(str(e)+' NATIVE_DIAGNOSTICS: '+json.dumps(details))
             self.until(lambda:self.get(node),20)
+            restarted=json.loads(info.read_text())['pid']
+            r=cli('stop');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+            self.until(lambda:json.loads(info.read_text())['pid']!=restarted,140)
+            self.until(lambda:self.get(node),20)
         finally:
             cli('uninstall')
             if info.exists():cli('stop')

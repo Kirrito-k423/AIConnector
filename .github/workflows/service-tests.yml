@@ -31,7 +31,7 @@ jobs:
       - run: npm test
       - name: Build offline Windows delivery
         run: python tools/build_service.py
-      - name: Fresh extraction, real Pi, PowerShell 5.1, reboot and network faults
+      - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
         shell: pwsh
         env:
           PYTHONUTF8: '1'

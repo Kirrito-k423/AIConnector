@@ -2,6 +2,19 @@
 
 更新日期：2026-09-25；下面按日期保留历史证据，当前状态以最新日期为准。
 
+
+## 2026-09-26：后台服务、任务看板与 Pi Runner
+
+实现了两端本机 HTTP 看板、持久化发送/领取/执行/交付账本、独立 Pi 工作进程和用户登录自启。任务通道继续使用公开的 `AIConnector-Relay`，格式与文件命名由程序生成。
+
+- **真实 GitHub 与真实执行：** [Relay Issue #2](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2) 和[由浏览器页面发布的 Issue #3](https://github.com/Kirrito-k423/AIConnector-Relay/issues/3) 各完成 task → accepted → started → result → receipt。Pi 0.87.1 实际调用工具，真实 CPU 子进程计算 `sum=50005000`；返回的 ZIP 分别为 1331 / 1328 字节，两端 SHA-256 一致。[去除本地路径后的证据](docs/evidence/2026-09-26-service-live.json)。
+- **浏览器验收：** 实际打开本机页面、发布第二项任务，看到五阶段时间、事件作者、执行开始/结束、Issue / Release / ZIP 链接；检查任务筛选与空列表，结果最终显示已回执。
+- **凭据：** macOS 钥匙串实际写入、读回与删除合成凭据；Windows DPAPI 在 Windows CI 检查密文文件和回读。发布证据与 ZIP 不含真实凭据。
+- **证据范围：** 实网两端角色运行在同一台 Mac，模型使用受控 API 回复。不是商业模型推理、用户内网 Windows、SSH / NPU 实验或操作系统重新启动验收。进程被杀后的系统拉起与重新开机是不同测试。
+
+安装和可信实验入口的配置见 [SERVICE.md](docs/SERVICE.md)。程序保留未知执行状态，不因重启或失联重新提交实验；人工核对后可交付 blocked 结果。通道回执证明文件到达，不代表科学结论已通过人工验收。
+
+
 ## v0.2.0：任务协议、持久化状态与两端轮询
 
 已发布 [任务交接包 v0.2.0](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.2.0)，代码固定在 `6e510a0269873d9bd608b161b3f924c5e798e6d7`。使用入口见 [两端启动与 AI 接入说明](docs/CONNECTOR.md)，事件字段、因果关系和恢复语义见 [任务协议](docs/PROTOCOL.md)。

@@ -55,8 +55,9 @@ export function run(command,args=[],options={}) {
     let out='',err='',settled=false;
     const child=spawn(command,args,{windowsHide:true,stdio:['pipe','pipe','pipe'],...options});
     const cap=options.cap??1024*1024;
-    child.stdout.on('data',b=>{out=(out+b.toString('utf8')).slice(-cap);});
-    child.stderr.on('data',b=>{err=(err+b.toString('utf8')).slice(-cap);});
+    child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
+    child.stdout.on('data',b=>{out=(out+b).slice(-cap);});
+    child.stderr.on('data',b=>{err=(err+b).slice(-cap);});
     child.on('error',e=>{settled=true;reject(new Error(e.code||'SPAWN_FAILED'));});
     child.on('close',(code,signal)=>{if(!settled) resolve({code,signal,out,err});});
     child.stdin.on('error',()=>{});

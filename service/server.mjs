@@ -36,6 +36,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         try {snapshot=await connector.call('Poll');activity.last_error='';}
         catch(e){activity.last_error=cleanError(e);try{snapshot=await connector.call('Status');}catch{}}
       }
+      if(stopping)return;
       if(Date.now()-lastTick>=c.tickSeconds*1000) {
         lastTick=Date.now();
         for(const draft of Object.values(ledger.submissions)) {
@@ -118,6 +119,13 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'127.0.0.1',resolve);});
   atomic(path.join(c.dataDir,'service-info.json'),JSON.stringify({pid:process.pid,url:origin,started_at:now()}));
   const interval=setInterval(()=>void tick(),1000);void tick();
-  const close=async()=>{stopping=true;clearInterval(interval);await new Promise(resolve=>server.close(resolve));await connector.tail;unlock();};
+  let closePromise;
+  const close=()=>closePromise??=(async()=>{
+    stopping=true;clearInterval(interval);await new Promise(resolve=>server.close(resolve));
+    // An in-flight tick may enqueue more transport work after its current call.
+    // Keep ownership until that entire tick and its subprocesses have drained.
+    while(busy)await new Promise(resolve=>setTimeout(resolve,25));
+    await connector.tail;unlock();
+  })();
   return {server,close,status,token,url:origin,config:c};
 }

@@ -8,7 +8,7 @@
 
 1. 解压到固定目录。Windows 双击 `Open-Windows-Dashboard.cmd`；Mac 双击 `Open-Mac-Dashboard.command`。不要在 ZIP 预览里运行。
 2. 页面“连接设置”填写 GitHub Token；Windows 再填写 API Key、协议、Base URL 和模型 ID。模型必须支持工具调用。留空的密钥保留旧值。
-3. 准备让它长期运行时，运行 `Install-Windows-Service.cmd` / `Install-Mac-Service.command`。Windows 注册当前用户登录时启动的计划任务；Mac 注册用户 launchd。两者退出后由系统重启。**这是用户登录会话服务，Windows 注销后不继续运行。**关闭浏览器不会停止服务。
+3. 准备让它长期运行时，运行 `Install-Windows-Service.cmd` / `Install-Mac-Service.command`。Windows 注册当前用户登录时启动的计划任务，并每分钟检查一次是否需要拉起，已有进程运行时不重复启动；Mac 注册用户 launchd。两者退出后由系统重启。**这是用户登录会话服务，Windows 注销后不继续运行。**关闭浏览器不会停止服务。
 4. Mac 页面“发布实验任务”已有 CPU 校验示例，直接发布即可。Windows 的默认入口 `local-smoke` 会算出 `sum=50005000`，然后提交 `metrics.json`、执行证据和输出 ZIP。Mac 校验产物后自动发回执。
 
 Windows 如遇 RemoteSigned 下载标记，启动器在比对包内固定 SHA-256 后，只询问一次是否信任这两个脚本；同意后仅移除这两个文件的标记。AllSigned / 组织强制策略会明确阻止启动，程序不会修改或绕过执行策略。Mac 若被 Gatekeeper 拦截，请按组织允许的方式批准下载应用，程序不移除系统安全策略。

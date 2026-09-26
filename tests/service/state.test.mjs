@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {save,read,lock,atomic,safeEnv} from '../../service/common.mjs';
+import {save,read,lock,atomic,safeEnv,run} from '../../service/common.mjs';
 import {Runner} from '../../service/runner.mjs';
 import {storeSecrets,loadSecrets} from '../../service/vault.mjs';
 
@@ -29,4 +29,8 @@ test('experiment environment preserves OS paths but excludes API and cloud crede
  const saved=process.env.AICONNECTOR_AI_API_KEY;process.env.AICONNECTOR_AI_API_KEY='PRIVATE_FIXTURE';
  try{assert.equal(safeEnv().AICONNECTOR_AI_API_KEY,undefined);assert.equal(safeEnv().PATH||safeEnv().Path,process.env.PATH||process.env.Path);}
  finally{if(saved===undefined)delete process.env.AICONNECTOR_AI_API_KEY;else process.env.AICONNECTOR_AI_API_KEY=saved;}
+});
+test('Chinese output survives UTF-8 characters split across process chunks',async()=>{
+ const r=await run(process.execPath,['-e',"const b=Buffer.from('中文结果');process.stdout.write(b.subarray(0,1));setTimeout(()=>process.stdout.write(b.subarray(1)),50)"]);
+ assert.equal(r.code,0);assert.equal(r.out,'中文结果');
 });

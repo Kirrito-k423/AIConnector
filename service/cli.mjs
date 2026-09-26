@@ -24,8 +24,6 @@ async function install(c){
   // Transfer an existing foreground/background instance to the OS supervisor.
   if(await health(c)) {
     await shutdown(c);
-    for(let i=0;i<180&&fs.existsSync(path.join(c.dataDir,'service.lock'));i++)await new Promise(r=>setTimeout(r,250));
-    need(!fs.existsSync(path.join(c.dataDir,'service.lock')),'SERVICE_STOP_TIMEOUT');
   }
   if(process.platform==='win32'){
     const r=await run(c.powershell,['-NoProfile','-NonInteractive','-File',path.join(ROOT,'service','install-windows.ps1'),'-NodeExe',process.execPath,'-Cli',cli,'-Config',file,'-Name',tag(c)]);
@@ -49,6 +47,9 @@ async function shutdown(c) {
   const token=fs.readFileSync(path.join(c.dataDir,'dashboard.token'),'utf8');
   const response=await fetch(`http://127.0.0.1:${c.port}/api/shutdown`,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(3000)});
   need(response.ok,'SERVICE_STOP_FAILED');
+  await response.json();
+  for(let i=0;i<180&&fs.existsSync(path.join(c.dataDir,'service.lock'));i++)await new Promise(r=>setTimeout(r,250));
+  need(!fs.existsSync(path.join(c.dataDir,'service.lock')),'SERVICE_STOP_TIMEOUT');
 }
 async function background(c){
   const infoFile=path.join(c.dataDir,'service-info.json');
