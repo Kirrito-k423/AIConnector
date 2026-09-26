@@ -5,6 +5,9 @@ import {ROOT,now,id,sha,read,save,atomic,need,loadConfig,lock,cleanError} from '
 import {Connector} from './connector.mjs';
 import {Runner} from './runner.mjs';
 import {loadSecrets,storeSecrets} from './vault.mjs';
+import {snapshotAgent} from './agent-config.mjs';
+import {WatchClient,validateWatchProfile} from './watch.mjs';
+import {webTools} from './web-tools.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
 const publicJob=j=>({key:j.key,state:j.state,error:j.error,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,artifact:j.artifact});
@@ -54,7 +57,8 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   }
   function status() {
     return {schema:'aiconnector.dashboard.v1',service:{...activity,transport:connector.activity,runner_enabled:c.runner.enabled,runner_error:ledger.runner_error||'',poll_seconds:c.tickSeconds,repository:c.connector.repository,
-      github_configured:Boolean(secrets.githubToken),model_configured:Boolean(c.runner.model&&secrets.apiKey),model:c.runner.model||null},
+      github_configured:Boolean(secrets.githubToken),model_configured:Boolean(c.runner.model&&secrets.apiKey),model:c.runner.model||null,
+      runner:{agent:c.runner.agent,profiles:c.runner.profiles,enabled:c.runner.enabled,timeoutSeconds:c.runner.timeoutSeconds,maxTurns:c.runner.maxTurns,proxy:c.runner.proxy||'system'}},
       channel:snapshot,jobs:Object.values(ledger.jobs).map(publicJob),submissions:Object.values(ledger.submissions).map(d=>({key:d.key,task:d.task,state:d.state,error:d.error,created_at:d.created_at}))};
   }
   const origin=`http://127.0.0.1:${c.port}`;
@@ -96,11 +100,31 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       if(url.pathname==='/api/settings') {
         need(typeof data.githubToken==='string'&&typeof data.apiKey==='string','INVALID_CREDENTIALS');
         const updated={...secrets};if(data.githubToken)updated.githubToken=data.githubToken;if(data.apiKey)updated.apiKey=data.apiKey;
-        const disk=JSON.parse(fs.readFileSync(c.file,'utf8'));disk.runner??={enabled:false,profiles:{}};disk.runner.model=data.model||disk.runner.model;
+        const disk=JSON.parse(fs.readFileSync(c.file,'utf8'));disk.runner??={enabled:false,profiles:{}};if(data.model)disk.runner.model={...disk.runner.model,...data.model};
         // Validate a non-secret candidate before touching the active config or vault.
         const tmp=c.file+'.candidate.local.json';atomic(tmp,JSON.stringify(disk));try{loadConfig(tmp);}finally{fs.unlinkSync(tmp);}
         await storeSecrets(c,updated);atomic(c.file,JSON.stringify(disk,null,2)+'\n');c.runner.model=disk.runner.model;
         Object.assign(secrets,updated);lastTick=0;nextPoll=0;reply(200,{saved:true});return;
+      }
+      if(url.pathname==='/api/agent-settings') {
+        const disk=JSON.parse(fs.readFileSync(c.file,'utf8'));disk.runner??={};
+        need(data.agent&&typeof data.enabled==='boolean'&&data.profiles&&typeof data.profiles==='object'&&!Array.isArray(data.profiles),'INVALID_AGENT_SETTINGS');
+        disk.runner={...disk.runner,agent:data.agent,enabled:data.enabled,profiles:data.profiles,timeoutSeconds:data.timeoutSeconds,maxTurns:data.maxTurns};
+        if(disk.runner.model&&data.modelLimits)disk.runner.model={...disk.runner.model,...data.modelLimits};
+        for(const p of Object.values(disk.runner.profiles))if(p.kind==='simplehtmlwatch')validateWatchProfile(p);
+        const tmp=c.file+'.candidate.local.json';let candidate;
+        atomic(tmp,JSON.stringify(disk));try{candidate=loadConfig(tmp);snapshotAgent(candidate.runner.agent,path.dirname(c.file));}finally{fs.unlinkSync(tmp);}
+        atomic(c.file,JSON.stringify(disk,null,2)+'\n');c.runner=candidate.runner;lastTick=0;reply(200,{saved:true,applies_to:'next_claim'});return;
+      }
+      if(url.pathname==='/api/agent-check') {
+        const checks={};
+        try{const a=snapshotAgent(c.runner.agent,path.dirname(c.file));checks.context={ok:true,sha256:a.contextDigest,files:a.contexts.map(f=>f.name)};}catch(e){checks.context={ok:false,error:cleanError(e)};}
+        if(c.runner.agent.simpleHtmlWatch.enabled) {
+          try{const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();checks.simpleHtmlWatch={ok:true,observed_at:env.observed_at,ready:env.ready,ready_is_not_npu_idle:true};}catch(e){checks.simpleHtmlWatch={ok:false,error:cleanError(e)};}
+        }else checks.simpleHtmlWatch={enabled:false};
+        if(data.webUrl&&c.runner.agent.web.enabled){try{const tools=webTools(c.runner.agent.web);const value=await tools[0].execute('',{url:data.webUrl});checks.web={ok:true,result:JSON.parse(value.content[0].text)};}catch(e){checks.web={ok:false,error:cleanError(e)};}}
+        else checks.web={enabled:c.runner.agent.web.enabled,tested:false};
+        reply(200,{checked_at:now(),checks});return;
       }
       if(url.pathname==='/api/resolve-unknown') {
         need(c.node==='windows-inner'&&data.remoteChecked===true,'EXECUTION_CHECK_REQUIRED');

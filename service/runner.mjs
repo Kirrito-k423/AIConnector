@@ -3,6 +3,8 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {zipSync,strToU8} from 'fflate';
 import {ROOT,sha,now,save,read,atomic,alive,need,safeEnv,cleanError} from './common.mjs';
+import {agentConfig,snapshotAgent} from './agent-config.mjs';
+import {validateWatchProfile} from './watch.mjs';
 
 export class Runner {
   constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});}
@@ -20,6 +22,7 @@ export class Runner {
     const p=this.c.runner.profiles[task.environment.target];
     need(p&&p.entry===task.invocation.entry,'PROFILE_NOT_ALLOWED');
     need(p.repository===task.code.repository,'PROFILE_REPOSITORY_MISMATCH');
+    if(p.kind==='simplehtmlwatch'){need(this.c.runner.agent?.simpleHtmlWatch.enabled,'WATCH_DISABLED');validateWatchProfile(p);}
     need(task.invocation.arguments.length===0||p.allowTaskArguments===true,'TASK_ARGUMENTS_DISABLED');return p;
   }
   async tick(snapshot) {
@@ -29,8 +32,8 @@ export class Runner {
     if(Object.values(this.jobs).some(j=>['launching','running','claiming','unknown'].includes(j.state)))return;
     for(const row of snapshot.runs||[]) {
       if(row.phase!=='accepted'||row.error||this.jobs[row.key])continue;
-      let profile;
-      try{profile=this.profile(row.task);}catch(e){this.ledger.runner_error=cleanError(e);continue;}
+      let profile,agent;
+      try{profile=this.profile(row.task);agent=snapshotAgent(agentConfig(this.c.runner.agent,this.c.runner.model),path.dirname(this.c.file));}catch(e){this.ledger.runner_error=cleanError(e);continue;}
       const dir=path.join(this.c.dataDir,'jobs',sha(row.key));
       const job={key:row.key,dir,state:'claiming',created_at:now(),error:''};this.jobs[row.key]=job;this.persist();
       try {
@@ -42,11 +45,14 @@ export class Runner {
           const src=path.join(this.c.stateDir,'artifacts',artifact.sha256+'.zip'), bytes=fs.readFileSync(src);
           need(bytes.length===artifact.bytes&&sha(bytes)===artifact.sha256,'INPUT_HASH_MISMATCH');atomic(path.join(dir,'inputs',artifact.name),bytes);
         }
-        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
+        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
         job.state='launching';job.claimed_at=now();this.persist();
         const proxy=this.c.runner.proxy||'system';const modelEnv={};
         if(proxy!=='direct')for(const name of ['HTTP_PROXY','HTTPS_PROXY'])if(proxy!=='system'||process.env[name])modelEnv[name]=proxy==='system'?process.env[name]:proxy;
-        modelEnv.NO_PROXY=process.env.NO_PROXY||'127.0.0.1,localhost';modelEnv.NODE_USE_ENV_PROXY='1';
+        modelEnv.NO_PROXY=['127.0.0.1','localhost',process.env.NO_PROXY].filter(Boolean).join(',');modelEnv.NODE_USE_ENV_PROXY='1';
+        // Preserve the web channel's system proxy separately from model.proxy.
+        modelEnv.AIC_WEB_ENV_CAPTURED='1';
+        for(const key of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy'])if(process.env[key])modelEnv['AIC_WEB_'+key]=process.env[key];
         const child=spawn(process.execPath,[path.join(ROOT,'service','worker.mjs'),'--work',dir],{detached:true,windowsHide:true,stdio:['pipe','ignore','ignore'],env:safeEnv(modelEnv)});
         child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});

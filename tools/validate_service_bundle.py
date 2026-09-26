@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import zipfile
 
@@ -22,6 +23,11 @@ def validate(archive):
         node=app/'runtime'/('node.exe' if os.name=='nt' else 'node')
         pwsh='powershell.exe' if os.name=='nt' else str(app/'runtime/pwsh/pwsh')
         env=dict(os.environ,AIC_NODE=str(node),AIC_SERVICE_ROOT=str(app),PWSH=pwsh,PYTHONUTF8='1',AICONNECTOR_NO_PAUSE='1')
+        # Run the integration suite against the delivered modules and pinned SDK,
+        # including Windows System32 curl and real automatic context compaction.
+        shutil.copytree(ROOT/'tests/service',app/'tests/service',ignore=shutil.ignore_patterns('__pycache__'))
+        cases=sorted(str(p) for p in (app/'tests/service').glob('*.test.mjs'))
+        subprocess.run([str(node),'--test','--test-concurrency=1',*cases],cwd=app,env=env,check=True)
         # Original source tests, delivered server/worker/Pi/runtime; no npm or installed Node used.
         subprocess.run([os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests/service'),'-p','test_e2e.py','-v'],env=env,check=True)
         if os.name=='nt':

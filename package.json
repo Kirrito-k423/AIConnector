@@ -1,6 +1,6 @@
 {
   "name": "aiconnector-service",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.87.1",
-    "fflate": "0.8.3"
+    "fflate": "0.8.3",
+    "undici": "8.11.2"
   }
 }

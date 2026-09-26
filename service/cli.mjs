@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {spawn} from 'node:child_process';
 import {ROOT,loadConfig,atomic,run,need,sha,read,alive,cleanError} from './common.mjs';
+import {agentConfig} from './agent-config.mjs';
 
 const args=process.argv.slice(2),command=args.shift()||'open';
 const option=(name,fallback)=>{const i=args.indexOf('--'+name);return i<0?fallback:args[i+1];};
@@ -15,7 +16,7 @@ function init(){
   atomic(file,JSON.stringify({schema:'aiconnector.service.v1',node,port:node==='mac-outer'?43110:43111,
     connectorConfig:path.join(ROOT,'connector.config.json'),dataDir:path.join(ROOT,'service-data',node),
     powershell:fs.existsSync(bundled)?bundled:process.platform==='win32'?'powershell.exe':'pwsh',proxy:'system',
-    runner:{enabled:node==='windows-inner',timeoutSeconds:600,maxTurns:8,profiles:{'local-smoke':{kind:'builtin-smoke',entry:'smoke',repository:'aiconnector-builtin',outputs:['metrics.json']}}}
+    runner:{enabled:node==='windows-inner',timeoutSeconds:1800,maxTurns:32,agent:agentConfig(),profiles:{'local-smoke':{kind:'builtin-smoke',entry:'smoke',repository:'aiconnector-builtin',outputs:['metrics.json']}}}
   },null,2)+'\n');
 }
 function tag(c){return 'AIConnector-'+sha(c.dataDir).slice(0,12);}

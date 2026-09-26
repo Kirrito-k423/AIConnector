@@ -1,4 +1,4 @@
-# 后台服务、任务看板与 Pi Runner（0.4.0）
+# 后台服务、任务看板与 Pi Runner（0.5.0）
 
 这版把已有 Issue / Release 通道接到了本机后台服务。Mac 负责发布和收件，Windows 负责自动领取、调用 Pi、执行已配置实验、打包和交付。无需保持 AI IDE 在线。
 
@@ -10,6 +10,7 @@
 2. 页面“连接设置”填写 GitHub Token；Windows 再填写 API Key、协议、Base URL 和模型 ID。模型必须支持工具调用。留空的密钥保留旧值。
 3. 准备让它长期运行时，运行 `Install-Windows-Service.cmd` / `Install-Mac-Service.command`。Windows 注册当前用户登录时启动的计划任务，并每分钟检查一次是否需要拉起，已有进程运行时不重复启动；Mac 注册用户 launchd。两者退出后由系统重启。**这是用户登录会话服务，Windows 注销后不继续运行。**关闭浏览器不会停止服务。
 4. Mac 页面“发布实验任务”已有 CPU 校验示例，直接发布即可。Windows 的默认入口 `local-smoke` 会算出 `sum=50005000`，然后提交 `metrics.json`、执行证据和输出 ZIP。Mac 校验产物后自动发回执。
+5. Windows 页面“Pi 环境与工具”配置全局说明、simpleHtmlWatch、网页工具和上下文压缩，保存后点击“检查已保存配置”。完整步骤及 Issue #6 的网关兼容说明见 [Pi 集成 SOP](PI-INTEGRATION.md)。
 
 Windows 如遇 RemoteSigned 下载标记，启动器在比对包内固定 SHA-256 后，只询问一次是否信任这两个脚本；同意后仅移除这两个文件的标记。AllSigned / 组织强制策略会明确阻止启动，程序不会修改或绕过执行策略。Mac 若被 Gatekeeper 拦截，请按组织允许的方式批准下载应用，程序不移除系统安全策略。
 
@@ -49,7 +50,7 @@ service-data/windows-inner/
 
 ## 接入自己的实验 / SSH
 
-Pi 通过官方 SDK 在独立子进程内运行，只有 `run_experiment` 与 `submit_summary` 两个工具。前者执行本机已配置入口；后者总结已有证据。Pi 不能从公开评论安装插件、加载仓库扩展或任意修改执行命令。默认不开放 IDE 的完整 shell/edit 能力。
+Pi 通过官方 SDK 在独立子进程内运行。`run_experiment` 执行本机已配置入口，`submit_summary` 总结已有证据，`get_run_state` 在压缩后恢复任务事实。开启本机配置后还可使用 simpleHtmlWatch 和网页工具。Pi 不能从公开评论安装插件、加载仓库扩展或任意修改执行命令。默认不开放 IDE 的完整 shell/edit 能力。
 
 在 Windows 本机配置 `runner.profiles`，环境名称映射到明确入口。例如本地 Python 程序：
 
@@ -72,7 +73,7 @@ Pi 通过官方 SDK 在独立子进程内运行，只有 `run_experiment` 与 `s
 
 受信任入口通过 `AICONNECTOR_TASK_FILE`、`AICONNECTOR_INPUT_DIR` 和 `AICONNECTOR_RUN_DIR` 读取任务、输入 ZIP、写回结果。显式列入 `outputs` 的文件必须位于 `AICONNECTOR_RUN_DIR` 根目录，不能是符号链接；总大小有界。只有这些文件及受限长度的 stdout/stderr、结构化执行证据会进入公共 ZIP。GitHub/API 凭据不会传给实验进程。
 
-SSH 可将 `argv` 指向你本机维护的 SSH 包装程序，使用 Windows OpenSSH 的主机别名与密钥认证，连接无公网的 NPU 服务器。包装程序负责远端固定工作目录、版本检查、运行与收集文件，不能在重连时盲目重新提交。这一版没有伪造 NPU 结果，**未实现通用 SSH 远端作业调度器或失联进程重附着**；SSH 退出/超时无法证明远端任务结束时，结果必须标记 blocked 并人工核对。默认 smoke 完全不访问 SSH/NPU。
+SSH 可使用 [simpleHtmlWatch 入口](PI-INTEGRATION.md)，由其管理远端长任务、日志和结果；也可将 `argv` 指向你本机维护的 SSH 包装程序。后者负责远端固定工作目录、版本检查、运行与收集文件，不能在重连时盲目重新提交。SSH 退出/超时无法证明远端任务结束时，结果必须标记 blocked 并人工核对。默认 smoke 完全不访问 SSH/NPU。
 
 ## 恢复语义
 

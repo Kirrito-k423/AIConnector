@@ -13,7 +13,7 @@ import zipfile
 ROOT=Path(__file__).resolve().parents[1]
 FILES=['Connector.ps1','connector.config.json','package.json','package-lock.json','CONTEXT.md',
        'Open-Windows-Dashboard.cmd','Install-Windows-Service.cmd','Prepare-Windows-Service.cmd',
-       'Open-Mac-Dashboard.command','Install-Mac-Service.command','docs/SERVICE.md','docs/PROTOCOL.md','docs/RELAY.md']
+       'Open-Mac-Dashboard.command','Install-Mac-Service.command','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/PROTOCOL.md','docs/RELAY.md']
 
 def build(output,node,pwsh=None):
     system='windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux'
@@ -38,7 +38,7 @@ def build(output,node,pwsh=None):
     if system=='macos':
         if not pwsh:raise ValueError('Mac portable delivery requires --pwsh-home')
         for p in pwsh.rglob('*'):
-            if p.is_file():payload['runtime/pwsh/'+p.relative_to(pwsh).as_posix()]=p
+            if p.is_file() and not p.name.endswith(('.tar.gz','.zip')):payload['runtime/pwsh/'+p.relative_to(pwsh).as_posix()]=p
     with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6)as z:
         for name,src in sorted(payload.items()):
             data=src.read_bytes()
@@ -53,7 +53,7 @@ def build(output,node,pwsh=None):
             executable=name.endswith('.command')or name in ['runtime/node','runtime/pwsh/pwsh']or bool(src.stat().st_mode&0o111)
             info.create_system=3;info.external_attr=(0o100755 if executable else 0o100644)<<16
             z.writestr(info,data)
-        manifest=dict(schema='aiconnector.package.v1',version='0.4.0',platform=system,arch=arch,
+        manifest=dict(schema='aiconnector.package.v1',version=json.loads((ROOT/'package.json').read_text())['version'],platform=system,arch=arch,
                       node=subprocess.check_output([str(node),'--version'],text=True).strip(),pi='0.87.1',sha256=records)
         z.writestr('AIConnector-Service/package-manifest.json',json.dumps(manifest,indent=2)+'\n')
     digest=hashlib.sha256(target.read_bytes()).hexdigest()

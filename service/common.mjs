@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
+import {agentConfig} from './agent-config.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const now = () => new Date().toISOString();
@@ -97,5 +98,6 @@ export function loadConfig(file) {
     need(!u.username&&!u.password&&!u.search&&!u.hash,'INVALID_MODEL_URL');
     need(typeof m.id==='string'&&m.id.length>0,'INVALID_MODEL_ID');
   }
+  c.runner.agent=agentConfig(c.runner.agent,c.runner.model);
   return c;
 }
