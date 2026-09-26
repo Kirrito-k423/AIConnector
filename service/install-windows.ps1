@@ -1,5 +1,6 @@
 param([string]$NodeExe,[string]$Cli,[string]$Config,[string]$Name)
 $ErrorActionPreference='Stop'
+$env:PSModulePath=$PSHOME+'\Modules;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0\Modules'
 foreach($value in @($NodeExe,$Cli,$Config)) { if($value.Contains('"')) {throw 'INVALID_PATH'} }
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action=New-ScheduledTaskAction -Execute $NodeExe -Argument ('"'+$Cli+'" start --config "'+$Config+'"')

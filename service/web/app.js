@@ -1,6 +1,6 @@
 const $=id=>document.getElementById(id);
-const hash=new URLSearchParams(location.hash.slice(1));
-if(hash.has('token')){sessionStorage.setItem('aic-token',hash.get('token'));history.replaceState(null,'',location.pathname);}
+function adoptToken(){const hash=new URLSearchParams(location.hash.slice(1));if(hash.has('token')){sessionStorage.setItem('aic-token',hash.get('token'));history.replaceState(null,'',location.pathname);}}
+adoptToken();window.addEventListener('hashchange',()=>{adoptToken();void refresh();});
 let state,selected='',rows=[];
 const labels={task:'已发布',accepted:'接收端已校验',started:'已领取',result:'结果已发布',receipt:'已回执',claiming:'登记领取',launching:'启动执行器',running:'Pi 处理中',delivering:'交付 ZIP 中',submitted:'等待回执',confirmed:'已回执',blocked:'需要处理',unknown:'执行状态未知',pending:'等待发布',queued:'已加入发送队列'};
 const date=t=>t?new Date(typeof t==='number'?t*1000:t).toLocaleString('zh-CN',{hour12:false}):'尚未发生';
