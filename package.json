@@ -1,0 +1,17 @@
+{
+  "name": "aiconnector-service",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "start": "node service/cli.mjs start",
+    "test": "node --test --test-concurrency=1 tests/service/*.test.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "fflate": "0.8.3"
+  }
+}
