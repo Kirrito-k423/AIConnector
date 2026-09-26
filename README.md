@@ -4,10 +4,9 @@
 
 [下载任务交接包 v0.3.0-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.3.0-rc.1/AIConnector.zip) · [两端启动与 AI 接入说明](docs/CONNECTOR.md) · [专用运行仓库规则](docs/RELAY.md) · [任务协议](docs/PROTOCOL.md)
 
-
 v0.3.0 的任务通道默认迁移到专用公开仓库 [AIConnector-Relay](https://github.com/Kirrito-k423/AIConnector-Relay)：一项任务一个 Issue，一次运行一个 Release，标题、协议元数据和 ZIP 命名均由程序生成。旧版下载仍保留旧通道；升级须使用新包并保留旧状态。
 
-解压后，Windows 运行 `Start-Windows-Connector.cmd`，Mac 运行 `Start-Mac-Connector.command`。Token 在各自终端隐藏输入。默认复用已验证的 GitHub Issue / Release 通道；重启时保留 `connector-state`，AI 通过本地 JSON 和 `Submit / Claim / Complete` 命令接入。详细操作、未知写入恢复和容量证据边界见上面的说明。
+解压后，Windows 运行 `Start-Windows-Connector.cmd`，Mac 运行 `Start-Mac-Connector.command`。Token 在各自终端隐藏输入。默认复用已验证的 GitHub Issue / Release 通道；重启时保留 `connector-state-relay`（旧通道仍保留 `connector-state`），AI 通过本地 JSON 和 `Submit / Claim / Complete` 命令接入。详细操作、未知写入恢复和容量证据边界见上面的说明。
 
 以下是独立的 v0.1.5 通道检查包，适合首次确认网络能力。
 

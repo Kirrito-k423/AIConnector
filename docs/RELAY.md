@@ -115,7 +115,7 @@ pwsh -NoProfile -File ./Connector.ps1 -Node mac-outer -Action Upload -Key dataco
 
 ```bat
 REM Windows：Claim 后上传结果，将返回的清单放入 result.artifacts
-Connector-Windows.cmd -Action Upload -Key datacopy-a3/1/run-001 -File result.zip -PromptToken
+Connector-Windows.cmd -PromptToken -Action Upload -Key datacopy-a3/1/run-001 -File result.zip
 ```
 
 首次输入上传可以先创建 Release；没有附件时发布 task 也会创建对应 Release。输入和结果共享该次运行的 Release。返回的 `name / bytes / sha256 / url` 清单放入协议载荷。程序拒绝引用其他运行、其他节点方向、其他仓库或名称与摘要不一致的附件。相同文件在同一运行去重；另一次运行有自己的 URL。

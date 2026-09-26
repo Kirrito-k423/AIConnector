@@ -15,7 +15,7 @@ powershell.exe -NoLogo -NoProfile -Command "$env:PSModulePath=$PSHOME+'\Modules'
 set "AICONNECTOR_EXIT=%ERRORLEVEL%"
 if not "%AICONNECTOR_EXIT%"=="0" goto diagnose
 
-echo Running the connector action. Durable state is kept in connector-state.
+echo Running the connector action. Durable state is kept in the configured state directory.
 if /I "%~1"=="-PromptToken" goto interactive
 powershell.exe -NoLogo -NoProfile -File "%AICONNECTOR_SCRIPT%" -Node windows-inner %* >"%AICONNECTOR_STARTUP_LOG%" 2>&1
 set "AICONNECTOR_EXIT=%ERRORLEVEL%"
@@ -30,7 +30,7 @@ set "AICONNECTOR_EXIT=%ERRORLEVEL%"
 if not "%AICONNECTOR_EXIT%"=="0" goto diagnose
 type "%AICONNECTOR_STARTUP_LOG%"
 echo.
-echo Connector command completed. See connector-state\windows-inner\status.md.
+echo Connector command completed. Default Relay status: connector-state-relay\windows-inner\status.md.
 goto finish
 
 :diagnose
