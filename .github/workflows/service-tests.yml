@@ -10,6 +10,15 @@ on:
 permissions:
   contents: read
 jobs:
+  windows-runtime-diagnostic:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - run: node tools/diagnose_windows_runtime.mjs
   windows-service:
     runs-on: windows-latest
     timeout-minutes: 25
@@ -18,8 +27,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.14.0'
-      - name: Diagnose native and isolated PowerShell startup
-        run: node tools/diagnose_windows_runtime.mjs
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
       - run: npm test
       - name: Build offline Windows delivery
