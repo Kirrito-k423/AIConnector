@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {ROOT, run, atomic, id, need, safeEnv,now} from './common.mjs';
+import {ROOT, run, atomic, id, need,now} from './common.mjs';
 
 export class Connector {
   constructor(config,secrets={}) {this.c=config;this.secrets=secrets;this.tail=Promise.resolve();}
@@ -13,7 +13,10 @@ export class Connector {
       if(key)args.push('-Key',key); if(file)args.push('-File',file);
       try {
         const token=this.secrets.githubToken||process.env[this.c.connector.token_env]||'';
-        const result=await run(this.c.powershell,args,{env:safeEnv({[this.c.connector.token_env]:token})});
+        // PowerShell/.NET needs the native Windows environment (e.g. windir and
+        // ProgramData). This is our trusted transport, not an experiment tool.
+        const env={...process.env,[this.c.connector.token_env]:token};delete env.PSModulePath;
+        const result=await run(this.c.powershell,args,{env});
         const values=result.out.split(/\r?\n/).filter(x=>x.startsWith('{')).map(x=>JSON.parse(x));
         const value=values.at(-1);
         need(value,'CONNECTOR_NO_JSON');

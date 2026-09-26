@@ -127,6 +127,8 @@ class ServiceTests(unittest.TestCase):
     def test_full_loop_input_zip_dashboard_and_restart_after_receipt(self):
         self.launch('mac-outer');self.launch('windows-inner');data=self.publish()
         row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['task']['title'],self.task['title'])
+        self.assertIn('实际 CPU',row['result']['summary'])
         self.assertEqual(row['result']['outcome'],'succeeded');self.assertTrue(row['result']['execution']['started_at'])
         self.assertEqual(len(row['timeline']),5);self.assertEqual(len(self.model.calls),3)
         assets=self.ctx['assets'];self.assertEqual(len(assets),2)

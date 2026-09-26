@@ -68,7 +68,11 @@ export function cleanError(e) {
 }
 export function safeEnv(extra={}) {
   const env={};
-  for(const key of ['PATH','Path','HOME','USERPROFILE','SystemRoot','SYSTEMROOT','TEMP','TMP','TMPDIR','COMSPEC','ComSpec','LOCALAPPDATA','APPDATA','PATHEXT','SSH_AUTH_SOCK','LANG']) if(process.env[key]) env[key]=process.env[key];
+  // Keep OS runtime discovery intact without inheriting API/cloud credentials.
+  const keys=['PATH','Path','HOME','USERPROFILE','SystemRoot','SYSTEMROOT','TEMP','TMP','TMPDIR','COMSPEC','ComSpec','LOCALAPPDATA','APPDATA','PATHEXT','SSH_AUTH_SOCK','LANG',
+    'windir','WINDIR','SystemDrive','ALLUSERSPROFILE','ProgramData','ProgramFiles','ProgramFiles(x86)','ProgramW6432','CommonProgramFiles','CommonProgramFiles(x86)','CommonProgramW6432',
+    'COMPUTERNAME','USERNAME','USERDOMAIN','USERDOMAIN_ROAMINGPROFILE','HOMEDRIVE','HOMEPATH','OS','PROCESSOR_ARCHITECTURE','PROCESSOR_IDENTIFIER','PROCESSOR_LEVEL','PROCESSOR_REVISION','NUMBER_OF_PROCESSORS','PUBLIC','SESSIONNAME'];
+  for(const key of keys)if(process.env[key])env[key]=process.env[key];
   return {...env,...extra};
 }
 export function loadConfig(file) {

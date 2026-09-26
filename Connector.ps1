@@ -10,6 +10,9 @@ param(
 )
 $ErrorActionPreference='Stop'
 $script:Utf8=New-Object Text.UTF8Encoding($false)
+# JSON is consumed by Node/Python as UTF-8, including on Windows PowerShell 5.1.
+[Console]::OutputEncoding=$script:Utf8
+$OutputEncoding=$script:Utf8
 Add-Type -AssemblyName System.Net.Http
 $root=[IO.Path]::GetDirectoryName($PSCommandPath)
 if (-not $Config) { $Config=Join-Path $root 'connector.config.json' }
