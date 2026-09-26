@@ -100,7 +100,8 @@ class ServiceTests(unittest.TestCase):
         try:
             with urllib.request.urlopen(request,timeout=3) as r:return json.load(r)
         except (ConnectionError,urllib.error.URLError) as e:
-            if isinstance(e,urllib.error.HTTPError):raise
+            if isinstance(e,urllib.error.HTTPError):
+                e.reason=e.read().decode();e.close();raise
             return None
     def until(self,fn,seconds=100):
         end=time.monotonic()+seconds

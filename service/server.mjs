@@ -102,7 +102,10 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       }
       if(url.pathname==='/api/resolve-unknown') {
         need(c.node==='windows-inner'&&data.remoteChecked===true,'EXECUTION_CHECK_REQUIRED');
-        need(!busy,'SERVICE_BUSY');runner.resolveUnknown(data.key);lastTick=0;reply(200,{resolved:true});return;
+        // resolveUnknown is synchronous and only touches unknown jobs, which no
+        // pending transport operation can be delivering. Do not reject UI clicks
+        // just because an unrelated poll is awaiting its HTTP response.
+        runner.resolveUnknown(data.key);lastTick=0;reply(200,{resolved:true});return;
       }
       if(url.pathname==='/api/poll') {
         // Wake the local scheduler; Connector still enforces its persisted cooldown.
