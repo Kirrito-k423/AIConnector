@@ -2,6 +2,11 @@ name: Service and portable package acceptance
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional public candidate tag to download and verify
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -26,3 +31,10 @@ jobs:
         with:
           name: tested-service-windows-x64
           path: dist/service/*
+      - name: Public release download and fresh installation acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python tools/validate_service_release.py $env:RELEASE_TAG
