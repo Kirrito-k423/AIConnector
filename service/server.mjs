@@ -52,7 +52,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
     finally{busy=false;activity.busy=false;}
   }
   function status() {
-    return {schema:'aiconnector.dashboard.v1',service:{...activity,runner_enabled:c.runner.enabled,runner_error:ledger.runner_error||'',poll_seconds:c.tickSeconds,repository:c.connector.repository,
+    return {schema:'aiconnector.dashboard.v1',service:{...activity,transport:connector.activity,runner_enabled:c.runner.enabled,runner_error:ledger.runner_error||'',poll_seconds:c.tickSeconds,repository:c.connector.repository,
       github_configured:Boolean(secrets.githubToken),model_configured:Boolean(c.runner.model&&secrets.apiKey),model:c.runner.model||null},
       channel:snapshot,jobs:Object.values(ledger.jobs).map(publicJob),submissions:Object.values(ledger.submissions).map(d=>({key:d.key,task:d.task,state:d.state,error:d.error,created_at:d.created_at}))};
   }

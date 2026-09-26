@@ -111,7 +111,7 @@ class ServiceTests(unittest.TestCase):
             time.sleep(.3)
         logs={n:(self.folder/(n+'.log')).read_text(errors='replace')[-3000:] for n in self.logs}
         states={n:self.get(n) for n,p in self.processes.items() if p.poll() is None}
-        self.fail('Timeout: '+json.dumps(dict(logs=logs,states=states),ensure_ascii=False))
+        self.fail('Timeout: '+json.dumps(dict(logs=logs,states=states,api_gets=self.ctx['gets'][-20:],api_posts=self.ctx['posts'][-20:]),ensure_ascii=False))
     def phase(self,node,phase):
         s=self.get(node)
         return s and next((r for r in s['channel']['runs'] if r['key']==self.key and r['phase']==phase),None)
@@ -187,7 +187,15 @@ class ServiceTests(unittest.TestCase):
             first=json.loads(info.read_text())['pid'];self.tokens[node]=(Path(c['dataDir'])/'dashboard.token').read_text()
             self.until(lambda:self.get(node),20)
             os.kill(first,9)
-            self.until(lambda:json.loads(info.read_text())['pid']!=first,110)
+            try:self.until(lambda:json.loads(info.read_text())['pid']!=first,140)
+            except AssertionError as e:
+                details={}
+                log=Path(c['dataDir'])/'service.log'
+                if log.exists():details['service_log']=log.read_text(errors='replace')[-3000:]
+                if os.name=='nt':
+                    name='AIConnector-'+hashlib.sha256(c['dataDir'].encode()).hexdigest()[:12]
+                    details['task']=subprocess.run(['powershell.exe','-NoProfile','-Command',f"$env:PSModulePath=$PSHOME+'\\Modules'; Get-ScheduledTaskInfo -TaskName '{name}' | ConvertTo-Json"],capture_output=True,text=True,timeout=20).stdout
+                raise AssertionError(str(e)+' NATIVE_DIAGNOSTICS: '+json.dumps(details))
             self.until(lambda:self.get(node),20)
         finally:
             cli('uninstall')

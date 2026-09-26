@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.14.0'
+      - name: Diagnose native and isolated PowerShell startup
+        run: node tools/diagnose_windows_runtime.mjs
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
       - run: npm test
       - name: Build offline Windows delivery

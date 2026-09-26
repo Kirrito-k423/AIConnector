@@ -82,4 +82,8 @@ try {
       if(process.platform==='win32')await run('rundll32.exe',['url.dll,FileProtocolHandler',url]);else if(process.platform==='darwin')await run('/usr/bin/open',[url]);else console.log('服务已启动。访问凭据位于本地 dashboard.token。');
     }
   }else throw new Error('UNKNOWN_COMMAND');
-}catch(e){console.error(cleanError(e));process.exitCode=1;}
+}catch(e){
+  const code=cleanError(e);console.error(code);
+  try {const c=loadConfig(file);fs.mkdirSync(c.dataDir,{recursive:true});fs.appendFileSync(path.join(c.dataDir,'service.log'),new Date().toISOString()+' '+code+'\n',{mode:0o600});}catch{}
+  process.exitCode=1;
+}
