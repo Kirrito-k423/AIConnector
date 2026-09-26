@@ -231,7 +231,7 @@ Windows 验收包含两层：
 
 Issue #6 的 Windows 报告确认现有回环模型网关与 Relay 轮询工作；本次保留该配置，并新增本地上下文快照、simpleHtmlWatch 工具、独立网页传输与 Pi 自动压缩。
 
-- 本机 Node 集成测试：19 项通过；Windows DPAPI 1 项按平台跳过。使用锁定的真实 Pi SDK，自动产生压缩记录后继续任务，CPU 实验只启动一次。
+- 本机 Node 集成测试：20 项通过；Windows DPAPI 1 项按平台跳过。使用锁定的真实 Pi SDK，自动产生压缩记录后继续任务，CPU 实验只启动一次。
 - 两端服务回归：5 项通过；Windows 启动器 1 项按平台跳过。覆盖输入/结果 ZIP、五阶段回执、主服务重启、网络中断和 worker 异常退出。
 - SHW 受控 HTTP 验收：提交响应丢失后重建客户端只查原任务、Token 轮换、实际版本证据、未知状态、受限 tar 解析与按 outputs 导出。
 - 网页受控 HTTP 验收：Node 与 curl 两种传输，搜索 URL 编码、跨主机重定向拒绝、响应大小上限、不继承业务凭据。

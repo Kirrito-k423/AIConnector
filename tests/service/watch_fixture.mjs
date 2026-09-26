@@ -13,7 +13,7 @@ export function tarBundle(files,kind='0') {
   return gzipSync(Buffer.concat([...chunks,Buffer.alloc(1024)]));
 }
 
-export async function watchFixture({losePost=false,revision='fixture-rev',status='succeeded',exitCode=0}={}) {
+export async function watchFixture({losePost=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false}={}) {
   let posts=0,reads=0,token='watch-one',job;const requests=[];
   const archive=tarBundle({'stdout.log':'fixture server result\n','stderr.log':'','results/aiconnector-revision.txt':revision+'\n','results/metrics.json':'{"fixture":true,"sum":7}','results/not-exported.txt':'PRIVATE_OTHER_FILE'});
   const server=http.createServer(async(req,res)=>{
@@ -25,10 +25,11 @@ export async function watchFixture({losePost=false,revision='fixture-rev',status
     if(u.pathname==='/api/status')return reply({updatedAt:new Date().toISOString(),machines:[{id:'fixture-machine',status:'online'}]});
     if(u.pathname==='/api/tasks/ready')return reply([{id:'fixture-machine',name:'CPU fixture',updatedAt:new Date().toISOString()}]);
     if(u.pathname==='/api/tasks'&&req.method==='POST') {
-      posts++;const data=JSON.parse(body);job={...data,status,exitCode,selectedMachineId:'fixture-machine',createdAt:new Date().toISOString(),finishedAt:new Date().toISOString(),archiveReady:true};
+      posts++;const data=JSON.parse(body);job={...data,status,exitCode,selectedMachineId:'fixture-machine',createdAt:new Date().toISOString(),finishedAt:new Date().toISOString(),archiveReady:!archivePending};
       if(losePost){req.socket.destroy();return;}return reply(job,202);
     }
-    if(u.pathname==='/api/tasks'){reads++;return reply(job||{error:'missing'},job?200:404);}
+    if(u.pathname==='/api/tasks'){reads++;if(archivePending&&reads>=3&&job)job.archiveReady=true;return reply(job||{error:'missing'},job?200:404);}
+    if(u.pathname==='/api/tasks/collect')return reply({error:'结果包正在回收'},502);
     if(u.pathname==='/api/tasks/logs')return reply({stdout:'fixture logs',stderr:''});
     if(u.pathname==='/api/tasks/archive'){res.writeHead(200,{'Content-Type':'application/gzip'});res.end(archive);return;}
     reply({},404);

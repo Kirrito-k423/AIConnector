@@ -38,10 +38,10 @@ export function validateWatchProfile(p) {
 
 export class WatchClient {
   constructor(config,{signal}={}) {this.config=config;this.signal=signal;this.token='';}
-  async call(route,{method='GET',body,maxBytes=1048576,bytes=false}={}) {
+  async call(route,{method='GET',body,maxBytes=1048576,bytes=false,timeoutSeconds=15}={}) {
     for(let attempt=0;attempt<2;attempt++) {
       if(!this.token){const r=await localRequest(this.config.baseUrl+'/',{signal:this.signal});need(r.status===200,'WATCH_UNAVAILABLE');this.token=r.body.toString('utf8').match(/<meta\s+name="watch-token"\s+content="([^"]+)"/)?.[1]||'';need(this.token,'WATCH_TOKEN_MISSING');}
-      const r=await localRequest(this.config.baseUrl+route,{method,body:body===undefined?undefined:JSON.stringify(body),headers:{'X-Watch-Token':this.token,'Content-Type':'application/json'},signal:this.signal,maxBytes});
+      const r=await localRequest(this.config.baseUrl+route,{method,body:body===undefined?undefined:JSON.stringify(body),headers:{'X-Watch-Token':this.token,'Content-Type':'application/json'},signal:this.signal,maxBytes,timeoutSeconds});
       // A rejected token is checked before dispatch in SHW, so only this response can retry POST.
       if(r.status===403&&attempt===0){this.token='';continue;}
       need(r.status>=200&&r.status<300,'WATCH_HTTP_'+r.status);
@@ -82,7 +82,17 @@ export class WatchExecution {
   async collect() {
     const cached=read(path.join(this.dir,'execution.json'));if(cached)return cached;
     let job=await this.status();need(terminal(job),'WATCH_TASK_NOT_FINISHED');
-    if(!job.archiveReady)job=this.remember(await this.client.call('/api/tasks/collect?id='+encodeURIComponent(job.id),{method:'POST'}));
+    if(!job.archiveReady) {
+      try{job=this.remember(await this.client.call('/api/tasks/collect?id='+encodeURIComponent(job.id),{method:'POST',timeoutSeconds:50}));}
+      catch(error){if(this.signal?.aborted||!['WATCH_HTTP_502','HTTP_TIMEOUT','TimeoutError'].includes(error.message)&&error.name!=='TimeoutError')throw error;this.event('server_archive_waiting',{id:job.id});}
+      // SHW marks exit before its automatic collection completes. A concurrent
+      // collect returns 502 while busy; wait for that same archive, never relaunch.
+      const deadline=Date.now()+60000;
+      while(!job.archiveReady&&Date.now()<deadline) {
+        await pause(this.spec.agent.simpleHtmlWatch.pollSeconds*1000,undefined,{signal:this.signal});job=await this.status();
+        need(!job.archiveError,'WATCH_ARCHIVE_FAILED');
+      }
+    }
     need(job.archiveReady,'WATCH_ARCHIVE_NOT_READY');
     const bytes=await this.client.call('/api/tasks/archive?id='+encodeURIComponent(job.id),{bytes:true,maxBytes:5*1024*1024});
     const files=archiveFiles(bytes),revision=files.get('results/aiconnector-revision.txt')?.toString('utf8').trim();

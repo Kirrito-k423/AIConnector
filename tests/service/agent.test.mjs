@@ -59,6 +59,12 @@ test('SHW reconciliation rejects a task ID whose remote command changed',async()
   finally{await fixture.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 
+test('SHW exit preceding automatic archive completion waits for the original archive without relaunch',async()=>{
+  const fixture=await watchFixture({archivePending:true}),dir=temp();fs.mkdirSync(path.join(dir,'work'));
+  try{const w=new WatchExecution(watchSpec(fixture.url,dir),dir);const result=await w.run();assert.equal(result.outcome,'succeeded');assert.equal(fixture.posts,1);assert.ok(fixture.reads>=3);}
+  finally{await fixture.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
 for(const transport of ['node','curl'])test(`web ${transport}: fetch/search, exact redirect grants, size limit and no credential inheritance`,async()=>{
   const requests=[];const server=http.createServer((req,res)=>{requests.push(req);if(req.url==='/redirect'){res.writeHead(302,{Location:'http://localhost:'+server.address().port+'/private'});res.end();return;}res.writeHead(200,{'Content-Type':'text/html'});res.end(req.url==='/big'?'x'.repeat(600000):'<p>公开资料 中文</p><script>UNTRUSTED_SCRIPT</script>');});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
