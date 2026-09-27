@@ -13,7 +13,7 @@ import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
-const publicJob=j=>({key:j.key,state:j.state,error:j.error,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,artifact:j.artifact});
+const publicJob=j=>({key:j.key,state:j.state,error:j.error,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact});
 async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));

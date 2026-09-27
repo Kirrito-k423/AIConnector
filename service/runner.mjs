@@ -66,7 +66,15 @@ export class Runner {
         // Preserve the web channel's system proxy separately from model.proxy.
         modelEnv.AIC_WEB_ENV_CAPTURED='1';
         for(const key of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy'])if(process.env[key])modelEnv['AIC_WEB_'+key]=process.env[key];
-        const child=spawn(process.execPath,[path.join(ROOT,'service','worker.mjs'),'--work',dir],{detached:true,windowsHide:true,stdio:['pipe','ignore','ignore'],env:safeEnv(modelEnv)});
+        const child=spawn(process.execPath,[path.join(ROOT,'service','worker.mjs'),'--work',dir],{detached:true,windowsHide:true,stdio:['pipe','ignore','pipe'],env:safeEnv(modelEnv)});
+        let stderr='';child.stderr.setEncoding('utf8');
+        child.stderr.on('data',chunk=>{stderr+=chunk;if(stderr.length>65536)stderr=stderr.slice(-65536).split('\n').slice(1).join('\n');});
+        child.stderr.unref?.();
+        child.once('close',(code,signal)=>{
+          const sensitive=Object.values(this.secrets).filter(v=>typeof v==='string'&&v.length>3);
+          const text=sensitive.reduce((s,v)=>s.split(v).join('[REDACTED]'),stderr).slice(-8192);
+          try{save(path.join(dir,'worker-exit.json'),{code,signal,at:now(),stderr:text});}catch{}
+        });
         child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
         job.pid=child.pid;job.state='running';this.persist();child.unref();this.ledger.runner_error='';return;
@@ -80,6 +88,8 @@ export class Runner {
     if(row?.phase==='receipt'){job.state='confirmed';job.confirmed_at=now();job.error='';this.persist();return;}
     const worker=read(path.join(job.dir,'worker.json'));
     if(worker)job.worker=worker;
+    job.process_exit=read(path.join(job.dir,'worker-exit.json'));
+    job.process_failure=read(path.join(job.dir,'worker-failure.json'));
     if(worker?.state==='blocked'){job.state='blocked';job.error=worker.error;this.persist();return;}
     if(worker?.state==='ready'&& !['submitted','confirmed'].includes(job.state)) {
       job.state='delivering';this.persist();

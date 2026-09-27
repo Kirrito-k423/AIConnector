@@ -11,7 +11,7 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 
-def validate(archive):
+def validate(archive,maintenance_repeats=0):
     with tempfile.TemporaryDirectory(prefix='AIConnector 安装包 ')as folder:
         dest=Path(folder)
         with zipfile.ZipFile(archive)as z:
@@ -29,7 +29,9 @@ def validate(archive):
         cases=sorted(str(p) for p in (app/'tests/service').glob('*.test.mjs'))
         subprocess.run([str(node),'--test','--test-concurrency=1',*cases],cwd=app,env=env,check=True)
         # Original source tests, delivered server/worker/Pi/runtime; no npm or installed Node used.
-        subprocess.run([os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests/service'),'-p','test_e2e.py','-v'],env=env,check=True)
+        command=[os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests/service'),'-p','test_e2e.py','-v']
+        for _ in range(maintenance_repeats or 1):
+            subprocess.run(command+(['-k','maintenance_preflight'] if maintenance_repeats else []),env=env,check=True)
         if os.name=='nt':
             script=app/'Connector.ps1';Path(str(script)+':Zone.Identifier').write_text('[ZoneTransfer]\nZoneId=3\n')
             env['PSExecutionPolicyPreference']='RemoteSigned'
@@ -42,4 +44,4 @@ def validate(archive):
         print(json.dumps(dict(package=archive.name,bytes=archive.stat().st_size,sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),verified_files=len(manifest['sha256']),real_packaged_pi=True,real_windows=os.name=='nt',fixture_model=True)))
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('archive',type=Path);validate(p.parse_args().archive)
+    p=argparse.ArgumentParser();p.add_argument('archive',type=Path);p.add_argument('--maintenance-repeats',type=int,default=0);a=p.parse_args();validate(a.archive,a.maintenance_repeats)

@@ -202,5 +202,13 @@ export async function work(dir,secrets={}) {
 
 if(process.argv[1]===new URL(import.meta.url).pathname || process.argv[2]==='--work') {
   let input='';for await (const chunk of process.stdin)input+=chunk;
-  try {await work(path.resolve(process.argv.at(-1)),input?JSON.parse(input):{});}catch(e){process.stderr.write(cleanError(e)+'\n');process.exitCode=1;}
+  const dir=path.resolve(process.argv.at(-1));let secrets={};
+  const recordFailure=e=>{try{
+    const redact=s=>Object.values(secrets).filter(v=>typeof v==='string'&&v.length>3).reduce((v,k)=>v.split(k).join('[REDACTED]'),s);
+    // Record code and call sites, not arbitrary exception messages/API bodies.
+    save(path.join(dir,'worker-failure.json'),{at:now(),name:e.name,code:e.code||cleanError(e),syscall:e.syscall,stack:redact((e.stack||'').split('\n').slice(1).join('\n')).slice(-8192)});
+  }catch{}};
+  process.on('uncaughtExceptionMonitor',recordFailure);
+  try {secrets=input?JSON.parse(input):{};await work(dir,secrets);}catch(e){recordFailure(e);process.stderr.write(cleanError(e)+'\n');process.exitCode=1;}
+  finally{process.off('uncaughtExceptionMonitor',recordFailure);}
 }

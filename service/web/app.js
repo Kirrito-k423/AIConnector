@@ -77,7 +77,7 @@ function renderDetail(r){
     detailKey='';detailSignature='empty:'+filter;return;
   }
   const w=r.job?.worker;
-  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.activity_at,matches(r,filter),filter,
+  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.activity_at,matches(r,filter),filter,
     w&&[w.state,w.context,w.compaction,w.server_task,w.events,w.agent_started_at,w.agent_ended_at,w.execution_started_at,w.execution_ended_at,w.execution_time_source]]);
   if(detailKey===r.key&&detailSignature===signature)return;
   const same=detailKey===r.key,top=same?detail.scrollTop:0;
@@ -130,6 +130,7 @@ function renderDetail(r){
     result.append(el('p','尚未收到结果。后台同步后将在这里更新。'));
     if(w)result.append(disclosure('worker-json','执行器最近记录',el('pre',JSON.stringify({执行器:w.state,记录:w.events?.slice(-5)},null,2))));
   }
+  if(r.job?.process_exit?.code||r.job?.process_exit?.signal||r.job?.process_failure)result.append(disclosure('process-failure','执行器退出诊断（不会自动重跑）',el('pre',JSON.stringify({exit:r.job.process_exit,failure:r.job.process_failure},null,2))));
   if(w?.context)result.append(el('p','环境快照 '+w.context.sha256?.slice(0,12)+' · 自动压缩 '+(w.compaction?.enabled?'已开启':'已关闭')+' · 已压缩 '+(w.compaction?.count||0)+' 次','meta'));
   if(w?.server_task)result.append(disclosure('server-task','服务器任务记录',el('pre',JSON.stringify(w.server_task,null,2))));
   detail.append(result);

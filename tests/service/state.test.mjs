@@ -34,3 +34,9 @@ test('Chinese output survives UTF-8 characters split across process chunks',asyn
  const r=await run(process.execPath,['-e',"const b=Buffer.from('中文结果');process.stdout.write(b.subarray(0,1));setTimeout(()=>process.stdout.write(b.subarray(1)),50)"]);
  assert.equal(r.code,0);assert.equal(r.out,'中文结果');
 });
+test('worker exit evidence remains visible when an unknown run is reconciled without replay',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC exit '));
+ try{const ledger={jobs:{'x/1/y':{key:'x/1/y',dir,state:'unknown'}}};save(path.join(dir,'worker-exit.json'),{code:1,signal:null,stderr:'EPERM'});save(path.join(dir,'worker-failure.json'),{code:'EPERM',syscall:'rename'});
+ const r=new Runner({runner:{enabled:false}},{},ledger,()=>{},{});await r.tick({runs:[]});assert.equal(ledger.jobs['x/1/y'].state,'unknown');assert.equal(ledger.jobs['x/1/y'].process_exit.code,1);assert.equal(ledger.jobs['x/1/y'].process_failure.syscall,'rename');
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
