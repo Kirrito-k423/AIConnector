@@ -6,10 +6,11 @@ import path from 'node:path';
 import {unzipSync,strFromU8} from 'fflate';
 import {save,read,run,ROOT} from '../../service/common.mjs';
 import {modelFixture} from './model_fixture.mjs';
+import {agentConfig,snapshotAgent} from '../../service/agent-config.mjs';
 
 async function exercise(options={},edit=()=>{}){
  const fixture=await modelFixture(options),dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC worker 中文 '));
- const spec={key:'pi-smoke/1/run-1',task:{code:{repository:'aiconnector-builtin',revision:'builtin-smoke-v1'},environment:{target:'local-smoke'},invocation:{entry:'smoke',arguments:[]},artifacts:[]},profile:{kind:'builtin-smoke',outputs:['metrics.json']},model:{api:'openai-completions',baseUrl:fixture.url,id:'fixture',compat:{supportsDeveloperRole:false}},timeoutSeconds:20,maxTurns:6};
+ const spec={key:'pi-smoke/1/run-1',task:{requirements:{mode:'smoke',checks:['cpu-smoke']},code:{repository:'aiconnector-builtin',revision:'builtin-smoke-v1'},environment:{target:'local-smoke'},invocation:{entry:'smoke',arguments:[]},artifacts:[]},profile:{kind:'builtin-smoke',outputs:['metrics.json']},model:{api:'openai-completions',baseUrl:fixture.url,id:'fixture',compat:{supportsDeveloperRole:false}},timeoutSeconds:20,maxTurns:12};
  edit(spec,dir);save(path.join(dir,'spec.json'),spec);
  try {
   const p=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',dir],{input:JSON.stringify({apiKey:'LOCAL_FIXTURE_KEY'})});
@@ -27,3 +28,23 @@ test('invalid model credential yields a blocked delivery without experiment',asy
 test('revision mismatch never executes',async()=>{const r=await exercise({},s=>s.task.code.revision='wrong');assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('prior durable execution intent is never replayed',async()=>{const r=await exercise({},(s,dir)=>save(path.join(dir,'execution-intent.json'),{key:s.key}));assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('model repeats run_experiment but actual experiment executes once',async()=>{const r=await exercise({repeat:true});assert.equal(r.result.outcome,'succeeded');assert.equal(r.worker.events.filter(e=>e.type==='execution_started').length,1);assert.equal(r.requests,4);});
+
+test('exit zero with an explicitly incomplete user goal must not be a successful task',async()=>{
+ const r=await exercise({handler:(_data,n)=>[
+  {tool:'run_experiment'},
+  {tool:'submit_summary',args:{summary:'维护未完成；没有修改配置或执行 SSH 探测。',metrics:{repair_completed:false,config_validated:false}}},
+  {content:'当前没有维护工具。'}
+ ][Math.min(n-1,2)]},s=>{s.task.objective='修复执行入口并完成配置校验';s.task.acceptance=['配置修复和校验通过'];});
+ assert.notEqual(r.result.outcome,'succeeded','CPU 自检退出码 0 不能覆盖未完成的用户目标');
+ assert.equal(r.execution.exit_code,0);
+});
+
+test('token budget stops tool execution and reports cumulative usage',async()=>{
+ const r=await exercise({handler:()=>({tool:'run_experiment',usage:{prompt_tokens:1200,completion_tokens:20,total_tokens:1220}})},(s,d)=>s.agent=snapshotAgent(agentConfig({budget:{maxTotalTokens:1024}}),d));
+ assert.equal(r.result.outcome,'blocked');assert.equal(r.result.agent.stop_reason,'MODEL_USAGE_BUDGET');assert.ok(r.result.agent.usage.totalTokens>=1220);assert.equal(r.execution,undefined);
+});
+
+test('missing capability can report blocked without executing an unrelated CPU smoke',async()=>{
+ const r=await exercise({handler:(_d,n)=>n===1?{tool:'submit_summary',args:{summary:'当前入口没有用户所需的 SSH 修复工具。',metrics:{repair_completed:false}}}:{content:'无法执行维护'}});
+ assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);assert.equal(r.result.agent.stop_reason,'NO_PROGRESS');
+});

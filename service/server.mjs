@@ -8,6 +8,7 @@ import {loadSecrets,storeSecrets} from './vault.mjs';
 import {snapshotAgent} from './agent-config.mjs';
 import {WatchClient,validateWatchProfile} from './watch.mjs';
 import {webTools} from './web-tools.mjs';
+import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
 const publicJob=j=>({key:j.key,state:j.state,error:j.error,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,artifact:j.artifact});
@@ -31,11 +32,19 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   const connector=new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
   let snapshot={runs:[],outbox:[]},busy=false,stopping=false,lastTick=0,nextPoll=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
+  const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
   async function tick() {
     if(busy||stopping)return;busy=true;activity.busy=true;
     try {
       if(Date.now()>=nextPoll) {
         nextPoll=Date.now()+c.tickSeconds*1000;
+        if(c.node==='windows-inner'&&c.connector.layout==='task-issues-run-releases-v1'){
+          const current=localCapabilities();
+          if(ledger.capability_digest!==current.digest||Date.now()-(ledger.capability_at||0)>1800000){
+            try{const r=await connector.call('Advertise',{data:current});if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.now();persist();}activity.capability_error='';}
+            catch(e){activity.capability_error=cleanError(e);}
+          }
+        }
         try {snapshot=await connector.call('Poll');activity.last_error='';}
         catch(e){activity.last_error=cleanError(e);try{snapshot=await connector.call('Status');}catch{}}
       }
@@ -56,7 +65,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
     finally{busy=false;activity.busy=false;}
   }
   function status() {
-    return {schema:'aiconnector.dashboard.v1',service:{...activity,transport:connector.activity,runner_enabled:c.runner.enabled,runner_error:ledger.runner_error||'',poll_seconds:c.tickSeconds,repository:c.connector.repository,
+    return {schema:'aiconnector.dashboard.v1',capabilities:{local:localCapabilities(),receiver:snapshot.receiver_capabilities||null},service:{...activity,version:VERSION,transport:connector.activity,runner_enabled:c.runner.enabled,runner_error:ledger.runner_error||'',poll_seconds:c.tickSeconds,repository:c.connector.repository,
       github_configured:Boolean(secrets.githubToken),model_configured:Boolean(c.runner.model&&secrets.apiKey),model:c.runner.model||null,
       runner:{agent:c.runner.agent,profiles:c.runner.profiles,enabled:c.runner.enabled,timeoutSeconds:c.runner.timeoutSeconds,maxTurns:c.runner.maxTurns,proxy:c.runner.proxy||'system'}},
       channel:snapshot,jobs:Object.values(ledger.jobs).map(publicJob),submissions:Object.values(ledger.submissions).map(d=>({key:d.key,task:d.task,state:d.state,error:d.error,created_at:d.created_at}))};
@@ -74,6 +83,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       if(req.method==='GET'&&files[url.pathname]) {const [file,mime]=files[url.pathname];res.writeHead(200,{'Content-Type':mime});res.end(fs.readFileSync(path.join(ROOT,'service','web',file)));return;}
       need(req.headers.authorization===`Bearer ${token}`,'UNAUTHORIZED');
       if(req.method==='GET'&&url.pathname==='/api/status'){reply(200,status());return;}
+      if(req.method==='GET'&&url.pathname==='/api/capabilities'){reply(200,{local:localCapabilities(),receiver:snapshot.receiver_capabilities||null});return;}
       if(req.method==='GET'&&url.pathname==='/api/result') {
         const job=ledger.jobs[url.searchParams.get('key')];need(job,'RESULT_NOT_FOUND');
         const file=path.join(job.dir,'result.zip');need(fs.existsSync(file),'RESULT_NOT_FOUND');
@@ -81,6 +91,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       }
       need(req.method==='POST'&&req.headers['content-type']==='application/json','INVALID_REQUEST');
       const data=await body(req);
+      if(url.pathname==='/api/preflight'){reply(200,preflight(data.task,snapshot.receiver_capabilities?.data));return;}
       if(url.pathname==='/api/shutdown') {reply(202,{stopping:true});setImmediate(()=>void close());return;}
       if(url.pathname==='/api/tasks') {
         need(c.node==='mac-outer','SENDER_ONLY');const task=data.task;
@@ -90,6 +101,9 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         const key=`${task.task_id}/${task.revision}/${task.run_id}`;
         const digest=sha(JSON.stringify(data));const existing=ledger.submissions[key];
         if(existing){need(existing.digest===digest,'RUN_IS_IMMUTABLE');reply(200,{key,state:existing.state});return;}
+        const checked=preflight(task,snapshot.receiver_capabilities?.data);
+        task.environment.target=checked.profile.id;task.invocation.entry=checked.profile.entry;
+        task.receiver_config_sha256=checked.config_sha256;
         let zipFile;
         if(data.zipBase64) {
           const bytes=Buffer.from(data.zipBase64,'base64');need(bytes.length>4&&bytes.length<5242880&&bytes.subarray(0,2).toString()==='PK','INVALID_INPUT_ZIP');
@@ -111,7 +125,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         need(data.agent&&typeof data.enabled==='boolean'&&data.profiles&&typeof data.profiles==='object'&&!Array.isArray(data.profiles),'INVALID_AGENT_SETTINGS');
         disk.runner={...disk.runner,agent:data.agent,enabled:data.enabled,profiles:data.profiles,timeoutSeconds:data.timeoutSeconds,maxTurns:data.maxTurns};
         if(disk.runner.model&&data.modelLimits)disk.runner.model={...disk.runner.model,...data.modelLimits};
-        for(const p of Object.values(disk.runner.profiles))if(p.kind==='simplehtmlwatch')validateWatchProfile(p);
+        for(const p of Object.values(disk.runner.profiles))validateProfile(p);
         const tmp=c.file+'.candidate.local.json';let candidate;
         atomic(tmp,JSON.stringify(disk));try{candidate=loadConfig(tmp);snapshotAgent(candidate.runner.agent,path.dirname(c.file));}finally{fs.unlinkSync(tmp);}
         atomic(c.file,JSON.stringify(disk,null,2)+'\n');c.runner=candidate.runner;lastTick=0;reply(200,{saved:true,applies_to:'next_claim'});return;
@@ -120,11 +134,16 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         const checks={};
         try{const a=snapshotAgent(c.runner.agent,path.dirname(c.file));checks.context={ok:true,sha256:a.contextDigest,files:a.contexts.map(f=>f.name)};}catch(e){checks.context={ok:false,error:cleanError(e)};}
         if(c.runner.agent.simpleHtmlWatch.enabled) {
-          try{const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();checks.simpleHtmlWatch={ok:true,observed_at:env.observed_at,ready:env.ready,ready_is_not_npu_idle:true};}catch(e){checks.simpleHtmlWatch={ok:false,error:cleanError(e)};}
+          try{const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();checks.simpleHtmlWatch={ok:true,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,observed_at:env.observed_at,ready:env.ready,ready_is_not_npu_idle:true};}catch(e){checks.simpleHtmlWatch={ok:false,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,error:cleanError(e)};}
         }else checks.simpleHtmlWatch={enabled:false};
         if(data.webUrl&&c.runner.agent.web.enabled){try{const tools=webTools(c.runner.agent.web);const value=await tools[0].execute('',{url:data.webUrl});checks.web={ok:true,result:JSON.parse(value.content[0].text)};}catch(e){checks.web={ok:false,error:cleanError(e)};}}
         else checks.web={enabled:c.runner.agent.web.enabled,tested:false};
         reply(200,{checked_at:now(),checks});return;
+      }
+      if(url.pathname==='/api/reload-agent'){
+        const candidate=loadConfig(c.file);need(sha(JSON.stringify({node:candidate.node,connector:candidate.connector}))===binding&&candidate.dataDir===c.dataDir&&candidate.port===c.port,'RELOAD_IDENTITY_CHANGED');
+        for(const p of Object.values(candidate.runner.profiles))validateProfile(p);
+        snapshotAgent(candidate.runner.agent,path.dirname(c.file));c.runner=candidate.runner;nextPoll=0;lastTick=0;reply(200,{reloaded:true,applies_to:'next_claim',version:VERSION});return;
       }
       if(url.pathname==='/api/resolve-unknown') {
         need(c.node==='windows-inner'&&data.remoteChecked===true,'EXECUTION_CHECK_REQUIRED');

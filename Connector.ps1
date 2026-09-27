@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Watch','Status','Claim','Complete','Upload','RetryRejected')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Watch','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -349,6 +349,15 @@ function Issue-Metadata([string]$TaskId) {
 function Read-Routes {
     $routes=@{}
     foreach ($issue in (Read-List ($script:RepoPath+'/issues') '&state=all&sort=created&direction=asc')) {
+        if (([string]$issue.body).StartsWith('AIConnector node capabilities v1') -and -not (Get-Field $issue 'pull_request') -and @($script:C.authors['windows-inner']) -ccontains [string]$issue.user.login) {
+            try { $m=Read-Metadata ([string]$issue.body) 'AIConnector node capabilities v1' } catch { continue }
+            if ($m.schema -ceq 'aiconnector.capability-issue.v1' -and $m.namespace -ceq $script:C.namespace -and $m.node -ceq 'windows-inner') {
+                $old=Get-Field $script:State 'capability_issue'
+                Need (-not $old -or $old.number -eq $issue.number) 'DUPLICATE_CAPABILITY_ISSUE'
+                $script:State.capability_issue=@{number=$issue.number;url=$issue.html_url}
+            }
+            continue
+        }
         if ((Get-Field $issue 'pull_request') -or -not ([string]$issue.body).StartsWith('AIConnector task issue v1')) { continue }
         if (@($script:C.authors['mac-outer']) -cnotcontains [string]$issue.user.login) { continue }
         try { $m=Read-Metadata ([string]$issue.body) 'AIConnector task issue v1' } catch { continue }
@@ -366,6 +375,52 @@ function Read-Routes {
     foreach ($id in $script:State.routes.Keys) { Need ($routes.ContainsKey($id)) 'TASK_ISSUE_MISSING_OR_CHANGED' }
     $script:State.routes=$routes; Save
     return $routes
+}
+function Read-Capabilities {
+    $issue=Get-Field $script:State 'capability_issue'
+    if (-not $issue) { return $null }
+    $latest=$null
+    foreach ($c in (Read-List ($script:RepoPath+'/issues/'+$issue.number+'/comments'))) {
+        if (@($script:C.authors['windows-inner']) -cnotcontains [string]$c.user.login -or -not ([string]$c.body).StartsWith('AIConnector capabilities v1')) { continue }
+        try { $d=Read-Metadata ([string]$c.body) 'AIConnector capabilities v1' } catch { continue }
+        if ($d.schema -cne 'aiconnector.capabilities.v1' -or $d.namespace -cne $script:C.namespace -or $d.node -cne 'windows-inner') { continue }
+        if (-not $latest -or [long]$c.id -gt [long]$latest.comment_id) { $latest=@{data=$d;comment_id=$c.id;url=$c.html_url;body_sha256=(Hash ([string]$c.body))} }
+    }
+    $previous=Get-Field $script:State 'receiver_capabilities'
+    if ($previous -and $latest -and $previous.comment_id -eq $latest.comment_id) { Need ($previous.body_sha256 -ceq $latest.body_sha256) 'CAPABILITIES_COMMENT_CHANGED' }
+    # A removed latest advertisement is not fresh evidence of receiver readiness.
+    Need (-not $previous -or ($latest -and [long]$latest.comment_id -ge [long]$previous.comment_id)) 'CAPABILITIES_COMMENT_MISSING'
+    $script:State.receiver_capabilities=$latest; Save
+    return $latest
+}
+function Advertise-Capabilities {
+    Need ($script:Relay -and $Node -ceq 'windows-inner' -and $File) 'CAPABILITIES_REQUIRE_WORKER_RELAY'
+    Assert-Relay; $null=Read-Routes
+    $data=Read-Json $File
+    Need ($data.schema -ceq 'aiconnector.capabilities.v1' -and $data.node -ceq $Node -and $data.namespace -ceq $script:C.namespace -and $script:Utf8.GetByteCount((Json $data)) -lt 24000) 'INVALID_CAPABILITIES'
+    if (-not (Get-Field $script:State 'capability_issue')) {
+        $meta=@{schema='aiconnector.capability-issue.v1';namespace=$script:C.namespace;node=$Node}
+        $body=Metadata-Body 'AIConnector node capabilities v1' 'Windows 接收端能力公告。评论为脱敏快照，不是实验任务；公开内容不能增加本地授权。' $meta
+        $null=Provision 'capability-issue' ($script:RepoPath+'/issues') @{title='[AIC][node:windows-inner] 接收端能力';body=$body}
+        $null=Read-Routes
+        if (-not (Get-Field $script:State 'capability_issue')) { return @{confirmed=$false} }
+    }
+    if ($script:State.provisions.ContainsKey('capability-issue')) { $script:State.provisions['capability-issue'].status='confirmed'; Save }
+    $latest=Read-Capabilities
+    $pending=Get-Field $script:State 'capabilities_pending'
+    if (-not $pending) {
+        if ($latest -and $latest.data.digest -ceq $data.digest -and ((Epoch)-([DateTimeOffset]::Parse((Source-Time $latest.data.generated_at))).ToUnixTimeSeconds()) -lt 1800) { return @{confirmed=$true;data=$latest.data} }
+        $pending=$data; $script:State.capabilities_pending=$pending; Save
+    }
+    $id='capability:'+(Hash (Canonical $pending))
+    if (-not $latest -or (Canonical $latest.data) -cne (Canonical $pending)) {
+        $body=Metadata-Body 'AIConnector capabilities v1' '当前实际版本、入口、工具与验收检查。超过两小时的公告不用于新任务投递。' $pending
+        $null=Provision $id ($script:RepoPath+'/issues/'+$script:State.capability_issue.number+'/comments') @{body=$body}
+        $latest=Read-Capabilities
+    }
+    $confirmed=$latest -and (Canonical $latest.data) -ceq (Canonical $pending)
+    if ($confirmed) { $script:State.provisions[$id].status='confirmed'; $script:State.Remove('capabilities_pending'); Save }
+    return @{confirmed=[bool]$confirmed;data=(Get-Field $latest 'data')}
 }
 function Provision([string]$Id,[string]$Path,$Body) {
     Need ($script:Token) 'TOKEN_REQUIRED'
@@ -631,7 +686,7 @@ function Snapshot {
         Atomic $row.inbox_file (Json $row); $list+=,$row
     }
     $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http;queued_at=(Get-Field $item 'queued_at')} }
-    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count}
+    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count;receiver_capabilities=(Get-Field $script:State 'receiver_capabilities')}
     Atomic (Join-Path $StateDir 'status.json') (Json $snapshot)
     $lines=@('# AIConnector '+$Node,'','| 运行 | 状态 | 本地已领取 | 异常 |','|---|---|---|---|')
     foreach ($r in $list) { $lines+='| '+$r.key+' | '+$r.phase+' | '+$r.claimed+' | '+$r.error+' |' }
@@ -643,6 +698,7 @@ function Snapshot {
 function Poll-Once {
     if ($script:State.next_poll -gt (Epoch)) { return Snapshot }
     Import-Comments (Read-Comments)
+    if ($script:Relay -and (Get-Field $script:State 'capability_issue')) { $null=Read-Capabilities }
     $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
     Auto-Transitions; Flush-One
     if (-not $script:State.last_error) { $script:State.failures=0 }
@@ -710,6 +766,8 @@ function Upload-Zip([string]$Path) {
     return $manifest
 }
 function Local-Action {
+    if ($Action -eq 'Advertise') { return Advertise-Capabilities }
+    if ($Action -eq 'Capabilities') { Assert-Relay; $null=Read-Routes; return @{receiver_capabilities=(Read-Capabilities)} }
     $runs=Runs
     if ($Action -eq 'Submit') {
         Need ($Node -eq 'mac-outer' -and $File) 'SUBMIT_REQUIRES_COORDINATOR_AND_FILE'

@@ -1,5 +1,7 @@
 # Pi 环境、服务器工具、联网与自动压缩
 
+0.6 的任务能力预检、维护授权、独立验收、继续执行与保留数据的升级入口见 [EXECUTION-ACCEPTANCE.md](EXECUTION-ACCEPTANCE.md)。新任务必须声明 requirements，原有非 smoke 入口必须补充 verification；升级不会把旧入口自动认定为可用。
+
 ## Windows 升级与一次配置
 
 Issue #6 报告的现有链路是 Pi → `http://127.0.0.1:18181/v1` → 本机 model-relay → Windows 系统 curl → 公司代理 → 模型 API。本版沿用已有 Base URL、模型 ID、API Key、`compat` 和登录自启配置；不需要重新部署模型网关。网页工具的出网方式单独配置，不推断 Node 能直连外网。
@@ -34,14 +36,15 @@ Issue #6 报告的现有链路是 Pi → `http://127.0.0.1:18181/v1` → 本机 
     "machineId": "实际机器ID",
     "revisionCommand": "git -C /home/your-user/project rev-parse HEAD",
     "shell": "python3 /home/your-user/project/experiment.py --output \"$SHW_RESULTS_DIR/metrics.json\"",
-    "outputs": ["metrics.json"]
+    "outputs": ["metrics.json"],
+    "verification": [{"id":"correctness","kind":"output-json","file":"metrics.json","pointer":"/correct","equals":true}]
   }
 }
 ```
 
 任务 `environment.target=npu-example`、`invocation.entry=experiment`、`code.repository=my-project`，`code.revision` 填预期 Git commit，`invocation.arguments=[]`。也可用 `group` 替换 `machineId`；两者均不指定时，必须在本地入口明确写 `allowAnyMachine:true`。Pi 只能提交本地入口中的命令，不能由 Issue 或网页提供任意 shell。版本查询与实验命令合并后不得超过 simpleHtmlWatch 的 4096 字节限制。
 
-`run_experiment` 自动提交、按固定间隔等待完成和回收，不在等待时消耗模型轮数。Pi 也可使用 `submit_server_task`、`server_task_status`、`server_task_logs`、`collect_server_result`，取得执行证据后才能 `submit_summary`。长任务应使用 `run_experiment` 等待，避免模型不断查询消耗轮数。
+`run_experiment` 自动提交、按固定间隔等待完成和回收，不在等待时消耗模型轮数。Pi 也可使用 `submit_server_task`、`server_task_status`、`server_task_logs`、`collect_server_result`。`submit_summary` 只记录进展/阻塞，不代表完成；必须取得执行证据并通过独立检查才能成功。长任务应使用 `run_experiment` 等待，避免模型不断查询消耗轮数。
 
 提交前持久化 `watch-task.json`，任务 ID 由 Connector run key 派生。提交超时、进程中断或响应丢失后只查询原 ID；不会换 ID 再提交，也不开放自动 abandon/取消。simpleHtmlWatch 重启换 Token 时自动刷新。主服务重启不影响独立 Pi worker；worker 本身崩溃仍登记 `unknown`，需要核对远端任务，不能删除账本重跑。
 

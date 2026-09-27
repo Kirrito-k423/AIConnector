@@ -61,8 +61,19 @@ async function background(c){
   throw new Error('SERVICE_START_FAILED');
 }
 try {
+  if(command==='upgrade')need(fs.existsSync(file),'EXISTING_CONFIG_REQUIRED');
   init();const c=loadConfig(file);
-  if(command==='init')console.log(file);
+  if(command==='upgrade'){
+    const {prepareUpgrade,applyUpgrade}=await import('./upgrade.mjs');
+    let plan=prepareUpgrade(file,option('maintenance'));
+    if(!args.includes('--apply'))console.log(JSON.stringify({...plan.report,dry_run:true}));
+    else {
+      if(await health(c))await shutdown(c);
+      // Recheck the ledger after shutdown so a concurrent claim cannot slip in.
+      plan=prepareUpgrade(file,option('maintenance'));const backup=applyUpgrade(plan);
+      await install(loadConfig(file));console.log(JSON.stringify({...plan.report,applied:true,backup,windows_acceptance:'pending actual receiver evidence'}));
+    }
+  }else if(command==='init')console.log(file);
   else if(command==='start'){
     const {start}=await import('./server.mjs');const service=await start(file);
     console.log(`AIConnector ${c.node} 已启动：${service.url}；使用启动器打开页面。`);

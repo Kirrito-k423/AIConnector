@@ -45,6 +45,7 @@ class Model(BaseHTTPRequestHandler):
         results=[m for m in data['messages'] if m['role']=='tool']
         tool='run_experiment' if not results else 'submit_summary' if len(results)==1 else None
         args=dict(summary='实际 CPU sum=50005000。Pi 使用本地受控模型 API；未使用真实商业模型或 NPU。',metrics=dict(sum=50005000,fixture_model=True,npu=False)) if tool=='submit_summary' else {}
+        if getattr(self.server,'handler',None):tool,args=self.server.handler(data,len(self.server.calls))
         base=dict(id='fixture',object='chat.completion.chunk',created=1,model=data['model'])
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
         def send(delta,finish=None):
@@ -70,7 +71,7 @@ class ServiceTests(unittest.TestCase):
             c=dict(schema='aiconnector.service.v1',node=node,port=port(),connectorConfig=str(self.config_path),dataDir=str(self.folder/('service-'+node)),powershell=PWSH,proxy='direct',httpTimeoutSeconds=2,
               runner=dict(enabled=node=='windows-inner',timeoutSeconds=60,maxTurns=6,model=dict(api='openai-completions',baseUrl=f'http://127.0.0.1:{self.model.server_port}/v1',id='fixture',compat=dict(supportsDeveloperRole=False)),profiles={'local-smoke':dict(kind='builtin-smoke',repository='aiconnector-builtin',entry='smoke',outputs=['metrics.json'])}))
             path=self.folder/(node+'.local.json');path.write_text(json.dumps(c));self.configs[node]=(path,c)
-        self.task.update(task_id='pi-smoke',code=dict(repository='aiconnector-builtin',revision='builtin-smoke-v1'),environment=dict(target='local-smoke'),invocation=dict(entry='smoke',arguments=[]))
+        self.task.update(task_id='pi-smoke',requirements=dict(mode='smoke',checks=['cpu-smoke']),code=dict(repository='aiconnector-builtin',revision='builtin-smoke-v1'),environment=dict(target='local-smoke'),invocation=dict(entry='smoke',arguments=[]))
         self.key='pi-smoke/1/run-001'
     write_config=relay.RelayTests.write_config
     write_inputs=relay.RelayTests.write_inputs
@@ -121,6 +122,7 @@ class ServiceTests(unittest.TestCase):
     def job(self,state=None):
         s=self.get('windows-inner');return s and next((j for j in s['jobs'] if j['key']==self.key and (state is None or j['state']==state)),None)
     def publish(self):
+        self.until(lambda:self.get('mac-outer')['capabilities']['receiver'])
         data={'task':self.task}
         z=io.BytesIO()
         with zipfile.ZipFile(z,'w')as archive:archive.writestr('input.txt','public synthetic input')
@@ -141,7 +143,7 @@ class ServiceTests(unittest.TestCase):
         self.until(lambda:self.job('confirmed'))
         self.stop('windows-inner');self.launch('windows-inner')
         self.get('mac-outer','/api/tasks',data);time.sleep(3)
-        self.assertEqual(len(self.model.calls),3);self.assertEqual(len(self.ctx['comments']),5)
+        self.assertEqual(len(self.model.calls),3);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
         self.assertTrue(all(self.phase('mac-outer','receipt')['timeline'][i]['published_at'].endswith('Z') for i in range(5)))
     def test_service_restart_during_pi_and_transport_outage_resumes_delivery(self):
         self.model.pause=True
@@ -154,7 +156,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.model.calls),3)
         self.ctx['offline']=False
         self.until(lambda:self.phase('mac-outer','receipt'),130)
-        self.assertEqual(len(self.model.calls),3);self.assertEqual(len(self.ctx['comments']),5)
+        self.assertEqual(len(self.model.calls),3);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
+
+    def test_maintenance_preflight_continuation_independent_checks_and_receipt(self):
+        target=self.folder/'repair-target.json';target.write_text('{"port":1,"preserved":true}')
+        original=target.read_bytes();expected=hashlib.sha256(original).hexdigest()
+        path,c=self.configs['windows-inner']
+        c['runner']['maxTurns']=16
+        c['runner']['profiles']['repair']=dict(kind='maintenance',entry='maintain',repository='maintenance-fixture',revision='maintenance-v1',maintenance=dict(enabled=True,files={'config':dict(path=str(target.resolve()),format='json',write=True,pointers=['/port'])},commands={'validate':dict(argv=[NODE,'-e',"process.exit(JSON.parse(require('fs').readFileSync(process.argv[1])).port===8766?0:1)",str(target)],readOnly=True)}),verification=[dict(id='port',kind='local-json',file='config',pointer='/port',equals=8766),dict(id='validate',kind='command',command='validate',equals=0)])
+        # Canonical paths avoid the macOS /var -> /private/var alias, and on
+        # Windows still exercise paths with spaces and non-ASCII test parents.
+        path.write_text(json.dumps(c))
+        self.task.update(task_id='repair',title='受控维护闭环',objective='修复测试配置并验证；不运行 NPU',requirements=dict(mode='maintenance',tools=['patch_local_json'],checks=['port','validate']),code=dict(repository='maintenance-fixture',revision='maintenance-v1'),environment=dict(target='auto'),invocation=dict(entry='auto',arguments=[]))
+        self.key='repair/1/run-001'
+        steps=[('read_local_file',dict(file='config')),('submit_summary',dict(summary='尚未修复',metrics=dict(repair_completed=False))),(None,{}),('patch_local_json',dict(action_id='repair-port',file='config',expected_sha256=expected,changes=[dict(pointer='/port',value=8766)])),('submit_summary',dict(summary='已备份并修复，等待独立校验',metrics=dict(repair_completed=True))),(None,{})]
+        self.model.handler=lambda data,n:steps[min(n-1,len(steps)-1)]
+        self.launch('mac-outer');self.launch('windows-inner');self.publish()
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['task']['environment']['target'],'repair');self.assertEqual(row['result']['outcome'],'succeeded',row['result'])
+        self.assertEqual(row['result']['acceptance']['status'],'passed');self.assertEqual(row['result']['agent']['continuations'],1)
+        self.assertNotIn('run_experiment',row['result']['agent']['tools']);self.assertIsNone(row['result']['execution']['started_at'])
+        jobdir=Path(c['dataDir'])/'jobs'/hashlib.sha256(self.key.encode()).hexdigest()
+        self.assertEqual((jobdir/'backups/repair-port.bin').read_bytes(),original);self.assertTrue(json.loads(target.read_text())['preserved'])
+        result=next(b for p,b in self.ctx['assets'].items() if '/result--' in p)
+        with zipfile.ZipFile(io.BytesIO(result))as z:
+            self.assertTrue(json.loads(z.read('acceptance.json'))['checks'][1]['ok'])
+            self.assertEqual(json.loads(z.read('actions.json'))[0]['state'],'done')
+            self.assertFalse(any(str(target).encode() in z.read(name) for name in z.namelist()))
     def test_worker_crash_keeps_unknown_and_does_not_reexecute(self):
         self.model.pause=True
         self.launch('mac-outer');self.launch('windows-inner');self.publish()
@@ -175,8 +203,9 @@ class ServiceTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError)as error:self.get('mac-outer',**kwargs)
             self.assertEqual(error.exception.code,403)
             error.exception.close()
-        self.task['environment']['target']='unapproved';self.publish();self.until(lambda:self.phase('windows-inner','accepted'))
-        self.until(lambda:self.get('windows-inner')['service']['runner_error']=='PROFILE_NOT_ALLOWED')
+        self.task['environment']['target']='unapproved'
+        with self.assertRaises(urllib.error.HTTPError) as error:self.publish()
+        self.assertIn('RECEIVER_PROFILE_NOT_FOUND_OR_AMBIGUOUS',error.exception.msg)
         self.assertEqual(len(self.model.calls),0);self.assertEqual(self.get('windows-inner')['jobs'],[])
 
     @unittest.skipUnless(os.name=='nt' or sys.platform=='darwin','native user service')

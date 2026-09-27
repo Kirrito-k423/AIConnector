@@ -5,10 +5,16 @@ import {zipSync,strToU8} from 'fflate';
 import {ROOT,sha,now,save,read,atomic,alive,need,safeEnv,cleanError} from './common.mjs';
 import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {validateWatchProfile} from './watch.mjs';
+import {checkRequirements,capabilities,VERSION} from './capabilities.mjs';
 
 export class Runner {
   constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});}
   get jobs(){return this.ledger.jobs;}
+  blocked(job,reason){
+    const result={outcome:'blocked',exit_code:-1,actual_revision:'not-executed',summary:`任务未执行：${reason}。请匹配接收端实际能力后创建新运行。`,metrics:{runner_error:reason},artifacts:[],acceptance:{status:'blocked',reason,checks:[]},execution:{started_at:null,ended_at:null,executed:false},agent:{version:VERSION,started_at:null,ended_at:now(),duration_ms:0,turns:0,tool_steps:0,tools:[],stop_reason:reason}};
+    atomic(path.join(job.dir,'result.zip'),zipSync({'result.json':strToU8(JSON.stringify(result))}));save(path.join(job.dir,'result.json'),result);
+    save(path.join(job.dir,'worker.json'),{state:'ready',ended_at:now(),error:reason,events:[]});job.state='delivering';this.persist();
+  }
   resolveUnknown(key) {
     const job=this.jobs[key];need(job?.state==='unknown','RUN_NOT_UNKNOWN');
     const worker=read(path.join(job.dir,'worker.json'));
@@ -28,18 +34,25 @@ export class Runner {
   async tick(snapshot) {
     for(const job of Object.values(this.jobs))await this.reconcile(job,snapshot);
     if(!this.c.runner.enabled||this.c.node!=='windows-inner')return;
-    if(!this.c.runner.model||!this.secrets.apiKey||!(this.secrets.githubToken||process.env[this.c.connector.token_env])){this.ledger.runner_error='MODEL_OR_GITHUB_CREDENTIAL_REQUIRED';return;}
+    if(!(this.secrets.githubToken||process.env[this.c.connector.token_env])){this.ledger.runner_error='GITHUB_CREDENTIAL_REQUIRED';return;}
     if(Object.values(this.jobs).some(j=>['launching','running','claiming','unknown'].includes(j.state)))return;
     for(const row of snapshot.runs||[]) {
       if(row.phase!=='accepted'||row.error||this.jobs[row.key])continue;
-      let profile,agent;
-      try{profile=this.profile(row.task);agent=snapshotAgent(agentConfig(this.c.runner.agent,this.c.runner.model),path.dirname(this.c.file));}catch(e){this.ledger.runner_error=cleanError(e);continue;}
+      let profile,agent,preflightError='';
+      try{
+        profile=this.profile(row.task);agent=snapshotAgent(agentConfig(this.c.runner.agent,this.c.runner.model),path.dirname(this.c.file));
+        checkRequirements(row.task,profile,agent);
+        need(!row.task.receiver_config_sha256||row.task.receiver_config_sha256===capabilities(this.c,this.secrets,agent).config_sha256,'RECEIVER_CONFIG_CHANGED');
+        need(this.c.runner.model&&this.secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
+      }catch(e){preflightError=cleanError(e);}
       const dir=path.join(this.c.dataDir,'jobs',sha(row.key));
       const job={key:row.key,dir,state:'claiming',created_at:now(),error:''};this.jobs[row.key]=job;this.persist();
       try {
         // A persisted claim intent never authorizes execution on recovery by itself.
         const claim=await this.connector.call('Claim',{key:row.key});
         if(!claim.execute){job.state='unknown';job.error='CLAIM_OWNERSHIP_UNKNOWN';this.persist();return;}
+        job.claimed_at=now();this.persist();
+        if(preflightError){this.blocked(job,preflightError);return;}
         fs.mkdirSync(path.join(dir,'inputs'),{recursive:true,mode:0o700});
         for(const artifact of claim.task.artifacts) {
           const src=path.join(this.c.stateDir,'artifacts',artifact.sha256+'.zip'), bytes=fs.readFileSync(src);
@@ -57,7 +70,7 @@ export class Runner {
         child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
         job.pid=child.pid;job.state='running';this.persist();child.unref();this.ledger.runner_error='';return;
-      }catch(e){job.state='unknown';job.error=cleanError(e);this.persist();return;}
+      }catch(e){if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);this.persist();return;}
     }
   }
   async reconcile(job,snapshot) {

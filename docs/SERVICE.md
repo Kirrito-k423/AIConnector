@@ -1,4 +1,6 @@
-# 后台服务、任务看板与 Pi Runner（0.5.0）
+# 后台服务、任务看板与 Pi Runner（0.6.0）
+
+0.6 增加接收端能力预检、有范围的维护、独立验收和未达标时继续修复。升级、任务 requirements 与 Windows 实际验收见 [执行验收说明](EXECUTION-ACCEPTANCE.md)。
 
 这版把已有 Issue / Release 通道接到了本机后台服务。Mac 负责发布和收件，Windows 负责自动领取、调用 Pi、执行已配置实验、打包和交付。无需保持 AI IDE 在线。
 
@@ -43,7 +45,11 @@ service-data/windows-inner/
     execution-intent.json       # 启动实验前先持久化
     execution.json              # 真实退出码与实际版本
     sessions/                  # Pi 会话，仅本机
-    inputs/                    # 已校验输入 ZIP，不自动执行或解压
+    inputs/                    # 已校验输入 ZIP，不自动执行
+    input-files/               # 安全解压后的文件，以 ID 读取
+    input-state.json           # 下载、展开、向模型暴露及实际读取状态
+    actions.json / backups/    # 维护动作账本与私有回滚备份
+    acceptance.json            # 独立验收记录
     work/                      # 实验工作目录
     result.json / result.zip   # 交付完成后仍保留
 ```
@@ -64,7 +70,8 @@ Pi 通过官方 SDK 在独立子进程内运行。`run_experiment` 执行本机�
     "revisionCommand": ["git", "rev-parse", "HEAD"],
     "argv": ["python", "run_experiment.py"],
     "allowTaskArguments": false,
-    "outputs": ["metrics.json", "plot.png"]
+    "outputs": ["metrics.json", "plot.png"],
+    "verification": [{"id":"correctness","kind":"output-json","file":"metrics.json","pointer":"/correct","equals":true}]
   }
 }
 ```

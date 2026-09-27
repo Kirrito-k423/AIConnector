@@ -6,6 +6,7 @@ import re
 import time
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 import test_connector as legacy
@@ -116,6 +117,29 @@ class RelayTests(unittest.TestCase):
         path = self.folder/'input.zip'
         with zipfile.ZipFile(path, 'w') as z: z.writestr('sample.txt', 'synthetic only')
         return path
+
+    def test_capability_advertisement_is_distinct_from_tasks_and_lost_response_is_not_reposted(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.6.0',digest='a'*64,generated_at=datetime.now(timezone.utc).isoformat(),enabled=True,model_configured=True,profiles=[])
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.ctx['provision_mode']['comment']='after'
+        r=self.run_cli('windows-inner','Advertise','-File',file);self.assertTrue(r['confirmed'])
+        self.run_cli('windows-inner','Advertise','-File',file)
+        self.assertEqual(len(self.ctx['comments']),1);self.assertEqual(len(self.ctx['issues']),1)
+        s=self.poll('mac-outer');self.assertEqual(s['runs'],[]);self.assertEqual(s['receiver_capabilities']['data']['version'],'0.6.0')
+        self.ctx['comments'][0]['body']+=' changed'
+        r=self.run_cli('mac-outer','Poll',ok=False);self.assertEqual(r.get('error',r.get('code')),'CAPABILITIES_COMMENT_MISSING')
+
+    def test_capability_ambiguous_write_is_blocked_and_rate_limit_recovers_without_duplicate(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.6.0',digest='b'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.ctx['provision_mode']['issue']='rate'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed']);self.assertEqual(self.ctx['issues'],[])
+        self.ctx['provision_mode']={};self.clear_cooldown('windows-inner')
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        data['digest']='c'*64;file.write_text(json.dumps(data));self.ctx['provision_mode']['comment']='before'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        posts=len(self.ctx['posts']);r=self.run_cli('windows-inner','Advertise','-File',file,ok=False)
+        self.assertEqual(r.get('error',r.get('code')),'PROVISION_UNCERTAIN_OR_REJECTED');self.assertEqual(len(self.ctx['posts']),posts)
 
     def clear_cooldown(self, node):
         state = self.read_state(node); state['next_poll'] = 0; state['post_not_before'] = 0

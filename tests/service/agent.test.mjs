@@ -14,8 +14,8 @@ import {modelFixture} from './model_fixture.mjs';
 import {start} from '../../service/server.mjs';
 
 const temp=()=>fs.mkdtempSync(path.join(os.tmpdir(),'AIC agent 中文 '));
-const profile={kind:'simplehtmlwatch',entry:'experiment',repository:'fixture',machineId:'fixture-machine',revisionCommand:'printf fixture-rev',shell:'printf "fixture" > "$SHW_RESULTS_DIR/metrics.json"',outputs:['metrics.json']};
-function watchSpec(url,dir){return {key:'watch/1/test',task:{code:{repository:'fixture',revision:'fixture-rev'},environment:{target:'fixture'},invocation:{entry:'experiment',arguments:[]},artifacts:[]},profile,agent:snapshotAgent(agentConfig({simpleHtmlWatch:{enabled:true,baseUrl:url,pollSeconds:1}}),dir)};}
+const profile={kind:'simplehtmlwatch',entry:'experiment',repository:'fixture',machineId:'fixture-machine',revisionCommand:'printf fixture-rev',shell:'printf "fixture" > "$SHW_RESULTS_DIR/metrics.json"',outputs:['metrics.json'],verification:[{id:'fixture-output',kind:'output-json',file:'metrics.json',pointer:'/fixture',equals:true}]};
+function watchSpec(url,dir){return {key:'watch/1/test',task:{requirements:{mode:'experiment',checks:['fixture-output']},code:{repository:'fixture',revision:'fixture-rev'},environment:{target:'fixture'},invocation:{entry:'experiment',arguments:[]},artifacts:[]},profile,agent:snapshotAgent(agentConfig({simpleHtmlWatch:{enabled:true,baseUrl:url,pollSeconds:1}}),dir)};}
 
 test('prompt files freeze per task; invalid compaction budget and implicit wildcard access are rejected',()=>{
   const dir=temp();try{
@@ -81,7 +81,7 @@ for(const transport of ['node','curl'])test(`web ${transport}: fetch/search, exa
 test('real Pi loads frozen context, compacts automatically and restores durable facts without repeating CPU execution',async()=>{
   let main=0,summaries=0;
   const model=await modelFixture({handler:data=>{
-    if(!data.tools?.length){summaries++;return {content:'Checkpoint: the CPU experiment already completed. Call get_run_state to recover durable evidence before submitting a summary.'};}
+    if(!data.tools?.length){summaries++;return {content:'Checkpoint: the CPU experiment already completed. Call get_run_state to recover durable evidence before submitting a summary.',usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120}};}
     main++;return [
       {tool:'run_experiment',content:'Fixture planning context. '.repeat(1400)},
       {tool:'get_run_state'},
@@ -95,11 +95,12 @@ test('real Pi loads frozen context, compacts automatically and restores durable 
     const limits={contextWindow:8192,maxTokens:1024};
     const agent=snapshotAgent(agentConfig({globalPrompt:'GLOBAL_LOCAL_CONTEXT',contextFiles:['context.md'],compaction:{keepRecentTokens:512}},limits),dir);
     fs.writeFileSync(path.join(dir,'context.md'),'SHOULD_NOT_BE_LOADED');
-    save(path.join(dir,'spec.json'),{key:'compact/1/test',task:{code:{repository:'aiconnector-builtin',revision:'builtin-smoke-v1'},environment:{target:'local-smoke'},invocation:{entry:'smoke',arguments:[]},artifacts:[]},profile:{kind:'builtin-smoke',outputs:['metrics.json']},agent,model:{api:'openai-completions',baseUrl:model.url,id:'fixture',...limits,compat:{supportsDeveloperRole:false}},timeoutSeconds:30,maxTurns:10});
+    save(path.join(dir,'spec.json'),{key:'compact/1/test',task:{requirements:{mode:'smoke',checks:['cpu-smoke']},code:{repository:'aiconnector-builtin',revision:'builtin-smoke-v1'},environment:{target:'local-smoke'},invocation:{entry:'smoke',arguments:[]},artifacts:[]},profile:{kind:'builtin-smoke',outputs:['metrics.json']},agent,model:{api:'openai-completions',baseUrl:model.url,id:'fixture',...limits,compat:{supportsDeveloperRole:false}},timeoutSeconds:30,maxTurns:10});
     const p=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',dir],{input:JSON.stringify({apiKey:'LOCAL_FIXTURE_KEY'})});assert.equal(p.code,0,p.err);
     const worker=read(path.join(dir,'worker.json')),result=read(path.join(dir,'result.json'));
     assert.equal(result.outcome,'succeeded',JSON.stringify(worker));assert.ok(summaries>=1,JSON.stringify({worker,calls:model.calls.map(c=>({tools:c.tools?.length,messages:c.messages.length}))}));assert.ok(worker.compaction.count>=1);
     assert.equal(worker.events.filter(e=>e.type==='execution_started').length,1);
+    assert.ok(result.agent.usage.totalTokens>=summaries*120,'compaction usage must be included');
     assert.match(JSON.stringify(model.calls[0]),/GLOBAL_LOCAL_CONTEXT/);assert.match(JSON.stringify(model.calls[0]),/FROZEN_FILE_CONTEXT/);assert.doesNotMatch(JSON.stringify(model.calls),/SHOULD_NOT_BE_LOADED/);
     const zip=unzipSync(fs.readFileSync(path.join(dir,'result.zip')));assert.ok(zip['metrics.json']);assert.ok(!Object.values(zip).some(v=>Buffer.from(v).includes('GLOBAL_LOCAL_CONTEXT')));
   }finally{await model.close();fs.rmSync(dir,{recursive:true,force:true});}
