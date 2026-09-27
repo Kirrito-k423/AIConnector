@@ -56,6 +56,7 @@ export async function setupServers(c,data){
   need(data.config_sha256===catalog.config_sha256,'SERVER_SETUP_CHANGED');
   need(Array.isArray(data.machineIds)&&data.machineIds.length>0&&data.machineIds.every(id=>catalog.machines.some(m=>m.id===id)),'SELECT_READY_SERVER');
   const file=registryPath(c),disk=json(c.file),old=c.runner.serverRegistry?validateRegistry(json(c.runner.serverRegistry)):null;
+  disk.runner??={};disk.runner.profiles??={};
   need(!c.runner.serverRegistry||path.resolve(c.runner.serverRegistry)===file,'SERVER_REGISTRY_PATH_CONFLICT');
   need(!disk.runner.profiles['server-maintenance']||disk.runner.profiles['server-maintenance'].maintenance?.files?.['server-registry']?.path===file,'SERVER_PROFILE_CONFLICT');
   const registry={schema:'aiconnector.server-registry.v1',machineIds:data.machineIds,profiles:{...old?.profiles}};

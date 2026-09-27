@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.5.0 为两端后台服务与 Pi Runner 加入全局上下文、simpleHtmlWatch 服务器工具、联网读取/搜索和自动压缩。** 在 Mac 页面发布任务，Windows 自动领取并按本机配置调用 Pi，执行实验后回传 ZIP，Mac 校验并回执。页面展示执行时间、环境快照、压缩事件和交付件；服务重启或通道断网不会盲目重跑实验。
+**v0.6.2 增加 Windows 服务器接入向导与受限入口维护。** 从本机 simpleHtmlWatch 选择真实机器，建立 SSH / 启动时间 / NPU 信息探测入口；外部 AI 可通过维护任务登记实验，再提交真实实验并回收 ZIP。结果摘要与 Pi 运行统计由运行器生成，模型自填信息单独标记；修复 PowerShell 时间字符串变形造成的 ZIP 校验失败。
 
-[下载服务候选包 v0.5.0-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.5.0-rc.1) · [安装与实验入口](docs/SERVICE.md) · [Pi 集成与保留现有网关的升级步骤](docs/PI-INTEGRATION.md) · [真实 GitHub 闭环](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2)
+[下载服务候选包 v0.6.2-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.6.2-rc.1) · [Windows 服务器接入与一次验收](docs/SERVER-SETUP.md) · [安装与实验入口](docs/SERVICE.md) · [Pi 集成与保留现有网关的升级步骤](docs/PI-INTEGRATION.md) · [真实 GitHub 闭环](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 
