@@ -1,4 +1,8 @@
-# 后台服务、任务看板与 Pi Runner（0.6.0）
+# 后台服务、任务看板与 Pi Runner（0.6.1）
+
+0.6.1 同步更新 Mac 与 Windows 看板：紧凑状态导航、默认处理中、按最近活动倒序、约 1/5 侧栏、置顶关键节点与滚动保持。两端安装包包含相同界面文件。Windows CI 直接从新 ZIP 解压后的文件运行浏览器回归。
+
+已有安装升级时，将新包解压到固定新目录，使用新包的 `runtime/node.exe service/cli.mjs upgrade --config "原 service-windows-inner.local.json 的绝对路径"` 预检，再追加 `--apply`。仅升级界面/程序无需新增 maintenance 授权；原配置、模型、密钥、任务账本与已有维护授权继续使用。不要用新默认配置替换原配置。Mac 同理使用 `runtime/node`。
 
 0.6 增加接收端能力预检、有范围的维护、独立验收和未达标时继续修复。升级、任务 requirements 与 Windows 实际验收见 [执行验收说明](EXECUTION-ACCEPTANCE.md)。
 
@@ -11,12 +15,16 @@
 1. 解压到固定目录。Windows 双击 `Open-Windows-Dashboard.cmd`；Mac 双击 `Open-Mac-Dashboard.command`。不要在 ZIP 预览里运行。
 2. 页面“连接设置”填写 GitHub Token；Windows 再填写 API Key、协议、Base URL 和模型 ID。模型必须支持工具调用。留空的密钥保留旧值。
 3. 准备让它长期运行时，运行 `Install-Windows-Service.cmd` / `Install-Mac-Service.command`。Windows 注册当前用户登录时启动的计划任务，并每分钟检查一次是否需要拉起，已有进程运行时不重复启动；Mac 注册用户 launchd。两者退出后由系统重启。**这是用户登录会话服务，Windows 注销后不继续运行。**关闭浏览器不会停止服务。
-4. Mac 页面“发布实验任务”已有 CPU 校验示例，直接发布即可。Windows 的默认入口 `local-smoke` 会算出 `sum=50005000`，然后提交 `metrics.json`、执行证据和输出 ZIP。Mac 校验产物后自动发回执。
-5. Windows 页面“Pi 环境与工具”配置全局说明、simpleHtmlWatch、网页工具和上下文压缩，保存后点击“检查已保存配置”。完整步骤及 Issue #6 的网关兼容说明见 [Pi 集成 SOP](PI-INTEGRATION.md)。
+4. Mac 顶部“发布任务”打开任务表单，内置 CPU 校验示例。Windows 的默认入口 `local-smoke` 会算出 `sum=50005000`，然后提交 `metrics.json`、执行证据和输出 ZIP。Mac 校验产物后自动发回执。
+5. Windows 顶部“Pi 配置”打开“Pi 环境与工具”，配置全局说明、simpleHtmlWatch、网页工具和上下文压缩，保存后点击“检查已保存配置”。完整步骤及 Issue #6 的网关兼容说明见 [Pi 集成 SOP](PI-INTEGRATION.md)。
 
 Windows 如遇 RemoteSigned 下载标记，启动器在比对包内固定 SHA-256 后，只询问一次是否信任这两个脚本；同意后仅移除这两个文件的标记。AllSigned / 组织强制策略会明确阻止启动，程序不会修改或绕过执行策略。Mac 若被 Gatekeeper 拦截，请按组织允许的方式批准下载应用，程序不移除系统安全策略。
 
 页面默认只监听 `127.0.0.1:43110`（Mac）与 `127.0.0.1:43111`（Windows）。启动器打开的 URL 带一次传入浏览器会话的本机访问凭据；它不会发送给 Relay，也不出现在 HTTP 请求 URL。页面提供任务筛选、远端事件时间与作者、真实执行开始/结束时间、Issue / Release / ZIP 链接、同步与 Runner 异常。
+
+看板默认显示“处理中”，顶部状态导航同时展示各类计数；没有处理中的任务时保留空状态，可主动切换“已回执”或“全部”。列表按最近任务活动倒序：发布、领取、执行、结果、回执以及本地提交时间参与排序，同步时间与心跳不参与。时间缺失的任务排在末尾。桌面侧栏约占 1/5，列表和详情独立滚动。任务切换不滚动整页；轮询保留选中任务、详情滚动位置和已展开内容，即使当前任务刚完成并移出筛选也保留详情。
+
+详情最上方依次显示发布、校验、领取、结果发布、回执五个关键节点；未收到远端记录时明确显示“尚未确认”。随后是执行与工具记录、发送的任务和接收的结果。历史结果未记录 Pi 总耗时时显示缺失，不用 CPU 子进程耗时代替。发布、连接和 Pi 配置使用顶部弹窗，不挤占任务工作区。
 
 密钥保存于 Windows 当前用户 DPAPI 或 macOS 钥匙串。它们不进入任务、状态、日志、进程参数或结果 ZIP。模型会话保存在本机，不自动上传。无人值守环境也可通过进程环境传入 `AICONNECTOR_GITHUB_TOKEN`、`AICONNECTOR_AI_API_KEY`；不要把它们写入公开配置或 Issue。节点必须持有能写 Relay Issues 和 Releases 的 Token。
 
@@ -111,6 +119,8 @@ python3 tools/validate_service_bundle.py dist/service/AIConnector-Service-macos-
 ```
 
 验收使用真正 Pi SDK 和真实 CPU 子进程，但模型与 Relay API 可以是本地受控端点。测试覆盖完整五阶段、双向 ZIP、主服务执行中被杀、通道 503/429、领取不确定、工作进程被杀、版本不符、持久化损坏、HTTP 认证与跨源拒绝。Windows CI 在全新目录解压交付包，使用包内 Node/Pi 和 Windows PowerShell 5.1 再跑完整测试，另覆盖 DPAPI 与下载标记。
+
+看板浏览器回归独立运行：在已安装 Playwright 与 Chromium 的开发环境执行 `npm run test:dashboard`。复用外部安装时可设置 `AIC_PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs`、`AIC_BROWSER_EXECUTABLE=/absolute/path/to/chrome`。测试使用本地合成 API，覆盖默认筛选、按时间排序、侧栏比例、关键节点顺序、点击/轮询滚动保持、任务完成后的详情保留、配置弹窗和移动端；不发布或执行真实任务。
 
 真实 GitHub 联调另行记录；本地/Windows CI 通过不等于用户内网、实际 API 或 NPU 已验收。具体证据见 `VALIDATION.md`。
 
