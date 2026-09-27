@@ -78,7 +78,7 @@ class ServiceTests(unittest.TestCase):
 
     def tearDown(self):
         self.model.release.set()
-        for n in self.processes:self.stop(n)
+        for n in self.processes:self.stop(n,graceful=True)
         for log in self.logs.values():log.close()
         self.model.shutdown();self.model.server_close();self.mt.join()
         relay.RelayTests.tearDown(self)
@@ -90,10 +90,15 @@ class ServiceTests(unittest.TestCase):
         auth=Path(c['dataDir'])/'dashboard.token'
         self.until(lambda:auth.exists(),10);self.tokens[node]=auth.read_text()
         self.until(lambda:self.get(node),20)
-    def stop(self,node):
+    def stop(self,node,graceful=False):
         p=self.processes[node]
         if p.poll() is None:
-            p.kill();p.wait(15)
+            if graceful and node in self.tokens and self.get(node):
+                # Fault injection above deliberately kills only the supervisor.
+                # Cleanup must drain its PowerShell transport before removing
+                # temporary files, especially with Windows file sharing locks.
+                self.get(node,'/api/shutdown',{});p.wait(45)
+            else:p.kill();p.wait(15)
         if node in self.logs:self.logs[node].close()
     def get(self,node,path='/api/status',data=None,token=None,headers=None):
         c=self.configs[node][1]
