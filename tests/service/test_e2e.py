@@ -44,7 +44,7 @@ class Model(BaseHTTPRequestHandler):
         if self.server.pause: self.server.release.wait(40)
         results=[m for m in data['messages'] if m['role']=='tool']
         tool='run_experiment' if not results else 'submit_summary' if len(results)==1 else None
-        args=dict(summary='实际 CPU sum=50005000。Pi 使用本地受控模型 API；未使用真实商业模型或 NPU。',metrics=dict(sum=50005000,fixture_model=True,npu=False)) if tool=='submit_summary' else {}
+        args=dict(summary='实际 CPU sum=50005000。Pi 使用本地受控模型 API；未使用真实商业模型或 NPU。',metrics=dict(sum=50005000,fixture_model=True,npu=False,measurement_at='2026-09-27T11:25:50.600Z')) if tool=='submit_summary' else {}
         if getattr(self.server,'handler',None):tool,args=self.server.handler(data,len(self.server.calls))
         base=dict(id='fixture',object='chat.completion.chunk',created=1,model=data['model'])
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
@@ -138,13 +138,20 @@ class ServiceTests(unittest.TestCase):
         self.launch('mac-outer');self.launch('windows-inner');data=self.publish()
         row=self.until(lambda:self.phase('mac-outer','receipt'))
         self.assertEqual(row['task']['title'],self.task['title'])
-        self.assertIn('实际 CPU',row['result']['summary'])
+        self.assertIn('GOAL_VERIFIED',row['result']['summary'])
+        self.assertIn('实际 CPU',row['result']['model_report']['summary'])
+        self.assertFalse(row['result']['model_report']['verified'])
+        self.assertEqual(row['result']['metrics']['measurement_at'],'2026-09-27T11:25:50.600Z')
         self.assertEqual(row['result']['outcome'],'succeeded');self.assertTrue(row['result']['execution']['started_at'])
         self.assertEqual(len(row['timeline']),5);self.assertEqual(len(self.model.calls),3)
         assets=self.ctx['assets'];self.assertEqual(len(assets),2)
         result=next(b for p,b in assets.items() if '/result--' in p)
         self.assertLess(len(result),5242880)
-        with zipfile.ZipFile(io.BytesIO(result))as z:self.assertEqual(json.loads(z.read('metrics.json'))['sum'],50005000)
+        with zipfile.ZipFile(io.BytesIO(result))as z:
+            self.assertEqual(json.loads(z.read('metrics.json'))['sum'],50005000)
+            embedded=json.loads(z.read('result.json'))
+            for key in ('summary','metrics','agent','model_report'):
+                self.assertEqual(embedded[key],row['result'][key],key)
         self.until(lambda:self.job('confirmed'))
         self.stop('windows-inner');self.launch('windows-inner')
         self.get('mac-outer','/api/tasks',data);time.sleep(3)
