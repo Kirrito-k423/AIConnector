@@ -6,7 +6,7 @@
 
 Issue #6 报告的现有链路是 Pi → `http://127.0.0.1:18181/v1` → 本机 model-relay → Windows 系统 curl → 公司代理 → 模型 API。本版沿用已有 Base URL、模型 ID、API Key、`compat` 和登录自启配置；不需要重新部署模型网关。网页工具的出网方式单独配置，不推断 Node 能直连外网。
 
-升级前等待没有活动实验，备份原安装目录。用旧目录的 `runtime/node.exe service/cli.mjs uninstall --config service-windows-inner.local.json` 取消 Connector 自启，再 `runtime/node.exe service/cli.mjs stop --config service-windows-inner.local.json` 停止 Connector。将新包的 `service/`、`node_modules/`、`package.json`、`package-lock.json`、`docs/` 覆盖到原固定目录，再运行 `Install-Windows-Service.cmd`。两版包均使用 Node 24.14.0，无需替换正在供模型网关使用的 Node。保留原 `connector.config.json`、所有 `*.local.json`、整个 `service-data/`、`model-relay.mjs` 和网关计划任务。不要删除状态、移动安装目录或重建任务 ID。回退时停止 Connector 并恢复备份的程序目录和配置。
+0.6 使用 [执行验收说明中的升级入口](EXECUTION-ACCEPTANCE.md#一次本地升级与授权)：新包解压到另一个固定目录，`Upgrade-Windows.cmd` 指向原配置和本地维护授权文件，备份配置并重绑当前用户服务。原配置、dataDir、凭据和模型网关都保留。必须使用新包内完整的 Connector.ps1、service 和依赖，不能只覆盖 Pi 文件；新能力公告需要新版传输程序。没有活动 worker 时才能升级，回退使用备份配置和旧包重新注册服务。
 
 打开看板的“Pi 环境与工具”，按以下顺序一次完成：
 
