@@ -37,6 +37,8 @@ test('capability discovery chooses a unique matching profile and refuses smoke, 
   const spec=fixture(dir),c={node:'windows-inner',connector:{namespace:'test'},runner:{enabled:true,model:{id:'fixture'},agent:spec.agent,profiles:{maintenance:spec.profile,'local-smoke':{kind:'builtin-smoke',entry:'smoke',repository:'aiconnector-builtin'}}}};
   const remote=capabilities(c,{apiKey:'private'},spec.agent),task=structuredClone(spec.task);task.environment.target='auto';task.invocation.entry='auto';
   assert.equal(preflight(task,remote).profile.id,'maintenance');assert.ok(!JSON.stringify(remote).includes(dir));assert.ok(!JSON.stringify(remote).includes('private'));
+  const missing=structuredClone(task);missing.environment.target='no-such-profile';
+  try{preflight(missing,remote);assert.fail('must reject missing entry');}catch(e){assert.equal(e.message,'RECEIVER_PROFILE_NOT_FOUND_OR_AMBIGUOUS');assert.equal(e.diagnostic.requested.mode,'maintenance');assert.ok(e.diagnostic.available.some(p=>p.id==='local-smoke'));assert.match(e.diagnostic.next,/维护入口/);}
   task.environment.target='local-smoke';assert.throws(()=>preflight(task,remote),/CAPABILITY_MISMATCH/);
   assert.throws(()=>preflight(spec.task,{...remote,generated_at:'2020-01-01T00:00:00Z'}),/STALE/);
   assert.throws(()=>checkRequirements(spec.task,spec.profile,{skills:[{requiredTools:['unavailable_tool']}]}),/SKILL_TOOL_MISSING/);

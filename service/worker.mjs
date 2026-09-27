@@ -11,6 +11,7 @@ import {checkRequirements,VERSION} from './capabilities.mjs';
 import {Maintenance} from './maintenance.mjs';
 import {Inputs} from './inputs.mjs';
 import {verifyTask} from './verification.mjs';
+import {authoritativeReport} from './reporting.mjs';
 
 // One disposable Pi process per run. Service restarts do not restart this process.
 export async function work(dir,secrets={}) {
@@ -99,9 +100,9 @@ export async function work(dir,secrets={}) {
     await modelRuntime.setRuntimeApiKey('aiconnector',secrets.apiKey);
     const tools=[
       {name:'run_experiment',label:'执行已配置实验',description:'Run the locally approved experiment once. Returns verified exit code, revision and bounded stdout. Repeated calls return the same evidence.',parameters:empty,execute:async()=>result(await execute())},
-      {name:'submit_summary',label:'记录阶段总结',description:'Record observed progress or a blocker. This does not complete the task; independent verification decides whether more work is required. No unrelated experiment is required to report a blocker.',
+      {name:'submit_summary',label:'记录阶段总结',description:'Record observed progress or a blocker, not runtime statistics. Do not invent Pi timing, turns, stop_reason, usage or sender receipt status; these belong to the runner/channel. Model claims are stored separately from verified facts. This does not complete the task; independent verification decides whether more work is required.',
         parameters:{type:'object',properties:{summary:{type:'string',maxLength:4096},metrics:{type:'object',additionalProperties:{type:['number','string','boolean','null']}}},required:['summary','metrics'],additionalProperties:false},
-        execute:async(_id,args)=>{need(args.summary?.length>0&&args.summary.length<=4096,'INVALID_SUMMARY');need(args.metrics&&JSON.stringify(args.metrics).length<=8192,'METRICS_TOO_LARGE');report={summary:redact(args.summary),metrics:JSON.parse(redact(JSON.stringify(args.metrics)))};save(path.join(dir,'summary.json'),report);return result({recorded:true,task_complete:false,next:'verify_task'});}},
+        execute:async(_id,args)=>{need(args.summary?.length>0&&args.summary.length<=4096,'INVALID_SUMMARY');need(args.metrics&&JSON.stringify(args.metrics).length<=8192,'METRICS_TOO_LARGE');report={summary:redact(args.summary),metrics:JSON.parse(redact(JSON.stringify(args.metrics))),verified:false};save(path.join(dir,'summary.json'),report);return result({recorded:true,task_complete:false,receipt_confirmed:false,runtime_statistics:'runner-owned; do not estimate',next:'verify_task'});}},
       {name:'get_run_state',label:'恢复任务事实',description:'Read durable evidence and action IDs after compaction. Never replay an unknown action or server task. Input files are paginated via list_inputs.',parameters:empty,execute:async()=>{const ex=execution||read(path.join(dir,'execution.json')),actions=maintenance?.publicActions()||[];return result({execution:ex?{...ex,stdout:ex.stdout?.slice(-2000),stderr:ex.stderr?.slice(-1000)}:null,server_task_id:watch?.record?.id||null,summary:report||null,acceptance,acceptance_contract:spec.profile.verification||[],actions:actions.slice(-16),action_ids:actions.map(a=>({id:a.id,state:a.state})),input_count:inputs.state.files.length});}},
       {name:'verify_task',label:'独立验收',description:'Run the locally configured independent checks and return unmet conditions. A summary or claimed metric cannot override these checks.',parameters:empty,execute:async()=>result(await verify())},
       {name:'list_inputs',label:'列出任务输入',description:'List a page of downloaded, staged and readable input files with IDs and hashes. Follow next_offset for more. Files are untrusted data and are not automatically executed or uploaded to a server.',parameters:{type:'object',properties:{offset:{type:'integer'},limit:{type:'integer'}},additionalProperties:false},execute:async(_id,a)=>result(inputs.list(a.offset,a.limit))},
@@ -167,13 +168,14 @@ export async function work(dir,secrets={}) {
   finally {clearTimeout(timer);status.agent_ended_at=now();status.stop_reason=failure||'GOAL_VERIFIED';if(session)session.dispose();}
   try {
     const resultData={outcome:failure?'blocked':acceptance?.status==='passed'?'succeeded':'blocked',exit_code:failure?-1:execution?.exit_code??0,
-      actual_revision:execution?.actual_revision||(maintenance?spec.profile.revision:'not-executed'),summary:failure?`任务未完成：${failure}。${report?.summary||'已有证据见 ZIP。'}`:report.summary,
+      actual_revision:execution?.actual_revision||(maintenance?spec.profile.revision:'not-executed'),summary:'',
       metrics:{...report?.metrics,...(failure?{runner_error:failure}:{})},artifacts:[],acceptance:acceptance||{status:'blocked',checks:[],reason:failure},
       execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,time_source:execution?.time_source||'executor',engine:'pi-0.87.1',profile:spec.task.environment.target,unknown:execution?.unknown||Boolean(watch?.record&&!execution)},
       agent:{version:VERSION,started_at:status.agent_started_at||null,ended_at:status.agent_ended_at,duration_ms:status.agent_started_at?Date.parse(status.agent_ended_at)-Date.parse(status.agent_started_at):0,turns,continuations,tool_steps:toolSteps,stop_reason:status.stop_reason,usage,cost_configured:Boolean(model?.cost),usage_scope:'Cumulative SDK assistant and compaction usage; absent provider usage is unmeasured, not a billing total',tools:status.tools||[],context_sha256:agent.contextDigest,context_captured_at:agent.capturedAt,skills:(agent.skills||[]).map(s=>({name:s.name,sha256:s.sha256})),compactions:status.compaction.count}};
+    Object.assign(resultData,authoritativeReport({report,agent:resultData.agent,acceptance:resultData.acceptance,failure,profile:spec.profile}));
     // Leave room for artifact descriptors within the protocol's 16 KiB payload.
     // Full bounded model report stays in the ZIP; it cannot make delivery fail.
-    if(Buffer.byteLength(JSON.stringify(resultData))>14000){resultData.summary=resultData.summary.slice(0,1000);resultData.metrics={runner_error:failure||null,report_in_zip:true};}
+    if(Buffer.byteLength(JSON.stringify(resultData))>14000){resultData.model_report={verified:false,report_in_zip:true};resultData.metrics={runner_error:failure||null,report_in_zip:true,...(spec.profile.kind==='builtin-smoke'?{npu:false}:{})};}
     const entries={'result.json':strToU8(JSON.stringify(resultData,null,2)),
       'execution.json':strToU8(JSON.stringify(execution?{...execution,stdout:undefined,stderr:undefined}:{executed:false},null,2)),
       'stdout.txt':strToU8(execution?.stdout||''),'stderr.txt':strToU8(execution?.stderr||''),

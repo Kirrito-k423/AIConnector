@@ -13,7 +13,7 @@ import zipfile
 ROOT=Path(__file__).resolve().parents[1]
 FILES=['Connector.ps1','connector.config.json','package.json','package-lock.json','CONTEXT.md',
        'Open-Windows-Dashboard.cmd','Install-Windows-Service.cmd','Prepare-Windows-Service.cmd',
-       'Open-Mac-Dashboard.command','Install-Mac-Service.command','Upgrade-Windows.cmd','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/EXECUTION-ACCEPTANCE.md','docs/PROTOCOL.md','docs/RELAY.md']
+       'Open-Mac-Dashboard.command','Install-Mac-Service.command','Upgrade-Windows.cmd','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/EXECUTION-ACCEPTANCE.md','docs/SERVER-SETUP.md','docs/PROTOCOL.md','docs/RELAY.md']
 
 def build(output,node,pwsh=None):
     system='windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux'

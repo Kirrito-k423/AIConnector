@@ -1,5 +1,8 @@
 # 0.6 接收端维护与任务验收
 
+Windows 仍只有 `local-smoke` 时，请使用 [0.6.2 服务器接入与一次验收](SERVER-SETUP.md)：从真实机器列表建立探测入口，并按本机授权启用远程实验入口维护。
+
+
 ## 本次修复的失败路径
 
 Relay #5 的 A5 分析和 #6 的入口修复均完成了 ZIP/receipt 传输，但实际只运行 CPU 自检。#6 返回 `repair_completed=false`、`config_validated=false`、`ssh_probe_executed=false`，旧运行器仍按 exit 0 标记成功。64/68 ms 是该子进程耗时，不是 Pi 会话总时长。原始证据：

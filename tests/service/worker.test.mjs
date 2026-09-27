@@ -48,3 +48,18 @@ test('missing capability can report blocked without executing an unrelated CPU s
  const r=await exercise({handler:(_d,n)=>n===1?{tool:'submit_summary',args:{summary:'当前入口没有用户所需的 SSH 修复工具。',metrics:{repair_completed:false}}}:{content:'无法执行维护'}});
  assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);assert.equal(r.result.agent.stop_reason,'NO_PROGRESS');
 });
+
+test('model timing and premature receipt claims cannot become authoritative result facts',async()=>{
+ const r=await exercise({handler:(_d,n)=>[
+   {tool:'run_experiment'},
+   {tool:'submit_summary',args:{summary:'Pi 耗时 15000ms、4 轮，receipt 已校验。',metrics:{duration_ms:15000,turns:4,stop_reason:'completed',session_end:'2026-09-27T11:25:50.600Z',receipt_verified:true,input_marker:'retained',npu:true}}},
+   {content:'已完成'}
+ ][Math.min(n-1,2)]});
+ assert.equal(r.result.outcome,'succeeded');
+ for(const key of ['duration_ms','turns','stop_reason','session_end','receipt_verified'])assert.equal(r.result.metrics[key],undefined,key);
+ assert.equal(r.result.metrics.input_marker,'retained');assert.equal(r.result.metrics.npu,false);
+ assert.doesNotMatch(r.result.summary,/15000|receipt 已校验/);
+ assert.match(r.result.summary,/GOAL_VERIFIED/);
+ assert.equal(r.result.model_report.verified,false);
+ assert.match(JSON.parse(strFromU8(r.zip['report.json'])).summary,/receipt 已校验/);
+});

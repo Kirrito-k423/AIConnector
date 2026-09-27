@@ -1,5 +1,8 @@
 # 后台服务、任务看板与 Pi Runner（0.6.1）
 
+Windows 仍只有 `local-smoke` 时，请使用 [0.6.2 服务器接入与一次验收](SERVER-SETUP.md)：从真实机器列表建立探测入口，并按本机授权启用远程实验入口维护。
+
+
 0.6.1 同步更新 Mac 与 Windows 看板：紧凑状态导航、默认处理中、按最近活动倒序、约 1/5 侧栏、置顶关键节点与滚动保持。两端安装包包含相同界面文件。Windows CI 直接从新 ZIP 解压后的文件运行浏览器回归。
 
 已有安装升级时，将新包解压到固定新目录，使用新包的 `runtime/node.exe service/cli.mjs upgrade --config "原 service-windows-inner.local.json 的绝对路径"` 预检，再追加 `--apply`。仅升级界面/程序无需新增 maintenance 授权；原配置、模型、密钥、任务账本与已有维护授权继续使用。不要用新默认配置替换原配置。Mac 同理使用 `runtime/node`。

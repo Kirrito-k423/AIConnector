@@ -9,7 +9,7 @@ function timestamp(t){if(t===null||t===undefined||t==='')return 0;const n=typeof
 const date=t=>timestamp(t)?new Date(timestamp(t)).toLocaleString('zh-CN',{hour12:false}):'尚未发生';
 const el=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
 function link(parent,text,url){try{const u=new URL(url);if(!['http:','https:'].includes(u.protocol))return;const a=el('a',text);a.href=u.href;a.target='_blank';a.rel='noreferrer';parent.append(a);}catch{}}
-async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+sessionStorage.getItem('aic-token'),...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});const value=await r.json();if(!r.ok)throw new Error(value.error);return value;}
+async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+sessionStorage.getItem('aic-token'),...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});const value=await r.json();if(!r.ok)throw new Error(value.diagnostic?value.error+'：'+JSON.stringify(value.diagnostic):value.error);return value;}
 function notice(s,problem=false){$('notice').textContent=s;$('notice').classList.toggle('problem',problem);if(problem&&$('tools-dialog').open)$('dialog-notice').textContent=s;}
 const phase=r=>r.job?.state||r.phase;
 const error=r=>Boolean(r.error||r.job?.error||r.result&&r.result.outcome!=='succeeded'||['unknown','blocked','conflict'].includes(phase(r)));
@@ -124,7 +124,8 @@ function renderDetail(r){
     const artifacts=el('div',undefined,'links');
     for(const a of r.result.artifacts||[])link(artifacts,'下载 '+a.name+' · '+a.bytes+' 字节 ↗',a.url);
     result.append(artifacts);
-    result.append(disclosure('result-json','验收、指标与模型用量',el('pre',JSON.stringify({outcome:r.result.outcome,exit_code:r.result.exit_code,actual_revision:r.result.actual_revision,acceptance:r.result.acceptance,停止原因:r.result.agent?.stop_reason,累计模型用量:r.result.agent?.usage,用量范围:r.result.agent?.usage_scope,metrics:r.result.metrics},null,2))));
+    result.append(disclosure('result-json','验收、指标与模型用量',el('pre',JSON.stringify({outcome:r.result.outcome,exit_code:r.result.exit_code,actual_revision:r.result.actual_revision,acceptance:r.result.acceptance,停止原因:r.result.agent?.stop_reason,累计模型用量:r.result.agent?.usage,用量范围:r.result.agent?.usage_scope,metrics_source:r.result.metrics_source,metrics:r.result.metrics},null,2))));
+    if(r.result.model_report)result.append(disclosure('model-report','模型报告（未独立核对，运行统计以运行器为准）',el('pre',JSON.stringify(r.result.model_report,null,2))));
   }else{
     result.append(el('p','尚未收到结果。后台同步后将在这里更新。'));
     if(w)result.append(disclosure('worker-json','执行器最近记录',el('pre',JSON.stringify({执行器:w.state,记录:w.events?.slice(-5)},null,2))));
@@ -149,10 +150,13 @@ function render(){
     b.querySelector('[data-count]').textContent=rows.filter(r=>matches(r,b.dataset.filter)).length;
   }
   const problems=[s.last_error,state.channel.last_error,s.runner_error,s.capability_error].filter(Boolean);
+  const receiver=s.node==='windows-inner'?state.capabilities?.local:state.capabilities?.receiver?.data;
+  if(receiver?.profiles?.length&&!receiver.profiles.some(p=>['probe','experiment','maintenance'].includes(p.mode)))problems.push('Windows 当前只有 CPU 自检能力，请在 Windows 看板「接入服务器」配置真实入口');
   if(!s.github_configured)problems.push('尚未配置 GitHub Token（当前只读）');
   if(s.runner_enabled&&!s.model_configured)problems.push('请在连接设置中配置模型和 API Key');
   notice(problems.join(' · ')||'最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询',Boolean(problems.length));
   document.querySelector('[data-panel="submit"]').hidden=s.node!=='mac-outer';
+  document.querySelector('[data-panel="server-setup"]').hidden=s.node!=='windows-inner';
   document.querySelector('[data-panel="capability-panel"]').hidden=!state.capabilities;
   const visible=rows.filter(r=>matches(r,filter));
   // Keep a task in view when it completes or moves to the error filter.
@@ -196,3 +200,20 @@ $('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disa
 $('watch-example').onclick=()=>{try{const profiles=JSON.parse($('profiles-json').value);if(profiles['npu-example'])throw new Error('npu-example 已存在，请编辑现有入口。');profiles['npu-example']={kind:'simplehtmlwatch',entry:'experiment',repository:'my-project',machineId:'替换为机器ID',revisionCommand:'git -C /home/your-user/project rev-parse HEAD',shell:'python3 /home/your-user/project/experiment.py --output "$SHW_RESULTS_DIR/metrics.json"',outputs:['metrics.json'],verification:[{id:'correctness',kind:'output-json',file:'metrics.json',pointer:'/correct',equals:true}]};$('profiles-json').value=JSON.stringify(profiles,null,2);}catch(e){$('agent-notice').textContent=e.message;}};
 $('check-agent').onclick=async()=>{const b=$('check-agent');b.disabled=true;$('check-result').textContent='正在检查…';try{$('check-result').textContent=JSON.stringify(await api('/api/agent-check',{webUrl:$('check-url').value}),null,2);}catch(e){$('check-result').textContent=e.message;}finally{b.disabled=false;}};
 void refresh();setInterval(refresh,3000);
+
+let serverCatalog;
+$('discover-servers').onclick=async()=>{
+  const b=$('discover-servers');b.disabled=true;$('save-servers').disabled=true;$('server-setup-notice').textContent='正在读取本机 simpleHtmlWatch…';
+  try{serverCatalog=await api('/api/server-catalog');$('server-machines').replaceChildren();
+    for(const m of serverCatalog.machines){const label=el('label',undefined,'check'),box=el('input');box.type='checkbox';box.value=m.id;box.checked=serverCatalog.selected.includes(m.id);label.append(box,document.createTextNode(m.name+' · '+m.id+(m.group?' · '+m.group:'')));$('server-machines').append(label);}
+    $('server-maintenance').checked=Boolean(state.service.runner?.profiles?.['server-maintenance']);
+    $('server-setup-notice').textContent=serverCatalog.machines.length?'选择需要接入的机器。保存不会自动启动服务器任务。':'当前没有可调度机器，请先检查 simpleHtmlWatch 的连接、队列与主机信任状态。';
+    $('save-servers').disabled=!serverCatalog.machines.length;
+  }catch(e){$('server-setup-notice').textContent=e.message==='WATCH_NOT_ENABLED'?'先在 Pi 配置中启用 simpleHtmlWatch 并填写本机地址，再读取列表。':e.message;}finally{b.disabled=false;}
+};
+$('server-setup-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;
+  try{const machineIds=[...$('server-machines').querySelectorAll('input:checked')].map(x=>x.value);
+    const result=await api('/api/server-setup',{config_sha256:serverCatalog.config_sha256,machineIds,allowMaintenance:$('server-maintenance').checked});
+    $('server-setup-result').textContent=JSON.stringify(result,null,2);$('server-setup-notice').textContent='已保存，后台将在下一轮公布能力。请先投递探测任务，再配置真实实验。';agentLoaded=false;await refresh();serverCatalog=undefined;
+  }catch(err){$('server-setup-notice').textContent=err.message;b.disabled=false;}
+};

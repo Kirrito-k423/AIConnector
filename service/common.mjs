@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 import {agentConfig} from './agent-config.mjs';
+import {validateRegistry} from './server-registry.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const now = () => new Date().toISOString();
@@ -88,6 +89,12 @@ export function loadConfig(file) {
   c.proxy=c.proxy||'system'; c.tickSeconds=c.connector.poll_seconds;
   need(c.tickSeconds>=1 && c.tickSeconds<=3600,'INVALID_POLL_INTERVAL');
   c.runner??={enabled:false,profiles:{}}; c.runner.profiles??={};
+  if(c.runner.serverRegistry){
+    c.runner.serverRegistry=path.resolve(base,c.runner.serverRegistry);
+    const registry=validateRegistry(json(c.runner.serverRegistry));
+    for(const id of Object.keys(registry.profiles))need(!Object.hasOwn(c.runner.profiles,id),'SERVER_PROFILE_CONFLICT');
+    c.runner.profiles={...c.runner.profiles,...registry.profiles};c.runner.serverRegistrySha=sha(JSON.stringify(registry));
+  }
   c.runner.timeoutSeconds??=600; c.runner.maxTurns??=8;
   need(Number.isInteger(c.runner.timeoutSeconds)&&c.runner.timeoutSeconds>=5&&c.runner.timeoutSeconds<=86400,'INVALID_RUN_TIMEOUT');
   need(Number.isInteger(c.runner.maxTurns)&&c.runner.maxTurns>=1&&c.runner.maxTurns<=100,'INVALID_TURN_LIMIT');

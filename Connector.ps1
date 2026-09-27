@@ -50,12 +50,36 @@ function Canonical($O) {
 }
 function Get-Sha256([byte[]]$Bytes) { $h=[Security.Cryptography.SHA256]::Create(); try { return ([BitConverter]::ToString($h.ComputeHash($Bytes))).Replace('-','').ToLowerInvariant() } finally { $h.Dispose() } }
 function Hash([string]$Text) { return Get-Sha256 ($script:Utf8.GetBytes($Text)) }
-function Parse([string]$Text) { return As-Map (ConvertFrom-Json -InputObject $Text) }
+function Json-TokenValue($Token) {
+    if ($null -eq $Token) { return $null }
+    if ($Token -isnot [Newtonsoft.Json.Linq.JToken]) { return $Token }
+    if ($Token.get_Type().ToString() -eq 'Object') {
+        $map=@{}; foreach ($p in $Token.Properties()) { $map[$p.Name]=Json-TokenValue $p.Value }; return $map
+    }
+    if ($Token.get_Type().ToString() -eq 'Array') {
+        $items=@(); foreach ($item in $Token) { $items+=,(Json-TokenValue $item) }; return ,$items
+    }
+    return $Token.get_Value()
+}
+function Parse-WithoutDates([string]$Text) {
+    # PS 6/7 before DateKind: use its bundled JSON parser, without date coercion.
+    $settings=New-Object Newtonsoft.Json.JsonSerializerSettings
+    $settings.DateParseHandling=[Newtonsoft.Json.DateParseHandling]::None
+    return Json-TokenValue ([Newtonsoft.Json.JsonConvert]::DeserializeObject($Text,$settings))
+}
+function Parse([string]$Text) {
+    if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
+        return As-Map (ConvertFrom-Json -InputObject $Text -DateKind String)
+    }
+    if ($PSVersionTable.PSVersion.Major -ge 6) { return Parse-WithoutDates $Text }
+    # Windows PowerShell 5.1 already preserves JSON timestamp strings.
+    return As-Map (ConvertFrom-Json -InputObject $Text)
+}
 function Read-Json([string]$Path) { Need ([IO.FileInfo]::new($Path).Length -le 16777216) 'FILE_TOO_LARGE'; return Parse ([IO.File]::ReadAllText($Path,$script:Utf8)) }
 function Epoch { return [long]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) }
 function Source-Time($Value) {
     if ($null -eq $Value -or [string]$Value -eq '') { return '' }
-    # PS7 parses ISO JSON dates into DateTime; PS5.1 leaves strings. Never locale-format either.
+    # Normalize only explicit source-event times, never values inside protocol payloads.
     if ($Value -is [DateTime] -or $Value -is [DateTimeOffset]) { $date=[DateTimeOffset]$Value }
     else {
         $date=[DateTimeOffset]::MinValue

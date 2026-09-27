@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {need,sha,read,save,atomic,now,run,safeEnv,loadConfig,cleanError} from './common.mjs';
 import {WatchClient} from './watch.mjs';
+import {validateRegistry} from './server-registry.mjs';
 import {localRequest} from './http.mjs';
 
 const identifier=/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
@@ -14,7 +15,7 @@ export function validateMaintenance(p) {
   need(typeof p.revision==='string'&&/^[\w.-]{1,128}$/.test(p.revision),'MAINTENANCE_REVISION_REQUIRED');
   for(const [id,f]of Object.entries(p.maintenance.files||{})){
     need(identifier.test(id)&&path.isAbsolute(f.path),'INVALID_MAINTENANCE_FILE');
-    need(['text','json','service-config'].includes(f.format),'INVALID_FILE_FORMAT');
+    need(['text','json','service-config','server-registry'].includes(f.format),'INVALID_FILE_FORMAT');
     if(f.write)need(Array.isArray(f.pointers)&&f.pointers.length>0||f.format==='text','WRITE_SCOPE_REQUIRED');
     for(const x of f.pointers||[])need(typeof x==='string'&&x.startsWith('/')&&!x.includes('__proto__')&&!x.includes('/credentials'),'INVALID_WRITE_SCOPE');
   }
@@ -70,6 +71,10 @@ export class Maintenance {
       }else need(typeof text==='string','TEXT_CONTENT_REQUIRED');
       const next=Buffer.from(text);need(next.length<=(grant.maxBytes??65536),'LOCAL_FILE_TOO_LARGE');
       need(this.redact(text)===text,'SECRET_IN_WRITE');
+      if(grant.format==='server-registry'){
+        need(JSON.stringify(grant.pointers)===JSON.stringify(['/profiles']),'SERVER_REGISTRY_WRITE_SCOPE');
+        validateRegistry(JSON.parse(text));
+      }
       if(grant.format==='service-config'){
         const candidate=file+'.aic-candidate.local.json';need(!fs.existsSync(candidate),'CONFIG_CANDIDATE_EXISTS');
         atomic(candidate,next);try{loadConfig(candidate);}finally{fs.unlinkSync(candidate);}

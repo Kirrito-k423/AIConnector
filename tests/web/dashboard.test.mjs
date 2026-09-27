@@ -22,22 +22,24 @@ function fixture(){return {service:{node:'mac-outer',version:'0.6.0',repository:
 let browser;
 before(async()=>{browser=await chromium.launch({headless:true,...(process.env.AIC_BROWSER_EXECUTABLE?{executablePath:process.env.AIC_BROWSER_EXECUTABLE}:{})});});
 after(async()=>{await browser?.close();});
-async function dashboard(t,data=fixture(),viewport={width:1440,height:900}){
+async function dashboard(t,data=fixture(),viewport={width:1440,height:900},routes={}){
   const requests=[];
-  const server=http.createServer((req,res)=>{
+  const server=http.createServer(async(req,res)=>{
     res.setHeader('Cache-Control','no-store');
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'");
     const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/style.css':['style.css','text/css']};
     if(files[req.url]){const [file,mime]=files[req.url];res.setHeader('Content-Type',mime);res.end(fs.readFileSync(path.join(web,file)));return;}
-    requests.push({method:req.method,url:req.url});res.setHeader('Content-Type','application/json');
+    let body='';for await(const chunk of req)body+=chunk;
+    requests.push({method:req.method,url:req.url,body:body?JSON.parse(body):undefined});res.setHeader('Content-Type','application/json');
     if(req.method==='GET'&&req.url==='/api/status'){res.end(JSON.stringify(data));return;}
+    if(routes[req.url]){res.end(JSON.stringify(routes[req.url](body?JSON.parse(body):undefined)));return;}
     if(req.method==='POST'&&req.url==='/api/poll'){res.end('{}');return;}
     res.writeHead(404);res.end('{"error":"NO_MUTATIONS_IN_UI_TEST"}');
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const context=await browser.newContext({viewport}),page=await context.newPage(),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
-  t.after(async()=>{await context.close();await new Promise(resolve=>server.close(resolve));assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.method==='GET'||r.url==='/api/poll'));});
+  t.after(async()=>{await context.close();await new Promise(resolve=>server.close(resolve));assert.deepEqual(errors,[]);assert.ok(requests.every(r=>r.method==='GET'||r.url==='/api/poll'||Object.hasOwn(routes,r.url)));});
   await page.goto('http://127.0.0.1:'+server.address().port+'/#token=synthetic');
   await page.waitForFunction(()=>document.querySelector('#node').textContent.includes('发送端')||document.querySelector('#node').textContent.includes('执行端'));
   return {page,data,requests,poll:()=>page.evaluate(()=>refresh())};
@@ -161,4 +163,23 @@ test('previous runtime settings and historical results do not invent new capabil
   assert.equal(await page.locator('#global-prompt').inputValue(),'本机网络说明');
   assert.equal(await page.locator('#skills-json').isVisible(),false);
   assert.equal(await page.locator('#budget-json').isVisible(),false);
+});
+
+
+test('Windows server onboarding uses actual machine IDs and retains selections during background polling',async t=>{
+  const data=fixture();data.service.node='windows-inner';let saved;
+  const {page,poll}=await dashboard(t,data,{width:1440,height:900},{
+    '/api/server-catalog':()=>({config_sha256:'fixture-config-sha',machines:[{id:'actual-id',name:'服务器 · 测试',group:'内网'}],selected:[]}),
+    '/api/server-setup':body=>{saved=body;return {saved:true,maintenance_enabled:body.allowMaintenance,next:'等待能力公告'};}
+  });
+  await page.locator('[data-panel="server-setup"]').click();
+  assert.equal(await page.locator('#save-servers').isDisabled(),true);
+  await page.locator('#discover-servers').click();await page.locator('#server-machines input').waitFor();
+  assert.equal(await page.locator('#server-maintenance').isChecked(),false);
+  await page.locator('#server-machines input').check();await page.locator('#server-maintenance').check();await poll();
+  assert.equal(await page.locator('#server-machines input').isChecked(),true);
+  await page.locator('#save-servers').click();await page.waitForFunction(()=>document.querySelector('#server-setup-result').textContent.includes('"saved": true'));
+  assert.deepEqual(saved,{config_sha256:'fixture-config-sha',machineIds:['actual-id'],allowMaintenance:true});
+  assert.equal(await page.locator('#save-servers').isDisabled(),true);
+  assert.match(await page.locator('#server-setup-notice').textContent(),/先投递探测任务/);
 });

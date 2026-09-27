@@ -10,6 +10,8 @@ import {WatchClient,validateWatchProfile} from './watch.mjs';
 import {webTools} from './web-tools.mjs';
 import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs';
 
+import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
+
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
 const publicJob=j=>({key:j.key,state:j.state,error:j.error,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,artifact:j.artifact});
 async function body(req) {
@@ -82,6 +84,8 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       const url=new URL(req.url,origin);
       if(req.method==='GET'&&files[url.pathname]) {const [file,mime]=files[url.pathname];res.writeHead(200,{'Content-Type':mime});res.end(fs.readFileSync(path.join(ROOT,'service','web',file)));return;}
       need(req.headers.authorization===`Bearer ${token}`,'UNAUTHORIZED');
+      if(req.method==='GET'&&url.pathname==='/api/server-readiness'){reply(200,serverReadiness(c));return;}
+      if(req.method==='GET'&&url.pathname==='/api/server-catalog'){reply(200,await serverCatalog(c));return;}
       if(req.method==='GET'&&url.pathname==='/api/status'){reply(200,status());return;}
       if(req.method==='GET'&&url.pathname==='/api/capabilities'){reply(200,{local:localCapabilities(),receiver:snapshot.receiver_capabilities||null});return;}
       if(req.method==='GET'&&url.pathname==='/api/result') {
@@ -91,6 +95,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       }
       need(req.method==='POST'&&req.headers['content-type']==='application/json','INVALID_REQUEST');
       const data=await body(req);
+      if(url.pathname==='/api/server-setup'){const value=await setupServers(c,data);lastTick=0;nextPoll=0;reply(200,value);return;}
       if(url.pathname==='/api/preflight'){reply(200,preflight(data.task,snapshot.receiver_capabilities?.data));return;}
       if(url.pathname==='/api/shutdown') {reply(202,{stopping:true});setImmediate(()=>void close());return;}
       if(url.pathname==='/api/tasks') {
@@ -125,10 +130,14 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         need(data.agent&&typeof data.enabled==='boolean'&&data.profiles&&typeof data.profiles==='object'&&!Array.isArray(data.profiles),'INVALID_AGENT_SETTINGS');
         disk.runner={...disk.runner,agent:data.agent,enabled:data.enabled,profiles:data.profiles,timeoutSeconds:data.timeoutSeconds,maxTurns:data.maxTurns};
         if(disk.runner.model&&data.modelLimits)disk.runner.model={...disk.runner.model,...data.modelLimits};
+        if(disk.runner.serverRegistry){
+          const registry=JSON.parse(fs.readFileSync(c.runner.serverRegistry,'utf8'));
+          for(const id of Object.keys(registry.profiles)){need(JSON.stringify(disk.runner.profiles[id])===JSON.stringify(registry.profiles[id]),'EDIT_SERVER_REGISTRY_SEPARATELY');delete disk.runner.profiles[id];}
+        }
         for(const p of Object.values(disk.runner.profiles))validateProfile(p);
         const tmp=c.file+'.candidate.local.json';let candidate;
         atomic(tmp,JSON.stringify(disk));try{candidate=loadConfig(tmp);snapshotAgent(candidate.runner.agent,path.dirname(c.file));}finally{fs.unlinkSync(tmp);}
-        atomic(c.file,JSON.stringify(disk,null,2)+'\n');c.runner=candidate.runner;lastTick=0;reply(200,{saved:true,applies_to:'next_claim'});return;
+        atomic(c.file,JSON.stringify(disk,null,2)+'\n');c.runner=candidate.runner;lastTick=0;nextPoll=0;reply(200,{saved:true,applies_to:'next_claim'});return;
       }
       if(url.pathname==='/api/agent-check') {
         const checks={};
@@ -157,7 +166,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         need(Date.now()-(activity.last_manual_poll||0)>=15000,'POLL_TOO_FREQUENT');activity.last_manual_poll=Date.now();nextPoll=0;lastTick=0;void tick();reply(202,{queued:true});return;
       }
       reply(404,{error:'NOT_FOUND'});
-    }catch(e){reply(['UNAUTHORIZED','INVALID_HOST','INVALID_ORIGIN'].includes(e.message)?403:400,{error:cleanError(e)});}
+    }catch(e){reply(['UNAUTHORIZED','INVALID_HOST','INVALID_ORIGIN'].includes(e.message)?403:400,{error:cleanError(e),...(e.diagnostic?{diagnostic:e.diagnostic}:{})});}
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'127.0.0.1',resolve);});
   atomic(path.join(c.dataDir,'service-info.json'),JSON.stringify({pid:process.pid,url:origin,started_at:now()}));

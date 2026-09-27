@@ -52,7 +52,7 @@ export function validateProfile(p){
   }
 }
 export function capabilities(c,secrets={},snapshot) {
-  const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
+  const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);if(p.kind==='simplehtmlwatch')need(c.runner.agent.simpleHtmlWatch?.enabled,'WATCH_NOT_ENABLED');for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
     return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,
     tools:toolsFor(p,c.runner.agent),checks:p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id),
     ...(p.revision?{revision:p.revision}:{}),
@@ -74,7 +74,12 @@ export function preflight(task,remote) {
     (task.requirements.checks||[]).every(t=>p.checks.includes(t))&&p.repository===task.code.repository;
   const candidates=remote.profiles.filter(match);
   const selected=task.environment.target==='auto'?candidates.length===1?candidates[0]:null:remote.profiles.find(p=>p.id===task.environment.target);
-  need(selected,'RECEIVER_PROFILE_NOT_FOUND_OR_AMBIGUOUS');need(match(selected),'CAPABILITY_MISMATCH');
+  if(!selected||!match(selected)){
+    const e=new Error(selected?'CAPABILITY_MISMATCH':'RECEIVER_PROFILE_NOT_FOUND_OR_AMBIGUOUS');
+    e.diagnostic={requested:{mode:task.requirements.mode,repository:task.code.repository,target:task.environment.target,tools:task.requirements.tools,checks:task.requirements.checks},
+      available:remote.profiles.map(p=>({id:p.id,mode:p.mode,ready:p.ready,checks:p.checks})),
+      next:remote.profiles.some(p=>p.mode==='maintenance')?'可先用接收端已授权的维护入口登记真实实验，再重新投递。':'在 Windows 看板打开「接入服务器」，选择真实机器并启用入口维护；升级软件不会自动新增服务器权限。'};throw e;
+  }
   need(selected.checks.length>0,'ACCEPTANCE_CHECKS_NOT_CONFIGURED');
   need(task.invocation.entry==='auto'||selected.entry===task.invocation.entry,'CAPABILITY_ENTRY_MISMATCH');
   need(!selected.revision||task.code.revision===selected.revision,'CODE_REVISION_MISMATCH');
