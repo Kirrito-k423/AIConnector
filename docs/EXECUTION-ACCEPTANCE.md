@@ -94,6 +94,8 @@ Windows 本地管理员/AI 根据实际环境准备 `maintenance.local.json`。�
 .\Upgrade-Windows.cmd "D:\AIConnector\service-windows-inner.local.json" "D:\local\maintenance.local.json"
 ```
 
+Mac 发送服务也需使用 0.6 才能在投递前检查 Windows 公告。将 Mac 新包解压到固定新目录，用新包的 `runtime/node service/cli.mjs upgrade --config <原 service-mac-outer.local.json 的绝对路径>` 先预检，再追加 `--apply` 重绑服务；Mac 不需要 maintenance 授权文件。原节点、通道、数据和钥匙串保持不变。
+
 有运行中/待启动 worker 会拒绝升级，先等待原任务退出。升级不重启模型网关，不复制密钥，不清理旧状态。备份路径在命令输出中。若安装失败，保留备份和错误码；恢复备份配置后用旧包的 `Install-Windows-Service.cmd --config <原配置>` 重新注册旧服务。若系统对下载脚本有文件标记限制，先运行新包已有 `Prepare-Windows-Service.cmd` 校验/解除文件标记；不更改组织执行策略。
 
 维护写入需提供读取时的 SHA256；仅允许明确列出的文件和精确 JSON pointer，先备份再原子替换。service-config 写入前先校验结构。备份、完整配置、原始 API 响应和完整会话留本地；公开审计只含动作 ID、字段名、修改前后哈希、退出码及检查摘要。`restore_local_file` 使用本次备份并检查当前内容未被他人修改。每个动作持久化 intent；unknown 动作或服务器任务不换 ID 重放。

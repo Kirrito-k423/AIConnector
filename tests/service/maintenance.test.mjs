@@ -80,6 +80,7 @@ for(const claimsOnly of [false,true])test(`real Pi ${claimsOnly?'cannot declare 
   assert.equal(fs.existsSync(path.join(dir,'execution-intent.json')),false);assert.ok(result.agent.continuations>=1);assert.equal(result.agent.usage.totalTokens,model.requests*120);
   assert.ok(result.agent.duration_ms>=model.requests*20);assert.ok(!result.agent.tools.includes('run_experiment'));assert.equal(result.agent.skills.length,1);
   assert.match(JSON.stringify(model.calls[0]),/SKILL_ACTUALLY_LOADED/);assert.match(JSON.stringify(model.calls[0]),/REFERENCE_ACTUALLY_LOADED/);
+  assert.match(JSON.stringify(model.calls[0]),/acceptance_contract/);assert.match(JSON.stringify(model.calls[0]),/8766/,'Pi must see the expected repair value, not only an opaque check ID');
   const zip=unzipSync(fs.readFileSync(path.join(dir,'result.zip')));assert.ok(zip['actions.json']);assert.ok(zip['acceptance.json']);assert.ok(!Object.values(zip).some(b=>Buffer.from(b).includes(dir)));assert.ok(!zip['config.json']);
   if(!claimsOnly){assert.ok(fs.existsSync(path.join(dir,'backups/fix-port.bin')));assert.ok(httpCalls>=2);assert.equal(result.acceptance.status,'passed');assert.ok(read(path.join(dir,'input-state.json')).files[0].read_by_agent);}
  }finally{await model.close();await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});}
