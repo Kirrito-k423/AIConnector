@@ -67,7 +67,26 @@ export function run(command,args=[],options={}) {
   });
 }
 export function cleanError(e) {
-  return /^[A-Z][A-Z0-9_:-]{0,120}$/.test(e.message||'') ? e.message : 'SERVICE_ERROR';
+  if(/^[A-Z][A-Z0-9_:-]{0,120}$/.test(e?.message||''))return e.message;
+  // Inspect structured causes, never return raw messages, URLs, headers or bodies.
+  const queue=[e],seen=new Set();
+  while(queue.length&&seen.size<16){
+    const cause=queue.shift();if(!cause||seen.has(cause))continue;seen.add(cause);
+    const code=String(cause.code||'');
+    if(code==='ECONNREFUSED')return 'CONNECTION_REFUSED';
+    if(['ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT'].includes(code)||cause.name==='TimeoutError')return 'HTTP_TIMEOUT';
+    if(['ENOTFOUND','EAI_AGAIN'].includes(code))return 'DNS_ERROR';
+    if(['ECONNRESET','EPIPE','UND_ERR_SOCKET'].includes(code))return 'CONNECTION_RESET';
+    if(/^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN)/.test(code))return 'TLS_ERROR';
+    if(cause.cause)queue.push(cause.cause);if(Array.isArray(cause.errors))queue.push(...cause.errors.slice(0,8));
+  }
+  return e?.name==='AbortError'?'REQUEST_ABORTED':'SERVICE_ERROR';
+}
+export function safeDiagnostic(value={}) {
+  const out={};
+  for(const key of ['code','action','category'])if(/^[A-Za-z][A-Za-z0-9_:-]{0,120}$/.test(value[key]||''))out[key]=value[key];
+  for(const key of ['line','http'])if(Number.isInteger(value[key])&&value[key]>=0&&value[key]<=1000000)out[key]=value[key];
+  return out;
 }
 export function safeEnv(extra={}) {
   const env={};

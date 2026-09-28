@@ -13,7 +13,7 @@ import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
-const publicJob=j=>({key:j.key,state:j.state,error:j.error,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact});
+const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact});
 async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -43,12 +43,12 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         if(c.node==='windows-inner'&&c.connector.layout==='task-issues-run-releases-v1'){
           const current=localCapabilities();
           if(ledger.capability_digest!==current.digest||Date.now()-(ledger.capability_at||0)>1800000){
-            try{const r=await connector.call('Advertise',{data:current});if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.now();persist();}activity.capability_error='';}
-            catch(e){activity.capability_error=cleanError(e);}
+            try{const r=await connector.call('Advertise',{data:current});if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.now();persist();activity.capability_state='confirmed';}else activity.capability_state='pending';activity.capability_error='';activity.capability_diagnostic=null;}
+            catch(e){activity.capability_error=cleanError(e);activity.capability_diagnostic=e.diagnostic;activity.capability_state='retrying';}
           }
         }
-        try {snapshot=await connector.call('Poll');activity.last_error='';}
-        catch(e){activity.last_error=cleanError(e);try{snapshot=await connector.call('Status');}catch{}}
+        try {snapshot=await connector.call('Poll');activity.last_error='';activity.diagnostic=null;}
+        catch(e){activity.last_error=cleanError(e);activity.diagnostic=e.diagnostic;try{snapshot=await connector.call('Status');}catch{}}
       }
       if(stopping)return;
       if(Date.now()-lastTick>=c.tickSeconds*1000) {
@@ -95,7 +95,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       }
       need(req.method==='POST'&&req.headers['content-type']==='application/json','INVALID_REQUEST');
       const data=await body(req);
-      if(url.pathname==='/api/server-setup'){const value=await setupServers(c,data);lastTick=0;nextPoll=0;reply(200,value);return;}
+      if(url.pathname==='/api/server-setup'){const value=await setupServers(c,data);activity.capability_state='pending';lastTick=0;nextPoll=0;reply(200,{...value,saved:true,publication:{state:'pending',background:true}});return;}
       if(url.pathname==='/api/preflight'){reply(200,preflight(data.task,snapshot.receiver_capabilities?.data));return;}
       if(url.pathname==='/api/shutdown') {reply(202,{stopping:true});setImmediate(()=>void close());return;}
       if(url.pathname==='/api/tasks') {
@@ -147,7 +147,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         }else checks.simpleHtmlWatch={enabled:false};
         if(data.webUrl&&c.runner.agent.web.enabled){try{const tools=webTools(c.runner.agent.web);const value=await tools[0].execute('',{url:data.webUrl});checks.web={ok:true,result:JSON.parse(value.content[0].text)};}catch(e){checks.web={ok:false,error:cleanError(e)};}}
         else checks.web={enabled:c.runner.agent.web.enabled,tested:false};
-        reply(200,{checked_at:now(),checks});return;
+        reply(200,{checked_at:now(),configuration:'saved',hint:'检查使用已保存配置；修改表单后请先保存。',checks});return;
       }
       if(url.pathname==='/api/reload-agent'){
         const candidate=loadConfig(c.file);need(sha(JSON.stringify({node:candidate.node,connector:candidate.connector}))===binding&&candidate.dataDir===c.dataDir&&candidate.port===c.port,'RELOAD_IDENTITY_CHANGED');

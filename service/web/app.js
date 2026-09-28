@@ -10,7 +10,7 @@ const date=t=>timestamp(t)?new Date(timestamp(t)).toLocaleString('zh-CN',{hour12
 const el=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
 function link(parent,text,url){try{const u=new URL(url);if(!['http:','https:'].includes(u.protocol))return;const a=el('a',text);a.href=u.href;a.target='_blank';a.rel='noreferrer';parent.append(a);}catch{}}
 async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+sessionStorage.getItem('aic-token'),...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});const value=await r.json();if(!r.ok)throw new Error(value.diagnostic?value.error+'：'+JSON.stringify(value.diagnostic):value.error);return value;}
-function notice(s,problem=false){$('notice').textContent=s;$('notice').classList.toggle('problem',problem);if(problem&&$('tools-dialog').open)$('dialog-notice').textContent=s;}
+function notice(s,problem=false){$('notice').textContent=s;$('notice').classList.toggle('problem',problem);$('dialog-notice').textContent=problem&&$('tools-dialog').open?s:'';}
 const phase=r=>r.job?.state||r.phase;
 const error=r=>Boolean(r.error||r.job?.error||r.result&&r.result.outcome!=='succeeded'||['unknown','blocked','conflict'].includes(phase(r)));
 const done=r=>['confirmed','receipt'].includes(phase(r));
@@ -150,12 +150,14 @@ function render(){
     b.classList.toggle('active',b.dataset.filter===filter);b.setAttribute('aria-pressed',String(b.dataset.filter===filter));
     b.querySelector('[data-count]').textContent=rows.filter(r=>matches(r,b.dataset.filter)).length;
   }
-  const problems=[s.last_error,state.channel.last_error,s.runner_error,s.capability_error].filter(Boolean);
+  const problems=[s.last_error,state.channel.last_error,s.runner_error].filter(Boolean);
+  const publication=s.capability_error?'本地配置已生效；能力公告暂未成功，后台将继续核对/重试：'+s.capability_error+(s.capability_diagnostic?' '+JSON.stringify(s.capability_diagnostic):''):'';
+  if(s.diagnostic)problems.push(JSON.stringify(s.diagnostic));
   const receiver=s.node==='windows-inner'?state.capabilities?.local:state.capabilities?.receiver?.data;
   if(receiver?.profiles?.length&&!receiver.profiles.some(p=>['probe','experiment','maintenance'].includes(p.mode)))problems.push('Windows 当前只有 CPU 自检能力，请在 Windows 看板「接入服务器」配置真实入口');
   if(!s.github_configured)problems.push('尚未配置 GitHub Token（当前只读）');
   if(s.runner_enabled&&!s.model_configured)problems.push('请在连接设置中配置模型和 API Key');
-  notice(problems.join(' · ')||'最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询',Boolean(problems.length));
+  notice([...problems,publication].filter(Boolean).join(' · ')||'最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询',Boolean(problems.length));
   document.querySelector('[data-panel="submit"]').hidden=s.node!=='mac-outer';
   document.querySelector('[data-panel="server-setup"]').hidden=s.node!=='windows-inner';
   document.querySelector('[data-panel="capability-panel"]').hidden=!state.capabilities;
@@ -199,7 +201,7 @@ $('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disa
   $('agent-notice').textContent='已保存。新配置用于下一次领取的任务；模型地址和密钥保留。';agentLoaded=false;await refresh();
 }catch(err){$('agent-notice').textContent=err.message;}finally{b.disabled=false;}};
 $('watch-example').onclick=()=>{try{const profiles=JSON.parse($('profiles-json').value);if(profiles['npu-example'])throw new Error('npu-example 已存在，请编辑现有入口。');profiles['npu-example']={kind:'simplehtmlwatch',entry:'experiment',repository:'my-project',machineId:'替换为机器ID',revisionCommand:'git -C /home/your-user/project rev-parse HEAD',shell:'python3 /home/your-user/project/experiment.py --output "$SHW_RESULTS_DIR/metrics.json"',outputs:['metrics.json'],verification:[{id:'correctness',kind:'output-json',file:'metrics.json',pointer:'/correct',equals:true}]};$('profiles-json').value=JSON.stringify(profiles,null,2);}catch(e){$('agent-notice').textContent=e.message;}};
-$('check-agent').onclick=async()=>{const b=$('check-agent');b.disabled=true;$('check-result').textContent='正在检查…';try{$('check-result').textContent=JSON.stringify(await api('/api/agent-check',{webUrl:$('check-url').value}),null,2);}catch(e){$('check-result').textContent=e.message;}finally{b.disabled=false;}};
+$('check-agent').onclick=async()=>{const b=$('check-agent');b.disabled=true;$('check-result').textContent='正在检查已保存配置；如修改过表单，请先保存。';try{$('check-result').textContent=JSON.stringify(await api('/api/agent-check',{webUrl:$('check-url').value}),null,2);}catch(e){$('check-result').textContent=e.message;}finally{b.disabled=false;}};
 void refresh();setInterval(refresh,3000);
 
 let serverCatalog;

@@ -78,7 +78,7 @@ export class Runner {
         child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
         job.pid=child.pid;job.state='running';this.persist();child.unref();this.ledger.runner_error='';return;
-      }catch(e){if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);this.persist();return;}
+      }catch(e){job.diagnostic=e.diagnostic;if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);this.persist();return;}
     }
   }
   async reconcile(job,snapshot) {
@@ -90,6 +90,16 @@ export class Runner {
     if(worker)job.worker=worker;
     job.process_exit=read(path.join(job.dir,'worker-exit.json'));
     job.process_failure=read(path.join(job.dir,'worker-failure.json'));
+    // A failed Claim reply is not evidence of a launched worker. The durable
+    // stage and absence of every launch artifact let us close this attempt,
+    // without granting another execution permission or consulting a TTL.
+    if(['claiming','unknown'].includes(job.state)&&!job.claimed_at&&!job.pid&&!worker&&
+      !job.process_exit&&!job.process_failure&&
+      !['spec.json','execution-intent.json','execution.json','watch-task.json'].some(f=>fs.existsSync(path.join(job.dir,f)))&&
+      row?.claimed&&['accepted','started'].includes(row.phase)&&!row.error){
+      job.recovery={kind:'claim-reconciled-before-launch',at:now(),previous_error:job.error};
+      this.blocked(job,'CLAIM_RECONCILED_NOT_EXECUTED');return;
+    }
     if(worker?.state==='blocked'){job.state='blocked';job.error=worker.error;this.persist();return;}
     if(worker?.state==='ready'&& !['submitted','confirmed'].includes(job.state)) {
       job.state='delivering';this.persist();
@@ -98,7 +108,7 @@ export class Runner {
         if(!job.artifact){job.artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'result.zip')});this.persist();}
         const completed={...result,artifacts:[job.artifact]};
         await this.connector.call('Complete',{key:job.key,data:completed});job.state='submitted';job.submitted_at=now();job.error='';this.persist();
-      }catch(e){job.error=cleanError(e);this.persist();}
+      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;this.persist();}
       return;
     }
     if(['claiming','launching','running'].includes(job.state)) {

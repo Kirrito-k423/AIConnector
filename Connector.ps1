@@ -22,6 +22,29 @@ $StateDir=[IO.Path]::GetFullPath($StateDir)
 $script:Token=''; $script:State=$null; $script:Lock=$null; $script:WatchLock=$null
 function Fail([string]$Code) { $e=New-Object InvalidOperationException('Connector stopped'); $e.Data['connector_code']=$Code; throw $e }
 function Need($Condition,[string]$Code) { if (-not $Condition) { Fail $Code } }
+function Error-Code($Record) {
+    $explicit=[string]$Record.Exception.Data['connector_code']
+    if ($explicit) { return $explicit }
+    # Inspect locally, export only an allowlisted category. Messages may contain credentials.
+    $e=$Record.Exception
+    while ($null -ne $e) {
+        if ($e -is [Threading.Tasks.TaskCanceledException] -or $e -is [TimeoutException]) { return 'HTTP_TIMEOUT' }
+        if ($e -is [Security.Authentication.AuthenticationException]) { return 'TLS_ERROR' }
+        if ($e -is [Net.Sockets.SocketException]) {
+            switch ($e.SocketErrorCode.ToString()) {
+                'ConnectionRefused' { return 'CONNECTION_REFUSED' }
+                'ConnectionReset' { return 'CONNECTION_RESET' }
+                'TimedOut' { return 'HTTP_TIMEOUT' }
+                'HostNotFound' { return 'DNS_ERROR' }
+                'TryAgain' { return 'DNS_ERROR' }
+            }
+        }
+        if ($e -is [UnauthorizedAccessException]) { return 'FILESYSTEM_ACCESS_DENIED' }
+        if ($e -is [IO.IOException]) { return 'FILESYSTEM_IO_ERROR' }
+        $e=$e.InnerException
+    }
+    return 'CONNECTOR_ERROR'
+}
 function Get-Field($O,[string]$K,$Default=$null) {
     if ($null -eq $O) { return $Default }
     if ($O -is [Collections.IDictionary]) { if ($O.Contains($K)) { return ,$O[$K] }; return $Default }
@@ -225,9 +248,10 @@ function Invoke-WireHttp {
         if ($cts.IsCancellationRequested -or $msg -match 'timed out|timeout|canceled|cancelled') { $result.status = 'TIMEOUT' }
         elseif ($msg -match 'certificate|SSL|TLS|AuthenticationException') { $result.status = 'TLS_ERROR' }
         elseif ($msg -match 'NameResolution|No such host|nodename|Name or service') { $result.status = 'DNS_ERROR' }
-        else { $result.status = 'NETWORK_ERROR' }
+        else { $category=Error-Code $_; if ($category -in @('CONNECTION_REFUSED','CONNECTION_RESET','DNS_ERROR','TLS_ERROR','HTTP_TIMEOUT')) { $result.status=$category } else { $result.status = 'NETWORK_ERROR' } }
     } finally {
         $sw.Stop(); $result.elapsed_ms = $sw.ElapsedMilliseconds
+        $script:WireDiagnostic=@{category=$result.status;http=$result.http}
         if ($null -ne $response) { $response.Dispose() }
         if ($null -ne $req) { $req.Dispose() }
         $cts.Dispose(); $client.Dispose()
@@ -877,14 +901,14 @@ try {
             if ($Action -in @('Poll','Watch')) { $value=Poll-Once } else { $value=Local-Action }
             [Console]::WriteLine((Json $value))
         } catch {
-            $code=[string]$_.Exception.Data['connector_code']; if (-not $code) { $code='CONNECTOR_ERROR' }
+            $code=Error-Code $_
             if ($null -ne $script:State -and $null -ne $script:Lock) {
                 $script:State.last_error=$code
                 if ($Action -in @('Poll','Watch') -and $script:State.next_poll -le (Epoch)) { $script:State.next_poll=(Epoch)+60 }
                 Save
             }
             if ($Action -ne 'Watch') { throw }
-            [Console]::WriteLine((Json @{ok=$false;code=$code;node=$Node}))
+            [Console]::WriteLine((Json @{ok=$false;code=$code;node=$Node;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}))
         } finally { Close-State }
         $iteration++
         if ($Action -ne 'Watch' -or ($Cycles -gt 0 -and $iteration -ge $Cycles)) { break }
@@ -892,7 +916,7 @@ try {
         Start-Sleep -Seconds $wait
     } while ($true)
 } catch {
-    $code=[string]$_.Exception.Data['connector_code']; if (-not $code) { $code='CONNECTOR_ERROR' }
-    [Console]::WriteLine((Json @{ok=$false;code=$code;node=$Node;line=$_.InvocationInfo.ScriptLineNumber}))
+    $code=Error-Code $_
+    [Console]::WriteLine((Json @{ok=$false;code=$code;node=$Node;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}))
     exit 1
 } finally { Close-State; if ($null -ne $script:WatchLock) { $script:WatchLock.Dispose() }; $script:Token='' }

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {ROOT, run, atomic, id, need,now} from './common.mjs';
+import {ROOT, run, atomic, id, need,now,safeDiagnostic} from './common.mjs';
 
 export class Connector {
   constructor(config,secrets={}) {this.c=config;this.secrets=secrets;this.tail=Promise.resolve();}
@@ -20,7 +20,7 @@ export class Connector {
         const values=result.out.split(/\r?\n/).filter(x=>x.startsWith('{')).map(x=>JSON.parse(x));
         const value=values.at(-1);
         need(value,'CONNECTOR_NO_JSON');
-        if(result.code!==0) throw new Error(value.error||value.code||'CONNECTOR_FAILED');
+        if(result.code!==0){const error=new Error(value.error||value.code||'CONNECTOR_FAILED');error.diagnostic=safeDiagnostic({...value.diagnostic,code:value.code,action,line:value.line});this.activity.diagnostic=error.diagnostic;throw error;}
         return value;
       } finally {this.activity={...this.activity,running:false,milliseconds:Date.now()-started};if(temporary)fs.unlinkSync(temporary);}
     };

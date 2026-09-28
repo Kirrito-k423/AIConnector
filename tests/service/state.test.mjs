@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {save,read,lock,atomic,safeEnv,run} from '../../service/common.mjs';
+import {save,read,lock,atomic,safeEnv,run,cleanError,safeDiagnostic} from '../../service/common.mjs';
 import {Runner} from '../../service/runner.mjs';
 import {storeSecrets,loadSecrets} from '../../service/vault.mjs';
 
@@ -39,4 +39,40 @@ test('worker exit evidence remains visible when an unknown run is reconciled wit
  try{const ledger={jobs:{'x/1/y':{key:'x/1/y',dir,state:'unknown'}}};save(path.join(dir,'worker-exit.json'),{code:1,signal:null,stderr:'EPERM'});save(path.join(dir,'worker-failure.json'),{code:'EPERM',syscall:'rename'});
  const r=new Runner({runner:{enabled:false}},{},ledger,()=>{},{});await r.tick({runs:[]});assert.equal(ledger.jobs['x/1/y'].state,'unknown');assert.equal(ledger.jobs['x/1/y'].process_exit.code,1);assert.equal(ledger.jobs['x/1/y'].process_failure.syscall,'rename');
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('network diagnostics preserve categories without exposing messages or arbitrary fields',()=>{
+ for(const [code,expected]of [['ECONNREFUSED','CONNECTION_REFUSED'],['ECONNRESET','CONNECTION_RESET'],['ETIMEDOUT','HTTP_TIMEOUT'],['ENOTFOUND','DNS_ERROR'],['CERT_HAS_EXPIRED','TLS_ERROR']]){
+   const cause=Object.assign(new Error('PRIVATE_TOKEN in http://private/path'),{code});
+   assert.equal(cleanError(new Error('fetch failed',{cause:new AggregateError([cause])})),expected);
+ }
+ assert.equal(cleanError(new Error('PRIVATE_TOKEN secret')),'SERVICE_ERROR');
+ assert.equal(cleanError(new Error('aborted',{cause:new DOMException('timeout','TimeoutError')})),'HTTP_TIMEOUT');
+ assert.deepEqual(safeDiagnostic({code:'TLS_ERROR',line:99,http:0,action:'Advertise',token:'PRIVATE_TOKEN',body:'private',url:'https://private'}),{code:'TLS_ERROR',action:'Advertise',line:99,http:0});
+});
+
+test('lost Claim reply closes a proven unlaunched attempt and delivers a blocked result without replay',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC claim lost '));
+ try{
+   const job={key:'x/1/y',dir,state:'unknown',error:'CONNECTOR_ERROR'},ledger={jobs:{[job.key]:job}},calls=[];
+   const r=new Runner({runner:{enabled:false}},{call:async(action,args)=>{calls.push(action);return action==='Upload'?{sha256:'fixture'}:{ok:true};}},ledger,()=>{},{});
+   await r.tick({runs:[{key:job.key,phase:'started',claimed:true}]});
+   assert.equal(job.state,'delivering');assert.equal(job.recovery.kind,'claim-reconciled-before-launch');
+   const result=read(path.join(dir,'result.json'));assert.equal(result.outcome,'blocked');assert.equal(result.execution.executed,false);assert.equal(result.agent.turns,0);
+   await r.tick({runs:[{key:job.key,phase:'started',claimed:true}]});
+   assert.equal(job.state,'submitted');assert.deepEqual(calls,['Upload','Complete']);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('public started alone and any launch evidence must never authorize automatic unknown resolution',async()=>{
+ for(const evidence of ['unowned','spec.json','watch-task.json','execution-intent.json','worker.json','claimed_at','pid']){
+   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC ambiguous '));
+   try{const job={key:'x/1/y',dir,state:'unknown',created_at:'2000-01-01T00:00:00Z'};
+     if(evidence.endsWith('.json'))save(path.join(dir,evidence),{});
+     if(evidence==='claimed_at')job.claimed_at='2000-01-01T00:00:00Z';if(evidence==='pid')job.pid=99999999;
+     const r=new Runner({runner:{enabled:false}},{call:()=>assert.fail('must not replay')},{jobs:{[job.key]:job}},()=>{},{});
+     await r.tick({runs:[{key:job.key,phase:'started',claimed:evidence!=='unowned'}]});
+     assert.equal(job.state,'unknown',evidence);assert.equal(fs.existsSync(path.join(dir,'result.json')),false);
+   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+ }
 });

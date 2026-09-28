@@ -38,6 +38,7 @@ test('one local setup enables probe and scoped maintenance; real Pi registers an
     const catalog=(await call('/api/server-catalog')).value;assert.equal(catalog.machines[0].id,'fixture-machine');assert.equal(watch.posts,0);
     let response=await call('/api/server-setup',{config_sha256:catalog.config_sha256,machineIds:['guess-A5'],allowMaintenance:true});assert.equal(response.status,400);
     response=await call('/api/server-setup',{config_sha256:catalog.config_sha256,machineIds:['fixture-machine'],allowMaintenance:true});assert.equal(response.status,200,JSON.stringify(response));
+    assert.equal(response.value.saved,true);assert.deepEqual(response.value.publication,{state:'pending',background:true});
     assert.equal(watch.posts,0);assert.equal(service.status().capabilities.local.profiles.some(p=>p.mode==='probe'),true);
     assert.equal(service.status().capabilities.local.profiles.some(p=>p.mode==='maintenance'),true);
     const saved=JSON.parse(fs.readFileSync(config));assert.deepEqual(saved.runner.model,disk.runner.model);assert.equal(saved.runner.agent.globalPrompt,'KEEP_GLOBAL_CONTEXT');assert.ok(saved.runner.profiles['local-smoke']);assert.ok(!fs.readFileSync(config,'utf8').includes('PRIVATE_'));

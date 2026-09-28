@@ -170,6 +170,35 @@ class ServiceTests(unittest.TestCase):
         self.until(lambda:self.phase('mac-outer','receipt'),130)
         self.assertEqual(len(self.model.calls),2);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
 
+    def test_lost_claim_reply_reconciles_without_launch_and_next_task_completes(self):
+        # Claim really commits through PowerShell; emulate losing its response
+        # before Runner has recorded permission or created a worker spec.
+        self.write_inputs()
+        def connector(node, action, *args):
+            c=self.configs[node][1]
+            p=subprocess.run([PWSH,'-NoLogo','-NoProfile','-File',str(SERVICE_ROOT/'Connector.ps1'),'-Node',node,'-Action',action,
+                '-Config',str(self.config_path),'-StateDir',str(Path(c['dataDir'])/'connector'),'-Proxy','direct',*map(str,args)],
+                capture_output=True,text=True,encoding='utf-8',env=dict(os.environ,AICONNECTOR_GITHUB_TOKEN='MAC_TOKEN' if node=='mac-outer' else 'WIN_TOKEN'),timeout=30)
+            self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+            return json.loads(next(x for x in reversed(p.stdout.splitlines()) if x.startswith('{')))
+        connector('mac-outer','Submit','-File',self.taskfile)
+        for _ in range(4):
+            connector('mac-outer','Poll');connector('windows-inner','Poll')
+        self.assertTrue(connector('windows-inner','Claim','-Key',self.key)['execute'])
+        connector('windows-inner','Poll')
+        script="""import path from 'node:path';import {loadConfig,save,sha,now} from './service/common.mjs';
+const c=loadConfig(process.argv[1]),key=process.argv[2];save(path.join(c.dataDir,'service.json'),{binding:sha(JSON.stringify({node:c.node,connector:c.connector})),jobs:{[key]:{key,dir:path.join(c.dataDir,'jobs',sha(key)),state:'unknown',error:'CONNECTOR_ERROR',created_at:now()}},submissions:{},created_at:now()});"""
+        subprocess.run([NODE,'--input-type=module','-e',script,str(self.configs['windows-inner'][0]),self.key],cwd=SERVICE_ROOT,check=True)
+        self.launch('mac-outer');self.launch('windows-inner')
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['result']['outcome'],'blocked');self.assertFalse(row['result']['execution']['executed'])
+        self.assertEqual(len(self.model.calls),0)
+        # publish() adds an input ZIP, so this changes the task contract as well
+        # as its run ID and must use a new immutable revision.
+        self.key='pi-smoke/2/run-002';self.task.update(run_id='run-002',revision=2);self.publish()
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['result']['outcome'],'succeeded');self.assertEqual(len(self.model.calls),2)
+
     def test_maintenance_preflight_continuation_independent_checks_and_receipt(self):
         target=self.folder/'repair-target.json';target.write_text('{"port":1,"preserved":true}')
         original=target.read_bytes();expected=hashlib.sha256(original).hexdigest()

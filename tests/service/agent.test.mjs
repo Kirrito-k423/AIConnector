@@ -137,7 +137,11 @@ test('dashboard saves agent settings without replacing the configured model gate
     assert.equal(r.status,200,await r.text());const disk=JSON.parse(fs.readFileSync(file));
     assert.equal(disk.runner.model.baseUrl,'http://127.0.0.1:18181/v1');assert.equal(disk.runner.model.compat.supportsDeveloperRole,false);assert.equal(disk.runner.model.contextWindow,65536);
     assert.ok(!fs.readFileSync(file,'utf8').includes('PRIVATE_'));assert.equal(service.status().service.model_configured,true);
-    r=await fetch(service.url+'/api/agent-check',{method:'POST',headers,body:'{}'});const check=await r.json();assert.equal(check.checks.simpleHtmlWatch.ok,true);assert.equal(check.checks.context.ok,true);assert.equal(fixture.posts,0);
+    r=await fetch(service.url+'/api/agent-check',{method:'POST',headers,body:'{}'});const check=await r.json();assert.equal(check.checks.simpleHtmlWatch.ok,true);assert.equal(check.checks.simpleHtmlWatch.baseUrl,fixture.url);assert.equal(check.configuration,'saved');assert.equal(check.checks.context.ok,true);assert.equal(fixture.posts,0);
+    const closed=http.createServer();await new Promise(r=>closed.listen(0,'127.0.0.1',r));const refusedUrl='http://127.0.0.1:'+closed.address().port;await new Promise(r=>closed.close(r));
+    service.config.runner.agent.simpleHtmlWatch.baseUrl=refusedUrl;
+    r=await fetch(service.url+'/api/agent-check',{method:'POST',headers,body:'{}'});const refused=await r.json();
+    assert.deepEqual(refused.checks.simpleHtmlWatch,{ok:false,baseUrl:refusedUrl,error:'CONNECTION_REFUSED'});assert.match(refused.hint,/先保存/);
     r=await fetch(service.url+'/api/agent-settings',{method:'POST',headers,body:JSON.stringify({agent:{...agent,compaction:{enabled:true,reserveTokens:60000,keepRecentTokens:20000}},enabled:false,timeoutSeconds:1800,maxTurns:32,profiles:disk.runner.profiles})});
     assert.equal(r.status,400);assert.equal(JSON.parse(fs.readFileSync(file)).runner.agent.globalPrompt,'configured in browser');
   }finally{if(service)await service.close();await fixture.close();fs.rmSync(dir,{recursive:true,force:true});}

@@ -182,4 +182,9 @@ test('Windows server onboarding uses actual machine IDs and retains selections d
   assert.deepEqual(saved,{config_sha256:'fixture-config-sha',machineIds:['actual-id'],allowMaintenance:true});
   assert.equal(await page.locator('#save-servers').isDisabled(),true);
   assert.match(await page.locator('#server-setup-notice').textContent(),/先投递探测任务/);
+  data.service.capability_error='TLS_ERROR';data.service.capability_diagnostic={action:'Advertise',line:123,http:0};await poll();
+  assert.match(await page.locator('#notice').textContent(),/本地配置已生效.*后台将继续/);
+  assert.equal(await page.locator('#notice').evaluate(e=>e.classList.contains('problem')),false);
+  assert.equal(await page.locator('#dialog-notice').textContent(),'');
+  assert.match(await page.locator('#server-setup-notice').textContent(),/已保存/);
 });
