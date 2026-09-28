@@ -108,6 +108,12 @@ class ServiceTests(unittest.TestCase):
             # intentionally invalid Host headers. Never send them through the
             # public-download proxy and mistake its response for our server's.
             with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as r:return json.load(r)
+        except TimeoutError:
+            # urllib may raise a bare socket timeout while reading headers or
+            # the body. Read observations remain pending within until()'s
+            # original deadline; never retry an ambiguous mutation here.
+            if data is not None:raise
+            return None
         except (ConnectionError,urllib.error.URLError) as e:
             if isinstance(e,urllib.error.HTTPError):
                 e.msg=e.read().decode();e.close();raise
