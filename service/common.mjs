@@ -115,6 +115,8 @@ export function loadConfig(file) {
     c.runner.profiles={...c.runner.profiles,...registry.profiles};c.runner.serverRegistrySha=sha(JSON.stringify(registry));
   }
   c.runner.timeoutSeconds??=600; c.runner.maxTurns??=8;
+  c.runner.maxConcurrentRuns??=1;
+  need(Number.isInteger(c.runner.maxConcurrentRuns)&&c.runner.maxConcurrentRuns>=1&&c.runner.maxConcurrentRuns<=8,'INVALID_RUN_CONCURRENCY');
   need(Number.isInteger(c.runner.timeoutSeconds)&&c.runner.timeoutSeconds>=5&&c.runner.timeoutSeconds<=86400,'INVALID_RUN_TIMEOUT');
   need(Number.isInteger(c.runner.maxTurns)&&c.runner.maxTurns>=1&&c.runner.maxTurns<=100,'INVALID_TURN_LIMIT');
   if(c.runner.model) {

@@ -11,7 +11,7 @@ export function prepareUpgrade(file,policyFile){
   const ledger=read(path.join(c.dataDir,'service.json'),{jobs:{}});
   for(const job of Object.values(ledger.jobs)){
     const worker=read(path.join(job.dir,'worker.json'),{});
-    need(!['claiming','launching','running'].includes(job.state)&&!alive(worker.pid||job.pid),'UPGRADE_ACTIVE_WORKER');
+    need(!['reserving','claiming','launching','running'].includes(job.state)&&!alive(worker.pid||job.pid),'UPGRADE_ACTIVE_WORKER');
   }
   disk.runner??={};disk.runner.profiles??={};disk.runner.agent=agentConfig(disk.runner.agent,disk.runner.model);
   if(policyFile){

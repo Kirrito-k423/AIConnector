@@ -13,7 +13,7 @@ import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
-const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact});
+const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact});
 async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -32,7 +32,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   if(!fs.existsSync(authFile))atomic(authFile,id());
   const token=fs.readFileSync(authFile,'utf8');
   const connector=new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
-  let snapshot={runs:[],outbox:[]},busy=false,stopping=false,lastTick=0,nextPoll=0;
+  let snapshot={runs:[],outbox:[]},busy=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
   const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
   async function tick() {
@@ -58,18 +58,29 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
           try {
             if(draft.zipFile&&!draft.artifact){draft.artifact=await connector.call('Upload',{key:draft.key,file:draft.zipFile});persist();}
             await connector.call('Submit',{data:{...draft.task,artifacts:draft.artifact?[draft.artifact]:draft.task.artifacts}});
+            flushNeeded=true;
             draft.state='queued';draft.error='';persist();
           } catch(e){draft.error=cleanError(e);persist();}
         }
-        await runner.tick(snapshot);persist();
+        persist();
       }
     }catch(e){activity.last_error=cleanError(e);}
     finally{busy=false;activity.busy=false;}
   }
+  async function supervise(){
+    if(supervising||stopping)return;supervising=true;
+    try{await runner.tick(snapshot);persist();}catch(e){ledger.runner_error=cleanError(e);}finally{supervising=false;}
+  }
+  async function flush(){
+    if(flushing||stopping||Date.now()<nextFlush||Date.now()<(snapshot.next_poll||0)*1000)return;
+    if(!flushNeeded&&!connector.dirty&&!(snapshot.outbox||[]).some(e=>['pending','rate_limited'].includes(e.status)))return;
+    flushing=true;nextFlush=Date.now()+Math.max(1,c.connector.write_interval_seconds||1)*1000;
+    try{snapshot=await connector.call('Flush');flushNeeded=false;connector.dirty=false;}catch(e){activity.last_error=cleanError(e);activity.diagnostic=e.diagnostic;nextFlush=Date.now()+10000;}finally{flushing=false;}
+  }
   function status() {
     return {schema:'aiconnector.dashboard.v1',capabilities:{local:localCapabilities(),receiver:snapshot.receiver_capabilities||null},service:{...activity,version:VERSION,transport:connector.activity,runner_enabled:c.runner.enabled,runner_error:ledger.runner_error||'',poll_seconds:c.tickSeconds,repository:c.connector.repository,
       github_configured:Boolean(secrets.githubToken),model_configured:Boolean(c.runner.model&&secrets.apiKey),model:c.runner.model||null,
-      runner:{agent:c.runner.agent,profiles:c.runner.profiles,enabled:c.runner.enabled,timeoutSeconds:c.runner.timeoutSeconds,maxTurns:c.runner.maxTurns,proxy:c.runner.proxy||'system'}},
+      runner:{agent:c.runner.agent,profiles:c.runner.profiles,enabled:c.runner.enabled,timeoutSeconds:c.runner.timeoutSeconds,maxTurns:c.runner.maxTurns,maxConcurrentRuns:c.runner.maxConcurrentRuns,activeRuns:runner.slots(),proxy:c.runner.proxy||'system'}},
       channel:snapshot,jobs:Object.values(ledger.jobs).map(publicJob),submissions:Object.values(ledger.submissions).map(d=>({key:d.key,task:d.task,state:d.state,error:d.error,created_at:d.created_at}))};
   }
   const origin=`http://127.0.0.1:${c.port}`;
@@ -128,7 +139,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       if(url.pathname==='/api/agent-settings') {
         const disk=JSON.parse(fs.readFileSync(c.file,'utf8'));disk.runner??={};
         need(data.agent&&typeof data.enabled==='boolean'&&data.profiles&&typeof data.profiles==='object'&&!Array.isArray(data.profiles),'INVALID_AGENT_SETTINGS');
-        disk.runner={...disk.runner,agent:data.agent,enabled:data.enabled,profiles:data.profiles,timeoutSeconds:data.timeoutSeconds,maxTurns:data.maxTurns};
+        disk.runner={...disk.runner,agent:data.agent,enabled:data.enabled,profiles:data.profiles,timeoutSeconds:data.timeoutSeconds,maxTurns:data.maxTurns,...(data.maxConcurrentRuns!==undefined?{maxConcurrentRuns:data.maxConcurrentRuns}:{})};
         if(disk.runner.model&&data.modelLimits)disk.runner.model={...disk.runner.model,...data.modelLimits};
         if(disk.runner.serverRegistry){
           const registry=JSON.parse(fs.readFileSync(c.runner.serverRegistry,'utf8'));
@@ -145,6 +156,10 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         if(c.runner.agent.simpleHtmlWatch.enabled) {
           try{const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();checks.simpleHtmlWatch={ok:true,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,observed_at:env.observed_at,ready:env.ready,ready_is_not_npu_idle:true};}catch(e){checks.simpleHtmlWatch={ok:false,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,error:cleanError(e)};}
         }else checks.simpleHtmlWatch={enabled:false};
+        if(c.runner.agent.simpleHtmlWatch.enabled&&(c.runner.maxConcurrentRuns??1)>1){
+          try{const r=await new WatchClient(c.runner.agent.simpleHtmlWatch).call('/api/tasks/reservations');need(r.schema==='simplehtmlwatch.reservations.v1','WATCH_RESERVATIONS_REQUIRED');checks.reservations={ok:true,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl};}
+          catch(e){checks.reservations={ok:false,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,error:cleanError(e),hint:'并行 SSH 需要支持 reservations.v1 的 simpleHtmlWatch；旧控制器请先升级。'};}
+        }
         if(data.webUrl&&c.runner.agent.web.enabled){try{const tools=webTools(c.runner.agent.web);const value=await tools[0].execute('',{url:data.webUrl});checks.web={ok:true,result:JSON.parse(value.content[0].text)};}catch(e){checks.web={ok:false,error:cleanError(e)};}}
         else checks.web={enabled:c.runner.agent.web.enabled,tested:false};
         reply(200,{checked_at:now(),configuration:'saved',hint:'检查使用已保存配置；修改表单后请先保存。',checks});return;
@@ -170,14 +185,14 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'127.0.0.1',resolve);});
   atomic(path.join(c.dataDir,'service-info.json'),JSON.stringify({pid:process.pid,url:origin,started_at:now()}));
-  const interval=setInterval(()=>void tick(),1000);void tick();
+  const interval=setInterval(()=>{void tick();void supervise();void flush();},1000);void tick();void supervise();
   let closePromise;
   const close=()=>closePromise??=(async()=>{
     stopping=true;clearInterval(interval);await new Promise(resolve=>server.close(resolve));
     // An in-flight tick may enqueue more transport work after its current call.
     // Keep ownership until that entire tick and its subprocesses have drained.
-    while(busy)await new Promise(resolve=>setTimeout(resolve,25));
-    await connector.tail;unlock();
+    while(busy||supervising||flushing)await new Promise(resolve=>setTimeout(resolve,25));
+    await runner.idle();await connector.tail;unlock();
   })();
   return {server,close,status,token,url:origin,config:c};
 }

@@ -38,6 +38,7 @@ export function validateRequirements(task){
   need(Array.isArray(r.checks)&&r.checks.length>0&&r.checks.length<=16&&r.checks.every(t=>typeof t==='string'&&t.length<=40),'INVALID_REQUIRED_CHECKS');
 }
 export function validateProfile(p){
+  need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');
   need(['builtin-smoke','maintenance','command','simplehtmlwatch'].includes(p.kind),'INVALID_PROFILE');
   if(p.kind==='builtin-smoke')return;
   if(p.kind==='maintenance')validateMaintenance(p);
@@ -61,7 +62,7 @@ export function capabilities(c,secrets={},snapshot) {
   // Paths, commands, host addresses, context bodies and credentials stay local.
   const context=snapshot?{sha256:snapshot.contextDigest,files:snapshot.contexts.map(f=>({name:f.name,sha256:f.sha256})),skills:(snapshot.skills||[]).map(s=>({name:s.name,sha256:s.sha256,requiredTools:s.requiredTools}))}:{loaded:false};
   const body={schema:'aiconnector.capabilities.v1',node:c.node,namespace:c.connector.namespace,version:VERSION,
-    enabled:c.runner.enabled===true,model_configured:Boolean(c.runner.model&&secrets.apiKey),profiles,context,
+    enabled:c.runner.enabled===true,model_configured:Boolean(c.runner.model&&secrets.apiKey),profiles,context,scheduler:{max_concurrent_runs:c.runner.maxConcurrentRuns??1,ssh_reservations_required:(c.runner.maxConcurrentRuns??1)>1},
     config_sha256:sha(JSON.stringify({runner:c.runner,version:VERSION,context_sha256:snapshot?.contextDigest||null}))};
   return {...body,digest:sha(JSON.stringify(body)),generated_at:now()};
 }

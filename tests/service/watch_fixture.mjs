@@ -13,8 +13,9 @@ export function tarBundle(files,kind='0') {
   return gzipSync(Buffer.concat([...chunks,Buffer.alloc(1024)]));
 }
 
-export async function watchFixture({losePost=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false}={}) {
+export async function watchFixture({losePost=false,loseReserve=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false}={}) {
   let posts=0,reads=0,token='watch-one',job;const requests=[];
+  const reservations={};
   const archive=tarBundle({'stdout.log':'fixture server result\n','stderr.log':'','results/aiconnector-revision.txt':revision+'\n','results/metrics.json':'{"fixture":true,"sum":7}','results/not-exported.txt':'PRIVATE_OTHER_FILE'});
   const server=http.createServer(async(req,res)=>{
     let body='';for await(const b of req)body+=b;requests.push({url:req.url,body,headers:req.headers});
@@ -22,6 +23,18 @@ export async function watchFixture({losePost=false,revision='fixture-rev',status
     const reply=(value,code=200)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
     if(u.pathname==='/'){res.end(`<meta name="watch-token" content="${token}">`);return;}
     if(req.headers['x-watch-token']!==token)return reply({error:'token'},403);
+    if(u.pathname==='/api/tasks/reservations'){
+      if(req.method==='GET')return reply({schema:'simplehtmlwatch.reservations.v1',reservations});
+      const data=JSON.parse(body),old=reservations[data.id];if(old)return reply(old,old.releasedAt?410:200);
+      if(Object.values(reservations).some(r=>r.machineId===data.machineId&&!r.releasedAt))return reply({error:'busy'},409);
+      const r=reservations[data.id]={...data,resourceKey:'machine:'+data.machineId,createdAt:new Date().toISOString()};
+      if(loseReserve){loseReserve=false;req.socket.destroy();return;}return reply(r,201);
+    }
+    if(u.pathname==='/api/tasks/reservations/release'){
+      const data=JSON.parse(body),r=reservations[data.id];if(!r)return reply({},404);
+      if(job?.reservationId===data.id&&['running','unknown'].includes(job.status))return reply({error:'live task'},409);
+      r.releasedAt=new Date().toISOString();return reply(r);
+    }
     if(u.pathname==='/api/status')return reply({updatedAt:new Date().toISOString(),machines:[{id:'fixture-machine',status:'online'}]});
     if(u.pathname==='/api/tasks/ready')return reply([{id:'fixture-machine',name:'CPU fixture',updatedAt:new Date().toISOString()}]);
     if(u.pathname==='/api/tasks'&&req.method==='POST') {

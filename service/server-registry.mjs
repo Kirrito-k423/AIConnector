@@ -7,6 +7,7 @@ export function validateRegistry(value) {
   need(Array.isArray(value.machineIds)&&value.machineIds.length>0&&value.machineIds.length<=12&&value.machineIds.every(x=>typeof x==='string'&&x.length>0&&x.length<=256)&&new Set(value.machineIds).size===value.machineIds.length,'INVALID_SERVER_MACHINES');
   need(value.profiles&&typeof value.profiles==='object'&&!Array.isArray(value.profiles)&&Object.keys(value.profiles).length<=24,'INVALID_SERVER_PROFILES');
   for(const [id,p]of Object.entries(value.profiles)){
+    need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');
     need(name.test(id)&&!['constructor','prototype','__proto__','server-maintenance'].includes(id),'INVALID_SERVER_PROFILE_ID');
     need(p.kind==='simplehtmlwatch'&&value.machineIds.includes(p.machineId)&&!p.group&&!p.allowAnyMachine&&!p.allowTaskArguments,'SERVER_PROFILE_SCOPE');
     need(['probe','experiment'].includes(p.mode)&&name.test(p.entry)&&typeof p.repository==='string'&&p.repository.length>0&&p.repository.length<=128&&/^[\w.-]{1,128}$/.test(p.revision),'INVALID_SERVER_PROFILE');

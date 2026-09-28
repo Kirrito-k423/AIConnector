@@ -63,6 +63,7 @@ export class WatchExecution {
   remember(job) {
     const record=this.record;need(record&&record.id===job.id,'WATCH_TASK_ID_MISMATCH');
     need(job.shell===record.request.shell&&(job.machineId||'')===(record.request.machineId||'')&&(job.group||'')===(record.request.group||''),'WATCH_TASK_CONTENT_MISMATCH');
+    need((job.reservationId||'')===(record.request.reservationId||''),'WATCH_RESERVATION_MISMATCH');
     record.job=publicJob(job);record.observed_at=now();save(this.file,record);this.event('server_task_observed',{id:job.id,status:job.status,machine:job.selectedMachineId});return record.job;
   }
   async submit() {
@@ -71,7 +72,11 @@ export class WatchExecution {
     const expected=this.spec.task.code.revision;need(/^[\w.-]{1,128}$/.test(expected),'INVALID_ACTUAL_REVISION');
     const shell=`set -eu\naic_revision="$( ${p.revisionCommand}\n)"\nprintf '%s\\n' "$aic_revision" > "$SHW_RESULTS_DIR/aiconnector-revision.txt"\nif [ "$aic_revision" != ${quote(expected)} ]; then printf 'CODE_REVISION_MISMATCH\\n' >&2; exit 86; fi\n${p.shell}`;
     need(Buffer.byteLength(shell)<=4096,'WATCH_COMMAND_TOO_LARGE');
-    const request={id:'aic-'+sha(this.spec.key).slice(0,48),shell,...(p.machineId?{machineId:p.machineId}:p.group?{group:p.group}:{})};
+    const request={id:'aic-'+sha(this.spec.key).slice(0,48),shell,...(p.machineId?{machineId:p.machineId}:p.group?{group:p.group}:{}),...(this.spec.reservation?{reservationId:this.spec.reservation.id}:{})};
+    if(this.spec.reservation){
+      const catalog=await this.client.call('/api/tasks/reservations'),r=catalog.reservations?.[this.spec.reservation.id];
+      need(catalog.schema==='simplehtmlwatch.reservations.v1'&&r?.machineId===p.machineId&&!r.releasedAt,'RESERVATION_OWNERSHIP_INVALID');
+    }
     // Write intent before POST. An unknown response is queried by ID, never submitted again.
     save(this.file,{id:request.id,request,created_at:now()});this.event('server_task_submitting',{id:request.id});
     try{return this.remember(await this.client.call('/api/tasks',{method:'POST',body:request}));}

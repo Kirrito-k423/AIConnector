@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Watch','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Watch','Flush','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -683,12 +683,13 @@ function Flush-One {
     if ($script:State.next_poll -gt (Epoch)) { return }
     if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
     $runs=Runs
-    foreach ($id in @($script:State.outbox.Keys | Sort-Object)) {
+    foreach ($id in @($script:State.outbox.Keys | Sort-Object @{Expression={Get-Field $script:State.outbox[$_] 'last_attempt_at' 0}},@{Expression={Get-Field $script:State.outbox[$_] 'queued_at' 0}},@{Expression={$_}})) {
         $item=$script:State.outbox[$id]; $e=$item.event; $key=Run-Key $e
         if ($item.status -notin @('pending','rate_limited')) { continue }
         if ($script:State.conflicts.ContainsKey($key) -or ($runs.ContainsKey($key) -and $runs[$key].phase -eq 'conflict')) { continue }
         if ($e.parent -and -not $script:State.events.ContainsKey($e.parent)) { continue }
         if (-not $script:Token) { $script:State.last_error='TOKEN_REQUIRED'; Save; return }
+        $item.last_attempt_at=Epoch; Save
         $commentsPath=$script:CommentsPath
         if ($script:Relay) {
             $route=Ensure-TaskIssue $e; if ($null -eq $route) { return }
@@ -814,6 +815,7 @@ function Upload-Zip([string]$Path) {
     return $manifest
 }
 function Local-Action {
+    if ($Action -eq 'Flush') { Auto-Transitions; Flush-One; return Snapshot }
     if ($Action -eq 'Advertise') { return Advertise-Capabilities }
     if ($Action -eq 'Capabilities') { Assert-Relay; $null=Read-Routes; return @{receiver_capabilities=(Read-Capabilities)} }
     $runs=Runs

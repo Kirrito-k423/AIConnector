@@ -16,7 +16,7 @@ function init(){
   atomic(file,JSON.stringify({schema:'aiconnector.service.v1',node,port:node==='mac-outer'?43110:43111,
     connectorConfig:path.join(ROOT,'connector.config.json'),dataDir:path.join(ROOT,'service-data',node),
     powershell:fs.existsSync(bundled)?bundled:process.platform==='win32'?'powershell.exe':'pwsh',proxy:'system',
-    runner:{enabled:node==='windows-inner',timeoutSeconds:1800,maxTurns:32,agent:agentConfig(),profiles:{'local-smoke':{kind:'builtin-smoke',entry:'smoke',repository:'aiconnector-builtin',outputs:['metrics.json']}}}
+    runner:{enabled:node==='windows-inner',timeoutSeconds:1800,maxTurns:32,maxConcurrentRuns:4,agent:agentConfig(),profiles:{'local-smoke':{kind:'builtin-smoke',entry:'smoke',repository:'aiconnector-builtin',outputs:['metrics.json']}}}
   },null,2)+'\n');
 }
 function tag(c){return 'AIConnector-'+sha(c.dataDir).slice(0,12);}

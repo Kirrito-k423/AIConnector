@@ -7,9 +7,30 @@ on:
         description: Optional public candidate tag to download and verify
         required: false
         type: string
+      publish_tag:
+        description: Optional candidate tag to publish only after all Windows package checks pass
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
+  publish-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_tag != '' && inputs.release_tag == ''
+    needs: [windows-service, windows-maintenance-recovery, windows-runtime-diagnostic]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-service-windows-x64
+          path: dist/service
+      - name: Publish the exact tested Windows package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.publish_tag }}
+        run: python3 tools/publish_service_candidate.py "$CANDIDATE_TAG" dist/service
   windows-runtime-diagnostic:
     if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     runs-on: windows-latest

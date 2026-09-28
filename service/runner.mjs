@@ -5,10 +5,16 @@ import {zipSync,strToU8} from 'fflate';
 import {ROOT,sha,now,save,read,atomic,alive,need,safeEnv,cleanError} from './common.mjs';
 import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {validateWatchProfile} from './watch.mjs';
+import {Resources} from './resources.mjs';
 import {checkRequirements,capabilities,VERSION} from './capabilities.mjs';
 
 export class Runner {
-  constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});}
+  constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});this.resources=new Resources(config,ledger,persist);this.pending=new Map();this.delivering=false;
+    for(const job of Object.values(ledger.jobs))if(!job.resources&&['claiming','launching','running','unknown'].includes(job.state)){job.resources={keys:['*'],state:'unknown',error:'LEGACY_EXECUTION_SCOPE_UNKNOWN'};persist();}
+  }
+  schedule(id,work){if(this.pending.has(id))return;const promise=Promise.resolve().then(work).catch(e=>{this.ledger.runner_error=cleanError(e);this.persist();}).finally(()=>this.pending.delete(id));this.pending.set(id,promise);}
+  async idle(){while(this.pending.size)await Promise.allSettled([...this.pending.values()]);}
+  slots(){return Object.values(this.jobs).filter(j=>['reserving','claiming','launching','running'].includes(j.state)||j.state==='unknown'&&alive(j.worker?.pid||j.pid)).length;}
   get jobs(){return this.ledger.jobs;}
   blocked(job,reason){
     const result={outcome:'blocked',exit_code:-1,actual_revision:'not-executed',summary:`任务未执行：${reason}。请匹配接收端实际能力后创建新运行。`,metrics:{runner_error:reason},artifacts:[],acceptance:{status:'blocked',reason,checks:[]},execution:{started_at:null,ended_at:null,executed:false},agent:{version:VERSION,started_at:null,ended_at:now(),duration_ms:0,turns:0,tool_steps:0,tools:[],stop_reason:reason}};
@@ -35,9 +41,22 @@ export class Runner {
     for(const job of Object.values(this.jobs))await this.reconcile(job,snapshot);
     if(!this.c.runner.enabled||this.c.node!=='windows-inner')return;
     if(!(this.secrets.githubToken||process.env[this.c.connector.token_env])){this.ledger.runner_error='GITHUB_CREDENTIAL_REQUIRED';return;}
-    if(Object.values(this.jobs).some(j=>['launching','running','claiming','unknown'].includes(j.state)))return;
-    for(const row of snapshot.runs||[]) {
+    // Stable admission time controls scheduling; dashboard activity sorting is separate.
+    for(const row of snapshot.runs||[]){
       if(row.phase!=='accepted'||row.error||this.jobs[row.key])continue;
+      this.jobs[row.key]={key:row.key,dir:path.join(this.c.dataDir,'jobs',sha(row.key)),state:'waiting',created_at:now(),sequence:this.ledger.next_sequence=(this.ledger.next_sequence||0)+1,error:''};this.persist();
+    }
+    for(const job of Object.values(this.jobs).filter(j=>j.state==='waiting').sort((a,b)=>(a.sequence||0)-(b.sequence||0))){
+      if(this.slots()>=(this.c.runner.maxConcurrentRuns??1))break;
+      if((job.next_attempt||0)>Date.now()||this.pending.has('start:'+job.key))continue;
+      const row=(snapshot.runs||[]).find(r=>r.key===job.key&&r.phase==='accepted'&&!r.error);if(!row)continue;
+      const profile=this.c.runner.profiles[row.task.environment.target];
+      const conflict=this.resources.conflict(job,this.resources.keys(profile||{},job.key));
+      if(conflict){job.wait_reason='RESOURCE_BUSY';job.wait_owner=conflict.key;continue;}
+      job.state='reserving';job.resources??={keys:this.resources.keys(profile||{},job.key),state:'reserving'};this.persist();this.schedule('start:'+job.key,()=>this.launch(job,row));
+    }
+  }
+  async launch(job,row) {
       let profile,agent,preflightError='';
       try{
         profile=this.profile(row.task);agent=snapshotAgent(agentConfig(this.c.runner.agent,this.c.runner.model),path.dirname(this.c.file));
@@ -45,8 +64,13 @@ export class Runner {
         need(!row.task.receiver_config_sha256||row.task.receiver_config_sha256===capabilities(this.c,this.secrets,agent).config_sha256,'RECEIVER_CONFIG_CHANGED');
         need(this.c.runner.model&&this.secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
       }catch(e){preflightError=cleanError(e);}
-      const dir=path.join(this.c.dataDir,'jobs',sha(row.key));
-      const job={key:row.key,dir,state:'claiming',created_at:now(),error:''};this.jobs[row.key]=job;this.persist();
+      const dir=job.dir;
+      try{
+        if(!preflightError&&!await this.resources.acquire(job,profile)){
+          job.state='waiting';job.next_attempt=Date.now()+5000;this.persist();return;
+        }
+      }catch(e){preflightError=cleanError(e);}
+      job.state='claiming';delete job.wait_reason;delete job.wait_owner;this.persist();
       try {
         // A persisted claim intent never authorizes execution on recovery by itself.
         const claim=await this.connector.call('Claim',{key:row.key});
@@ -58,7 +82,7 @@ export class Runner {
           const src=path.join(this.c.stateDir,'artifacts',artifact.sha256+'.zip'), bytes=fs.readFileSync(src);
           need(bytes.length===artifact.bytes&&sha(bytes)===artifact.sha256,'INPUT_HASH_MISMATCH');atomic(path.join(dir,'inputs',artifact.name),bytes);
         }
-        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
+        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,reservation:job.resources?.remote,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
         job.state='launching';job.claimed_at=now();this.persist();
         const proxy=this.c.runner.proxy||'system';const modelEnv={};
         if(proxy!=='direct')for(const name of ['HTTP_PROXY','HTTPS_PROXY'])if(proxy!=='system'||process.env[name])modelEnv[name]=proxy==='system'?process.env[name]:proxy;
@@ -79,9 +103,14 @@ export class Runner {
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
         job.pid=child.pid;job.state='running';this.persist();child.unref();this.ledger.runner_error='';return;
       }catch(e){job.diagnostic=e.diagnostic;if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);this.persist();return;}
-    }
   }
   async reconcile(job,snapshot) {
+    if(this.pending.has('start:'+job.key))return;
+    if(job.state==='reserving'){job.state='waiting';this.persist();}
+    const finished=read(path.join(job.dir,'worker.json'))?.state==='ready';
+    if(finished&&job.resources&&!['released','waiting'].includes(job.resources.state)&&Date.now()>=(job.resource_check_at||0)){
+      job.resource_check_at=Date.now()+5000;this.schedule('release:'+job.key,()=>this.resources.release(job));
+    }
     if(['confirmed','blocked'].includes(job.state))return;
     const row=(snapshot.runs||[]).find(x=>x.key===job.key);
     if(row?.phase==='conflict'){job.state='blocked';job.error='RUN_CONFLICT';this.persist();return;}
@@ -103,12 +132,15 @@ export class Runner {
     if(worker?.state==='blocked'){job.state='blocked';job.error=worker.error;this.persist();return;}
     if(worker?.state==='ready'&& !['submitted','confirmed'].includes(job.state)) {
       job.state='delivering';this.persist();
+      if(!this.delivering&&Date.now()>=(job.delivery_retry_at||0)){this.delivering=true;this.schedule('delivery:'+job.key,async()=>{
       try {
         const result=read(path.join(job.dir,'result.json'));need(result,'RESULT_MISSING');
         if(!job.artifact){job.artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'result.zip')});this.persist();}
         const completed={...result,artifacts:[job.artifact]};
         await this.connector.call('Complete',{key:job.key,data:completed});job.state='submitted';job.submitted_at=now();job.error='';this.persist();
-      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;this.persist();}
+      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;job.delivery_retry_at=Date.now()+10000;this.persist();}
+      this.delivering=false;
+      });}
       return;
     }
     if(['claiming','launching','running'].includes(job.state)) {

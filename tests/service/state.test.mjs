@@ -60,6 +60,7 @@ test('lost Claim reply closes a proven unlaunched attempt and delivers a blocked
    assert.equal(job.state,'delivering');assert.equal(job.recovery.kind,'claim-reconciled-before-launch');
    const result=read(path.join(dir,'result.json'));assert.equal(result.outcome,'blocked');assert.equal(result.execution.executed,false);assert.equal(result.agent.turns,0);
    await r.tick({runs:[{key:job.key,phase:'started',claimed:true}]});
+   await r.idle();
    assert.equal(job.state,'submitted');assert.deepEqual(calls,['Upload','Complete']);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });

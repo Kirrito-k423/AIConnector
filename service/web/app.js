@@ -3,7 +3,7 @@ function adoptToken(){const hash=new URLSearchParams(location.hash.slice(1));if(
 adoptToken();window.addEventListener('hashchange',()=>{adoptToken();void refresh();});
 let state,selected='',rows=[],filter='active',settingsLoaded=false,agentLoaded=false,refreshing;
 let detailKey='',detailSignature='';
-const labels={task:'已发布',accepted:'接收端已校验',started:'已领取',result:'结果已发布',receipt:'已回执',claiming:'登记领取',launching:'启动执行器',running:'Pi 处理中',delivering:'交付 ZIP 中',submitted:'等待回执',confirmed:'已回执',blocked:'需要处理',unknown:'执行状态未知',conflict:'运行冲突',pending:'等待发布',queued:'已加入发送队列'};
+const labels={waiting:'等待资源',reserving:'预留机器',task:'已发布',accepted:'接收端已校验',started:'已领取',result:'结果已发布',receipt:'已回执',claiming:'登记领取',launching:'启动执行器',running:'Pi 处理中',delivering:'交付 ZIP 中',submitted:'等待回执',confirmed:'已回执',blocked:'需要处理',unknown:'执行状态未知',conflict:'运行冲突',pending:'等待发布',queued:'已加入发送队列'};
 const filterLabels={active:'处理中',error:'需要处理',confirmed:'已回执',all:'全部'};
 function timestamp(t){if(t===null||t===undefined||t==='')return 0;const n=typeof t==='number'?(t<1e11?t*1000:t):Date.parse(t);return Number.isFinite(n)?n:0;}
 const date=t=>timestamp(t)?new Date(timestamp(t)).toLocaleString('zh-CN',{hour12:false}):'尚未发生';
@@ -12,7 +12,7 @@ function link(parent,text,url){try{const u=new URL(url);if(!['http:','https:'].i
 async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+sessionStorage.getItem('aic-token'),...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});const value=await r.json();if(!r.ok)throw new Error(value.diagnostic?value.error+'：'+JSON.stringify(value.diagnostic):value.error);return value;}
 function notice(s,problem=false){$('notice').textContent=s;$('notice').classList.toggle('problem',problem);$('dialog-notice').textContent=problem&&$('tools-dialog').open?s:'';}
 const phase=r=>r.job?.state||r.phase;
-const error=r=>Boolean(r.error||r.job?.error||r.result&&r.result.outcome!=='succeeded'||['unknown','blocked','conflict'].includes(phase(r)));
+const error=r=>Boolean(r.error||r.job?.error||r.job?.resources?.state==='unknown'||r.result&&r.result.outcome!=='succeeded'||['unknown','blocked','conflict'].includes(phase(r)));
 const done=r=>['confirmed','receipt'].includes(phase(r));
 const matches=(r,f)=>f==='all'||f==='confirmed'&&done(r)||f==='error'&&error(r)||f==='active'&&!done(r)&&!error(r);
 function activityTime(r){
@@ -77,7 +77,7 @@ function renderDetail(r){
     detailKey='';detailSignature='empty:'+filter;return;
   }
   const w=r.job?.worker;
-  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.activity_at,matches(r,filter),filter,
+  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.activity_at,matches(r,filter),filter,
     w&&[w.state,w.context,w.compaction,w.server_task,w.events,w.agent_started_at,w.agent_ended_at,w.execution_started_at,w.execution_ended_at,w.execution_time_source]]);
   if(detailKey===r.key&&detailSignature===signature)return;
   const same=detailKey===r.key,top=same?detail.scrollTop:0;
@@ -110,6 +110,8 @@ function renderDetail(r){
     milestones.append(el('p',parts.join(' · '),'duration'));
   }
   detail.append(milestones);
+  if(r.job?.wait_reason)detail.append(el('p','等待原因：'+r.job.wait_reason+(r.job.wait_owner?'；当前占用者：'+r.job.wait_owner:''),'selection-note'));
+  if(r.job?.resources)detail.append(disclosure('resources','机器占用 · '+r.job.resources.state,el('pre',JSON.stringify(r.job.resources,null,2))));
   if(error(r))detail.append(el('p',String(r.error||r.job?.error||'实验未通过，请查看验收与结果。'),'error'));
   if(r.job?.state==='unknown'){
     const b=el('button','核对环境后，将本次登记为未完成');b.onclick=async()=>{if(!confirm('请先核对本机与远端实验进程已停止或已完成。将交付 blocked 结果并解除队列阻塞，原运行不会重跑。确定已核对？'))return;try{await api('/api/resolve-unknown',{key:r.key,remoteChecked:true});await refresh();}catch(e){notice(e.message,true);}};detail.append(b);
@@ -157,7 +159,7 @@ function render(){
   if(receiver?.profiles?.length&&!receiver.profiles.some(p=>['probe','experiment','maintenance'].includes(p.mode)))problems.push('Windows 当前只有 CPU 自检能力，请在 Windows 看板「接入服务器」配置真实入口');
   if(!s.github_configured)problems.push('尚未配置 GitHub Token（当前只读）');
   if(s.runner_enabled&&!s.model_configured)problems.push('请在连接设置中配置模型和 API Key');
-  notice([...problems,publication].filter(Boolean).join(' · ')||'最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询',Boolean(problems.length));
+  notice([...problems,publication].filter(Boolean).join(' · ')||'最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询'+(s.runner?' · Pi '+(s.runner.activeRuns||0)+'/'+(s.runner.maxConcurrentRuns||1):''),Boolean(problems.length));
   document.querySelector('[data-panel="submit"]').hidden=s.node!=='mac-outer';
   document.querySelector('[data-panel="server-setup"]').hidden=s.node!=='windows-inner';
   document.querySelector('[data-panel="capability-panel"]').hidden=!state.capabilities;
@@ -187,14 +189,14 @@ function loadAgentForm(r,m){const a=r.agent,c=a.compaction,w=a.web,s=a.simpleHtm
   // A UI-only update can also serve the previous runtime, which lacks these settings.
   $('skills-json').closest('label').hidden=!Object.hasOwn(a,'skills');$('budget-json').closest('label').hidden=!Object.hasOwn(a,'budget');
   $('skills-json').value=JSON.stringify(a.skills||[],null,2);$('budget-json').value=JSON.stringify(a.budget||{},null,2);
-  const values={'global-prompt':a.globalPrompt,'context-files':a.contextFiles.join('\n'),'run-timeout':r.timeoutSeconds,'max-turns':r.maxTurns,'watch-base':s.baseUrl,'watch-poll':s.pollSeconds,'profiles-json':JSON.stringify(r.profiles,null,2),'web-transport':w.transport,'web-proxy':w.proxy,'web-timeout':w.timeoutSeconds,'web-hosts':w.allowedHosts.join('\n'),'web-search':w.searchUrl,'context-window':m?.contextWindow||32768,'max-tokens':m?.maxTokens||4096,'compact-reserve':c.reserveTokens,'compact-recent':c.keepRecentTokens};
+  const values={'global-prompt':a.globalPrompt,'context-files':a.contextFiles.join('\n'),'run-timeout':r.timeoutSeconds,'max-turns':r.maxTurns,'max-concurrent':r.maxConcurrentRuns||1,'watch-base':s.baseUrl,'watch-poll':s.pollSeconds,'profiles-json':JSON.stringify(r.profiles,null,2),'web-transport':w.transport,'web-proxy':w.proxy,'web-timeout':w.timeoutSeconds,'web-hosts':w.allowedHosts.join('\n'),'web-search':w.searchUrl,'context-window':m?.contextWindow||32768,'max-tokens':m?.maxTokens||4096,'compact-reserve':c.reserveTokens,'compact-recent':c.keepRecentTokens};
   for(const [id,value]of Object.entries(values))$(id).value=value;
   for(const [id,value]of Object.entries({'runner-enabled':r.enabled,'watch-enabled':s.enabled,'web-enabled':w.enabled,'compact-enabled':c.enabled}))$(id).checked=value;
 }
 const lines=id=>$(id).value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),num=id=>Number($(id).value);
 $('agent-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{
   const previous=state.service.runner.agent;
-  await api('/api/agent-settings',{enabled:$('runner-enabled').checked,timeoutSeconds:num('run-timeout'),maxTurns:num('max-turns'),profiles:JSON.parse($('profiles-json').value),modelLimits:{contextWindow:num('context-window'),maxTokens:num('max-tokens')},agent:{...previous,skills:JSON.parse($('skills-json').value),budget:JSON.parse($('budget-json').value),globalPrompt:$('global-prompt').value,contextFiles:lines('context-files'),
+  await api('/api/agent-settings',{enabled:$('runner-enabled').checked,timeoutSeconds:num('run-timeout'),maxTurns:num('max-turns'),maxConcurrentRuns:num('max-concurrent'),profiles:JSON.parse($('profiles-json').value),modelLimits:{contextWindow:num('context-window'),maxTokens:num('max-tokens')},agent:{...previous,skills:JSON.parse($('skills-json').value),budget:JSON.parse($('budget-json').value),globalPrompt:$('global-prompt').value,contextFiles:lines('context-files'),
     simpleHtmlWatch:{...previous.simpleHtmlWatch,enabled:$('watch-enabled').checked,baseUrl:$('watch-base').value,pollSeconds:num('watch-poll')},
     web:{...previous.web,enabled:$('web-enabled').checked,transport:$('web-transport').value,proxy:$('web-proxy').value,timeoutSeconds:num('web-timeout'),allowedHosts:lines('web-hosts'),searchUrl:$('web-search').value},
     compaction:{enabled:$('compact-enabled').checked,reserveTokens:num('compact-reserve'),keepRecentTokens:num('compact-recent')}}});
