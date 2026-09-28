@@ -1,5 +1,10 @@
 name: Windows parallel regression diagnosis
 on:
+  pull_request:
+    paths:
+      - 'tests/service/parallel.test.mjs'
+      - 'service/runner.mjs'
+      - '.github/workflows/parallel-diagnostic.yml'
   workflow_dispatch:
 permissions:
   contents: read
