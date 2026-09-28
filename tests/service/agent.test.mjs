@@ -106,14 +106,15 @@ test('real Pi loads frozen context, compacts automatically and restores durable 
   }finally{await model.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 
-test('real Pi uses SHW tools, reads recovered evidence and finalizes on turn eight',async()=>{
+for(const mode of ['experiment','probe'])test(`real Pi uses SHW tools, reads recovered evidence and finalizes on turn eight: ${mode}`,async()=>{
   const fixture=await watchFixture(),dir=temp();let step=0,evidence;
   const model=await modelFixture({handler:data=>{
     if(step===7)evidence=JSON.parse(data.messages.at(-1).content);
-    return [{tool:'server_status'},{tool:'submit_server_task'},{tool:'server_task_logs'},{tool:'server_task_status'},{tool:'collect_server_result'},{tool:'list_outputs'},{tool:'read_output',args:{name:'metrics.json'}},{tool:'submit_summary',args:{summary:'Controlled SHW fixture output was read.',metrics:{fixture:true}}},{tool:'server_task_status'}][step++]||{content:'done'};
+    return [{tool:'server_status'},{tool:'submit_server_task'},{tool:'server_task_logs'},{tool:'server_task_status'},{tool:'collect_server_result'},{tool:'list_outputs'},{tool:'read_output',args:{name:'metrics.json'}},{tool:'submit_summary',args:{summary:'Controlled SHW fixture output was read.',metrics:{fixture:true,...(mode==='probe'?{npu_workload_executed:false}:{})}}},{tool:'server_task_status'}][step++]||{content:'done'};
   }});
   try{
-    save(path.join(dir,'spec.json'),{...watchSpec(fixture.url,dir),model:{api:'openai-completions',baseUrl:model.url,id:'fixture',compat:{supportsDeveloperRole:false}},timeoutSeconds:30,maxTurns:8});
+    const spec=watchSpec(fixture.url,dir);spec.profile={...spec.profile,mode};spec.task.requirements.mode=mode;
+    save(path.join(dir,'spec.json'),{...spec,model:{api:'openai-completions',baseUrl:model.url,id:'fixture',compat:{supportsDeveloperRole:false}},timeoutSeconds:30,maxTurns:8});
     const p=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',dir],{input:JSON.stringify({apiKey:'LOCAL_FIXTURE_KEY'})});assert.equal(p.code,0,p.err);
     const result=read(path.join(dir,'result.json'));assert.equal(result.outcome,'succeeded',JSON.stringify(result));assert.equal(fixture.posts,1);
     assert.equal(model.requests,8);assert.equal(result.agent.turns,8);assert.equal(result.agent.stop_reason,'GOAL_VERIFIED');

@@ -109,6 +109,8 @@ Mac 发送服务也需使用 0.6 才能在投递前检查 Windows 公告。将 M
 
 `submit_summary` 可以在没有执行实验时报告阻塞，它只保存阶段总结。会话返回后运行本地独立检查，全部通过且已有总结才成功；明确 false 的完成度字段也阻止成功。未通过则把差异反馈给同一 Pi 会话，在授权内继续修复。无进展、未知副作用、时间/轮次/动作/token/费用预算用尽均 blocked，并保留已有证据。
 
+0.6.4 按接收端本地入口类型解释 `npu_workload_executed=false`：probe / CPU smoke / maintenance 不要求 NPU 计算负载，这个事实不会阻断收尾；experiment 仍将其视为未完成。任务文本和模型指标不能改变本地入口类型，独立检查、未知执行以及 `query_complete=false` 等未完成声明仍会阻断成功。该修复来自 0.6.3 A5 实测：SSH 和三项检查已经通过，诚实报告只读探测却被旧字段后缀规则误判，最终耗尽 token 预算。
+
 `runner.agent.budget` 默认 maxContinuations=4、maxNoProgress=2、maxActions=64、maxTotalTokens=200000、maxCost=0。maxCost=0 表示不启用费用限额；启用前配置 `runner.model.cost` 的 input/output/cacheRead/cacheWrite 单价（SDK 单位为每百万 token 美元）。累计用量来自 SDK 所有 assistant 和 compaction usage；提供商未报告的用量不能视作真实零费用，限额在已报告的请求结束后生效，单次请求可能超额。总超时和 maxTurns 沿用本地已有值。
 
 ZIP 的 result.agent 记录会话起止、duration_ms、turns、continuations、tool_steps、usage、stop_reason、实际工具和 Skill 哈希。result.execution 单独记录命令/服务器执行时间；Issue 时间线是传输事件。界面明确分开三者，receipt 只证明结果已收到。

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {need,sha,now,cleanError} from './common.mjs';
 import {pointer} from './maintenance.mjs';
+import {modeOf} from './capabilities.mjs';
 
 export async function verifyTask(spec,dir,{execution,maintenance,report,pass=0}={}) {
   const definitions=spec.profile.kind==='builtin-smoke'?[{id:'cpu-smoke',kind:'output-json',file:'metrics.json',pointer:'/sum',equals:50005000}]:(spec.profile.verification||[]);
@@ -28,7 +29,12 @@ export async function verifyTask(spec,dir,{execution,maintenance,report,pass=0}=
     }catch(e){row.error=cleanError(e);}
     checks.push(row);
   }
-  const falseClaims=Object.entries(report?.metrics||{}).filter(([k,v])=>v===false&&(/(?:_completed|_validated|_executed|_loaded)$/.test(k)||k==='query_complete')).map(([k])=>k);
+  // Not running a compute workload is expected for a locally configured probe,
+  // CPU smoke or maintenance entry. Task text cannot change the local mode.
+  const noWorkloadRequired=['probe','smoke','maintenance'].includes(modeOf(spec.profile));
+  const falseClaims=Object.entries(report?.metrics||{}).filter(([k,v])=>v===false&&
+    !(k==='npu_workload_executed'&&noWorkloadRequired)&&
+    (/(?:_completed|_validated|_executed|_loaded)$/.test(k)||k==='query_complete')).map(([k])=>k);
   const unknown=execution?.unknown||!execution&&(fs.existsSync(path.join(dir,'execution-intent.json'))||fs.existsSync(path.join(dir,'watch-task.json')))||Object.values(maintenance?.actions||{}).some(a=>a.state==='unknown'||a.state==='intent'||a.result?.unknown);
   const executionOK=spec.profile.kind==='maintenance'||Boolean(execution&&execution.exit_code===0&&!execution.revision_mismatch);
   return {schema:'aiconnector.acceptance.v1',status:!unknown&&executionOK&&checks.length>0&&checks.every(c=>c.ok)&&falseClaims.length===0?'passed':'incomplete',
