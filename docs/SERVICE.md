@@ -1,4 +1,4 @@
-# 后台服务、任务看板与 Pi Runner（0.6.1）
+# 后台服务、任务看板与 Pi Runner（0.6.3）
 
 Windows 仍只有 `local-smoke` 时，请使用 [0.6.2 服务器接入与一次验收](SERVER-SETUP.md)：从真实机器列表建立探测入口，并按本机授权启用远程实验入口维护。
 
@@ -67,7 +67,7 @@ service-data/windows-inner/
 
 ## 接入自己的实验 / SSH
 
-Pi 通过官方 SDK 在独立子进程内运行。`run_experiment` 执行本机已配置入口，`submit_summary` 总结已有证据，`get_run_state` 在压缩后恢复任务事实。开启本机配置后还可使用 simpleHtmlWatch 和网页工具。Pi 不能从公开评论安装插件、加载仓库扩展或任意修改执行命令。默认不开放 IDE 的完整 shell/edit 能力。
+Pi 通过官方 SDK 在独立子进程内运行。`run_experiment` 执行本机已配置入口，`list_outputs/read_output` 读取当前运行已声明的结果文件，`submit_summary` 总结已有证据，`get_run_state` 在压缩后恢复任务事实。独立检查通过、产物齐全且总结存在时，运行器在当前工具轮结束后完成任务，不额外消耗一轮模型回复。开启本机配置后还可使用 simpleHtmlWatch 和网页工具。Pi 不能从公开评论安装插件、加载仓库扩展或任意修改执行命令。默认不开放 IDE 的完整 shell/edit 能力。
 
 在 Windows 本机配置 `runner.profiles`，环境名称映射到明确入口。例如本地 Python 程序：
 

@@ -7,7 +7,7 @@ import {validateWatchProfile} from './watch.mjs';
 export const VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'))).version;
 export const modeOf=p=>p.kind==='builtin-smoke'?'smoke':p.kind==='maintenance'?'maintenance':p.mode||'experiment';
 export function toolsFor(p,agent={}) {
-  const names=['submit_summary','get_run_state','verify_task','list_inputs','read_input'];
+  const names=['submit_summary','get_run_state','verify_task','list_inputs','read_input','list_outputs','read_output'];
   if(p.kind==='maintenance')names.push('read_local_file','write_local_file','patch_local_json','restore_local_file','run_maintenance_command','call_local_api');
   else names.push('run_experiment');
   if(agent.simpleHtmlWatch?.enabled)names.push('server_status');

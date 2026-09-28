@@ -14,8 +14,9 @@ export async function modelFixture({delay=0,fail=false,repeat=false,handler}={})
     const base={id:'chatcmpl-fixture',object:'chat.completion.chunk',created:1,model:data.model,...(chosen.usage?{usage:chosen.usage}:{})};
     const send=(delta,finish_reason=null)=>res.write(`data: ${JSON.stringify({...base,choices:[{index:0,delta,finish_reason}]})}\n\n`);
     send({role:'assistant'});
-    if(tool&&chosen.content)send({content:chosen.content});
-    if(tool){send({tool_calls:[{index:0,id:`call-${results.length}`,type:'function',function:{name:tool,arguments:JSON.stringify(args)}}]});send({},'tool_calls');}
+    const commands=chosen.tools||(tool?[{tool,args}]:[]);
+    if(commands.length&&chosen.content)send({content:chosen.content});
+    if(commands.length){send({tool_calls:commands.map((c,index)=>({index,id:`call-${results.length}-${index}`,type:'function',function:{name:c.tool,arguments:JSON.stringify(c.args||{})}}))});send({},'tool_calls');}
     else {send({content:chosen.content||'实验完成，结果已经提交。'});send({},'stop');}
     if(chosen.usage)res.write(`data: ${JSON.stringify({...base,choices:[],usage:chosen.usage})}\n\n`);
     res.end('data: [DONE]\n\n');

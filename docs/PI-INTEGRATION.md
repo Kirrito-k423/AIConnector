@@ -44,7 +44,13 @@ Issue #6 报告的现有链路是 Pi → `http://127.0.0.1:18181/v1` → 本机 
 
 任务 `environment.target=npu-example`、`invocation.entry=experiment`、`code.repository=my-project`，`code.revision` 填预期 Git commit，`invocation.arguments=[]`。也可用 `group` 替换 `machineId`；两者均不指定时，必须在本地入口明确写 `allowAnyMachine:true`。Pi 只能提交本地入口中的命令，不能由 Issue 或网页提供任意 shell。版本查询与实验命令合并后不得超过 simpleHtmlWatch 的 4096 字节限制。
 
-`run_experiment` 自动提交、按固定间隔等待完成和回收，不在等待时消耗模型轮数。Pi 也可使用 `submit_server_task`、`server_task_status`、`server_task_logs`、`collect_server_result`。`submit_summary` 只记录进展/阻塞，不代表完成；必须取得执行证据并通过独立检查才能成功。长任务应使用 `run_experiment` 等待，避免模型不断查询消耗轮数。
+`run_experiment` 自动提交、按固定间隔等待完成和回收，不在等待时消耗模型轮数。Pi 也可使用 `submit_server_task`、`server_task_status`、`server_task_logs`、`collect_server_result`。长任务应使用 `run_experiment` 等待，避免模型不断查询消耗轮数。
+
+0.6.3 增加 `list_outputs` 和 `read_output`：仅可读取当前运行中显式列入 `outputs` 的文件，例如 `server-probe.json`。先列出文件与 SHA-256，再读取内容；分页响应给出 `next_offset`（UTF-16 字符偏移），可传 `expected_sha256` 检查证据未变化。二进制文件仍可交付，但不作为 UTF-8 文本读取；其他路径、符号链接、超限文件及含已知凭据的输出会被拒绝。输入仍使用 `list_inputs/read_input`。
+
+`submit_summary` 本身不代表成功。工具按调用顺序执行，每次调用之后，运行器重新核对独立检查与声明产物；当检查通过、产物齐全且在最后一次修改后保存了总结时，在整轮工具结束后主动收尾，不再请求模型说一遍“完成”。同轮后续写入、工具出错、目标明确未完成或执行状态未知时，仍不会提前成功；修改后必须重新总结。原有轮数、时间和用量预算继续生效，升级不覆盖用户的上限设置。
+
+服务器执行结论与 Pi 会话状态分别保留：`result.execution.exit_code / outcome / server_task_id` 是实际执行证据，`result.agent.stop_reason` 是会话停止原因。任务总体 `outcome` 仍需满足完整交付条件；不能因服务器退出 0 就忽略未完成的验收。
 
 提交前持久化 `watch-task.json`，任务 ID 由 Connector run key 派生。提交超时、进程中断或响应丢失后只查询原 ID；不会换 ID 再提交，也不开放自动 abandon/取消。simpleHtmlWatch 重启换 Token 时自动刷新。主服务重启不影响独立 Pi worker；worker 本身崩溃仍登记 `unknown`，需要核对远端任务，不能删除账本重跑。
 

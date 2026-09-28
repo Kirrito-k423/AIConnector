@@ -143,7 +143,7 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(row['result']['model_report']['verified'])
         self.assertEqual(row['result']['metrics']['measurement_at'],'2026-09-27T11:25:50.600Z')
         self.assertEqual(row['result']['outcome'],'succeeded');self.assertTrue(row['result']['execution']['started_at'])
-        self.assertEqual(len(row['timeline']),5);self.assertEqual(len(self.model.calls),3)
+        self.assertEqual(len(row['timeline']),5);self.assertEqual(len(self.model.calls),2)
         assets=self.ctx['assets'];self.assertEqual(len(assets),2)
         result=next(b for p,b in assets.items() if '/result--' in p)
         self.assertLess(len(result),5242880)
@@ -155,7 +155,7 @@ class ServiceTests(unittest.TestCase):
         self.until(lambda:self.job('confirmed'))
         self.stop('windows-inner');self.launch('windows-inner')
         self.get('mac-outer','/api/tasks',data);time.sleep(3)
-        self.assertEqual(len(self.model.calls),3);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
+        self.assertEqual(len(self.model.calls),2);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
         self.assertTrue(all(self.phase('mac-outer','receipt')['timeline'][i]['published_at'].endswith('Z') for i in range(5)))
     def test_service_restart_during_pi_and_transport_outage_resumes_delivery(self):
         self.model.pause=True
@@ -165,10 +165,10 @@ class ServiceTests(unittest.TestCase):
         self.stop('windows-inner');self.launch('windows-inner')
         self.model.pause=False;self.model.release.set()
         self.until(lambda:(self.job() or {}).get('worker',{}).get('state')=='ready')
-        self.assertEqual(len(self.model.calls),3)
+        self.assertEqual(len(self.model.calls),2)
         self.ctx['offline']=False
         self.until(lambda:self.phase('mac-outer','receipt'),130)
-        self.assertEqual(len(self.model.calls),3);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
+        self.assertEqual(len(self.model.calls),2);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
 
     def test_maintenance_preflight_continuation_independent_checks_and_receipt(self):
         target=self.folder/'repair-target.json';target.write_text('{"port":1,"preserved":true}')

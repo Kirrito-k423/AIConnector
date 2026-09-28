@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.6.2 增加 Windows 服务器接入向导与受限入口维护。** 从本机 simpleHtmlWatch 选择真实机器，建立 SSH / 启动时间 / NPU 信息探测入口；外部 AI 可通过维护任务登记实验，再提交真实实验并回收 ZIP。结果摘要与 Pi 运行统计由运行器生成，模型自填信息单独标记；修复 PowerShell 时间字符串变形造成的 ZIP 校验失败。
+**v0.6.3 修复 Pi 输出读取与任务收尾。** Pi 可列出并读取本次声明的结果文件，按原始证据填写型号、启动时间和实验指标；独立检查通过、产物齐全且总结已保存后，在当前工具轮结束时完成交付，无需多调用一次模型。保留原轮数配置，未完成、未知或缺失产物的任务仍不会报告成功。Windows 服务器接入向导及受限维护继续支持真实 SSH 探测和实验交接。
 
-[下载服务候选包 v0.6.2-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.6.2-rc.1) · [Windows 服务器接入与一次验收](docs/SERVER-SETUP.md) · [安装与实验入口](docs/SERVICE.md) · [Pi 集成与保留现有网关的升级步骤](docs/PI-INTEGRATION.md) · [真实 GitHub 闭环](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2)
+[下载服务候选包 v0.6.3-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.6.3-rc.1) · [Windows 服务器接入与一次验收](docs/SERVER-SETUP.md) · [安装与实验入口](docs/SERVICE.md) · [Pi 集成与保留现有网关的升级步骤](docs/PI-INTEGRATION.md) · [真实 GitHub 闭环](https://github.com/Kirrito-k423/AIConnector-Relay/issues/2)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 
