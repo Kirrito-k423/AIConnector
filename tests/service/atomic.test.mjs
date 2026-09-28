@@ -25,7 +25,7 @@ test('persistent Windows denial is bounded and never removes the old state',()=>
   const error=Object.assign(new Error('denied'),{code:'EPERM'});
   try{
     assert.throws(()=>replaceAtomicFile(source,target,{platform:'win32',rename:()=>{attempts++;throw error;},wait:ms=>total+=ms}),e=>e===error);
-    assert.equal(attempts,8);assert.equal(total,550);
+    assert.equal(attempts,8);assert.equal(total,450);
     assert.equal(fs.readFileSync(target,'utf8'),'old');assert.equal(fs.readFileSync(source,'utf8'),'new');
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
