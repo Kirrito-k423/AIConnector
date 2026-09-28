@@ -203,11 +203,10 @@ const c=loadConfig(process.argv[1]),key=process.argv[2];save(path.join(c.dataDir
         self.ctx['drop_delivery_once']={'started':1,'result-asset':1,'result':1}
         self.launch('mac-outer');self.launch('windows-inner');self.publish()
         def uncertain_upload():
-            statefile=Path(self.configs['windows-inner'][1]['dataDir'])/'connector/state.json'
-            if not statefile.exists():return False
-            wrapper=json.loads(statefile.read_text(encoding='utf-8'))
-            state=json.loads(base64.b64decode(wrapper['data_base64']))
-            return any(row['status']=='uncertain' for row in state['uploads'].values())
+            # Observe through the service, not a competing reader of the
+            # PowerShell atomic store (which has Windows sharing semantics).
+            state=self.get('windows-inner')
+            return state and any(row['status']=='uncertain' for row in state['channel'].get('uploads',{}).values())
         self.until(uncertain_upload,150)
         self.assertEqual(len(self.model.calls),2)
         self.stop('windows-inner',graceful=True);self.launch('windows-inner')

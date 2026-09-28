@@ -43,7 +43,19 @@ test('four real isolated Pi processes run concurrently; slow delivery does not h
    await until(()=>Object.values(ledger.jobs).every(j=>read(path.join(j.dir,'worker.json'))?.state==='ready'));
    await until(()=>runner.slots()===0);assert.equal(new Set(claims).size,6);
    releaseUpload();await until(()=>completed.length===6);
-   const results=Object.values(ledger.jobs).map(j=>({key:j.key,result:read(path.join(j.dir,'result.json')),worker:read(path.join(j.dir,'worker.json'))}));
+   const results=Object.values(ledger.jobs).map(j=>{
+     const sessions=path.join(j.dir,'sessions'),modelErrors=[];
+     // Controlled fixture only: retain the SDK's actual error, rather than
+     // guessing from the production-safe MODEL_REQUEST_FAILED category.
+     for(const file of fs.existsSync(sessions)?fs.readdirSync(sessions):[]){
+       if(!file.endsWith('.jsonl'))continue;
+       for(const line of fs.readFileSync(path.join(sessions,file),'utf8').split('\n').filter(Boolean)){
+         const message=JSON.parse(line).message;
+         if(message?.errorMessage)modelErrors.push({stopReason:message.stopReason,error:message.errorMessage.slice(0,2000)});
+       }
+     }
+     return {key:j.key,result:read(path.join(j.dir,'result.json')),worker:read(path.join(j.dir,'worker.json')),modelErrors};
+   });
    assert.ok(results.every(j=>j.result.outcome==='succeeded'),JSON.stringify(results.filter(j=>j.result.outcome!=='succeeded')));
  }finally{
    clearInterval(tick);hold=false;release();releaseUpload();await runner.idle();
