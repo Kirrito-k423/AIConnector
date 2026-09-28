@@ -94,6 +94,11 @@ jobs:
           $env:AIC_WEB_ROOT = "$dashboardExtract/AIConnector-Service/service/web"
           & "$dashboardExtract/AIConnector-Service/runtime/node.exe" --test tests/web/dashboard.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Repeated parallel workers from the delivered Windows package
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+        run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip --parallel-repeats 32
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         with:
