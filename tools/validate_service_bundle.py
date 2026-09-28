@@ -11,7 +11,7 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 
-def validate(archive,maintenance_repeats=0):
+def validate(archive,maintenance_repeats=0,parallel_repeats=0):
     with tempfile.TemporaryDirectory(prefix='AIConnector 安装包 ')as folder:
         dest=Path(folder)
         with zipfile.ZipFile(archive)as z:
@@ -27,6 +27,12 @@ def validate(archive,maintenance_repeats=0):
         # including Windows System32 curl and real automatic context compaction.
         shutil.copytree(ROOT/'tests/service',app/'tests/service',ignore=shutil.ignore_patterns('__pycache__'))
         cases=sorted(str(p) for p in (app/'tests/service').glob('*.test.mjs'))
+        if parallel_repeats:
+            for attempt in range(parallel_repeats):
+                print(f'Packaged parallel regression {attempt+1}/{parallel_repeats}',flush=True)
+                subprocess.run([str(node),'--test',str(app/'tests/service/parallel.test.mjs')],cwd=app,env=env,check=True)
+            print(json.dumps(dict(package=archive.name,parallel_repeats=parallel_repeats,scope='parallel-only',real_windows=os.name=='nt')))
+            return
         subprocess.run([str(node),'--test','--test-concurrency=1',*cases],cwd=app,env=env,check=True)
         # Original source tests, delivered server/worker/Pi/runtime; no npm or installed Node used.
         command=[os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests/service'),'-p','test_e2e.py','-v']
@@ -44,4 +50,4 @@ def validate(archive,maintenance_repeats=0):
         print(json.dumps(dict(package=archive.name,bytes=archive.stat().st_size,sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),verified_files=len(manifest['sha256']),real_packaged_pi=True,real_windows=os.name=='nt',fixture_model=True)))
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('archive',type=Path);p.add_argument('--maintenance-repeats',type=int,default=0);a=p.parse_args();validate(a.archive,a.maintenance_repeats)
+    p=argparse.ArgumentParser();p.add_argument('archive',type=Path);p.add_argument('--maintenance-repeats',type=int,default=0);p.add_argument('--parallel-repeats',type=int,default=0);a=p.parse_args();validate(a.archive,a.maintenance_repeats,a.parallel_repeats)
