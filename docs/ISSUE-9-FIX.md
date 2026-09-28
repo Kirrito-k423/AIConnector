@@ -27,3 +27,5 @@
 新增真实 PowerShell 回归覆盖发送前丢弃、发送后丢响应、旧状态恢复、分页失败、延迟评论去重、同名 422 竞争、下载内容冲突和队列继续推进。
 
 端到端测试同时丢弃 started 评论、结果 ZIP、result 评论各一次；ZIP 写入 uncertain 后重启 Windows 服务，最终要求 Mac 收到 ZIP 与 receipt、Windows confirmed，并确认 Pi 的模型调用次数没有增加。测试使用真实 Node / PowerShell / Pi 进程和受控 Relay、模型服务；内网公司代理实测需升级后观察，不以 fixture 代替。
+
+Windows 安装包验收还复现了独立的文件共享问题：监督器读取 `worker.json` 时，原子替换可能短暂返回 EPERM；事件回调异常会被 Pi SDK 归为 MODEL_REQUEST_FAILED。现对 Windows 的 EPERM / EACCES / EBUSY 最多尝试 8 次，总等待不超过 550 ms，只重试同一个原子替换，不删除目标或重启模型。持续权限错误仍失败并保留原文件。专项从实际解压包重复并行进程用例，另用注入式文件系统测试验证旧文件在整个重试期间可读。

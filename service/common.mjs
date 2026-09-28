@@ -11,12 +11,23 @@ export const now = () => new Date().toISOString();
 export const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 export const id = () => crypto.randomBytes(24).toString('hex');
 export function need(ok, code) { if (!ok) throw new Error(code); }
+export function replaceAtomicFile(source,target,{platform=process.platform,rename=fs.renameSync,wait=ms=>Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,ms)}={}) {
+  for(let attempt=0;;attempt++){
+    try{return rename(source,target);}
+    catch(e){
+      // Windows readers/security scanners can briefly deny replacement. Keep
+      // the original visible and retry the same rename; never unlink it.
+      if(platform!=='win32'||!['EPERM','EACCES','EBUSY'].includes(e.code)||attempt>=7)throw e;
+      wait(Math.min(100,10*2**attempt));
+    }
+  }
+}
 export function atomic(file, value) {
   fs.mkdirSync(path.dirname(file), {recursive:true, mode:0o700});
   const tmp = `${file}.${id()}.tmp`;
   const fd = fs.openSync(tmp, 'wx', 0o600);
   try { fs.writeFileSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  try { fs.renameSync(tmp, file); } finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
+  try { replaceAtomicFile(tmp, file); } finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
 }
 export function save(file, data) {
   const body = JSON.stringify(data);

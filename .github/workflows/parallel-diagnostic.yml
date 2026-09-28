@@ -4,6 +4,8 @@ on:
     paths:
       - 'tests/service/parallel.test.mjs'
       - 'service/runner.mjs'
+      - 'service/common.mjs'
+      - 'service/worker.mjs'
       - '.github/workflows/parallel-diagnostic.yml'
   workflow_dispatch:
 permissions:
