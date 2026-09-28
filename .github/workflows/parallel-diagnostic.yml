@@ -1,0 +1,22 @@
+name: Windows parallel regression diagnosis
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Repeat the exact isolated-process regression with result diagnostics
+        shell: pwsh
+        run: |
+          1..12 | ForEach-Object {
+            node --test tests/service/parallel.test.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

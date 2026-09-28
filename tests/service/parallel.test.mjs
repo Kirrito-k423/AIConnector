@@ -43,7 +43,8 @@ test('four real isolated Pi processes run concurrently; slow delivery does not h
    await until(()=>Object.values(ledger.jobs).every(j=>read(path.join(j.dir,'worker.json'))?.state==='ready'));
    await until(()=>runner.slots()===0);assert.equal(new Set(claims).size,6);
    releaseUpload();await until(()=>completed.length===6);
-   assert.ok(Object.values(ledger.jobs).every(j=>read(path.join(j.dir,'result.json')).outcome==='succeeded'));
+   const results=Object.values(ledger.jobs).map(j=>({key:j.key,result:read(path.join(j.dir,'result.json')),worker:read(path.join(j.dir,'worker.json'))}));
+   assert.ok(results.every(j=>j.result.outcome==='succeeded'),JSON.stringify(results.filter(j=>j.result.outcome!=='succeeded')));
  }finally{
    clearInterval(tick);hold=false;release();releaseUpload();await runner.idle();
    for(const j of Object.values(ledger.jobs))if(alive(j.pid))try{process.kill(j.pid);}catch{}
