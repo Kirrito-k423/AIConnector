@@ -43,7 +43,7 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All three Windows service workflow jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           'Includes the connection diagnostics and unlaunched-claim recovery fixes, plus the parallel Pi scheduler. '
+           'Includes immutable event/ZIP delivery recovery for Issue #9, connection diagnostics, unlaunched-claim recovery, and the parallel Pi scheduler. '
            'Parallel SSH requires simpleHtmlWatch reservations.v1; existing configs keep concurrency 1. '
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:

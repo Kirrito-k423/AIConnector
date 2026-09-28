@@ -3,6 +3,7 @@ import base64
 import copy
 import json
 import re
+import socket
 import time
 import unittest
 import zipfile
@@ -60,6 +61,18 @@ class RelayAPI(TaskAPI):
         if mode == 'rate': return self.reply({}, 429, {'Retry-After': '2'})
         if mode == 'reject': return self.reply({}, 403)
         data = json.loads(raw) if kind != 'asset' else None
+        fault = ''
+        if kind == 'asset' and parse_qs(u.query)['name'][0].startswith('result--'): fault = 'result-asset'
+        if kind == 'comment' and data['body'].startswith('AIConnector task v1'):
+            fault = json.loads(re.search(r'```json\n(.*?)\n```', data['body'], re.S).group(1))['kind']
+        drops = self.ctx.get('drop_delivery_once', {})
+        if drops.get(fault, 0):
+            drops[fault] -= 1
+            self.ctx.setdefault('dropped_deliveries', []).append(fault)
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+            return
         if kind == 'issue':
             number = len(self.ctx['issues']) + 1
             row = dict(data, number=number, user=dict(login=login), state='open',

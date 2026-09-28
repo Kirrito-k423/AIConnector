@@ -199,6 +199,27 @@ const c=loadConfig(process.argv[1]),key=process.argv[2];save(path.join(c.dataDir
         row=self.until(lambda:self.phase('mac-outer','receipt'))
         self.assertEqual(row['result']['outcome'],'succeeded');self.assertEqual(len(self.model.calls),2)
 
+    def test_issue9_lost_deliveries_recover_across_restart_without_reexecuting_pi(self):
+        self.ctx['drop_delivery_once']={'started':1,'result-asset':1,'result':1}
+        self.launch('mac-outer');self.launch('windows-inner');self.publish()
+        def uncertain_upload():
+            statefile=Path(self.configs['windows-inner'][1]['dataDir'])/'connector/state.json'
+            if not statefile.exists():return False
+            wrapper=json.loads(statefile.read_text(encoding='utf-8'))
+            state=json.loads(base64.b64decode(wrapper['data_base64']))
+            return any(row['status']=='uncertain' for row in state['uploads'].values())
+        self.until(uncertain_upload,150)
+        self.assertEqual(len(self.model.calls),2)
+        self.stop('windows-inner',graceful=True);self.launch('windows-inner')
+        row=self.until(lambda:self.phase('mac-outer','receipt'),240)
+        self.until(lambda:self.job('confirmed'),100)
+        self.assertEqual(row['result']['outcome'],'succeeded')
+        self.assertCountEqual(self.ctx['dropped_deliveries'],['started','result-asset','result'])
+        self.assertTrue(all(v==0 for v in self.ctx['drop_delivery_once'].values()))
+        self.assertEqual(len(self.model.calls),2,'delivery retries must not relaunch Pi')
+        self.assertEqual(len([p for p in self.ctx['assets'] if '/result--' in p]),1)
+        self.assertEqual(len([c for c in self.ctx['comments'] if c['body'].startswith('AIConnector task v1')]),5)
+
     def test_maintenance_preflight_continuation_independent_checks_and_receipt(self):
         target=self.folder/'repair-target.json';target.write_text('{"port":1,"preserved":true}')
         original=target.read_bytes();expected=hashlib.sha256(original).hexdigest()

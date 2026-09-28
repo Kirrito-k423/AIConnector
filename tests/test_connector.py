@@ -54,7 +54,9 @@ class TaskAPI(BaseHTTPRequestHandler):
         if '/releases/tags/' in u.path:
             return self.reply({'id': 7, 'draft': False, 'upload_url': self.ctx['base'] + '/repos/test/tasks/releases/7/assets{?name,label}'})
         if u.path.endswith('/releases/7/assets'):
-            return self.reply(self.ctx['release_assets'])
+            page = int(parse_qs(u.query).get('page', ['1'])[0])
+            if page == self.ctx.get('fail_asset_page'): return self.reply({}, 503)
+            return self.reply(self.ctx['release_assets'][(page-1)*100:page*100])
         if u.path.startswith('/assets/'):
             self.ctx['artifact_auth'].append(self.headers.get('Authorization'))
             data = self.ctx['assets'].get(u.path)
@@ -80,10 +82,12 @@ class TaskAPI(BaseHTTPRequestHandler):
             self.ctx['comments'].append(row)
         else:
             name = parse_qs(u.query)['name'][0]
+            if any(a['name'] == name for a in self.ctx['release_assets']): return self.reply({}, 422)
             path = '/assets/' + name
             self.ctx['assets'][path] = raw
             row = {'id': len(self.ctx['release_assets'])+1, 'name': name, 'size': len(raw), 'state': 'uploaded', 'browser_download_url': self.ctx['base']+path}
             self.ctx['release_assets'].append(row)
+            if self.ctx.pop('asset_race_once', False): return self.reply({}, 422)
         if self.ctx['timeout_after']:
             time.sleep(1.5)
         return self.reply(row, 201)
@@ -144,6 +148,23 @@ class ConnectorTests(unittest.TestCase):
         data = base64.b64decode(p['data_base64'])
         self.assertEqual(sha(data), p['sha256'])
         return json.loads(data)
+
+    def write_state(self, node, state):
+        raw = json.dumps(state, separators=(',', ':')).encode()
+        (self.folder/node/'state.json').write_text(json.dumps(dict(
+            schema='aiconnector.store.v1', sha256=sha(raw), data_base64=base64.b64encode(raw).decode())))
+
+    def age_recovery(self, node):
+        # Advance only persisted clocks in this isolated fixture, not the
+        # status, read count, original event identity or ZIP contents.
+        state = self.read_state(node)
+        state.update(next_poll=0, post_not_before=0, last_delivery_reconcile=0)
+        for rows in ('outbox', 'uploads'):
+            for row in state[rows].values():
+                row['last_attempt_at'] = 1
+                if row.get('recovery'):
+                    row['recovery'].update(not_before=1, last_absent_at=1)
+        self.write_state(node, state)
 
     def submit(self): return self.run_cli('mac-outer', 'Submit', '-File', self.taskfile)
     def poll(self, node): return self.run_cli(node, 'Poll')
@@ -209,12 +230,104 @@ class ConnectorTests(unittest.TestCase):
         self.ctx['timeout_after'] = False
         self.poll('mac-outer'); self.assertEqual(len(self.ctx['posts']), 1)
 
-    def test_lost_write_not_found_stays_uncertain(self):
+    def test_lost_write_waits_for_readback_grace_and_does_not_block_other_events(self):
         self.submit(); self.ctx['timeout_before'] = True
         self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'], 'uncertain')
         self.ctx['timeout_before'] = False
+        state=self.read_state('mac-outer')
+        next(iter(state['outbox'].values()))['recovery']['not_before']=int(time.time())+3600
+        self.write_state('mac-outer',state)
         self.poll('mac-outer'); self.poll('mac-outer')
         self.assertEqual(len(self.ctx['posts']), 1)
+        self.task['task_id']='independent'; self.write_inputs(); self.submit(); self.poll('mac-outer')
+        self.assertEqual(len(self.ctx['posts']),2)
+        self.assertEqual(len(self.ctx['comments']),1)
+
+    def test_issue9_lost_comment_event_eventually_delivers(self):
+        self.submit(); self.ctx['timeout_before'] = True
+        self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'], 'uncertain')
+        self.ctx['timeout_before'] = False
+        self.age_recovery('mac-outer')
+        status = self.poll('mac-outer')
+        self.assertEqual(status['outbox'][0]['status'], 'confirmed')
+        self.assertEqual(len(self.ctx['comments']), 1)
+        self.assertEqual(status['outbox'][0]['recoveries'], 1)
+        self.assertEqual(status['outbox'][0]['attempts'], 2)
+
+    def test_issue9_lost_upload_eventually_delivers(self):
+        artifact = self.folder/'lost-result.zip'
+        with zipfile.ZipFile(artifact, 'w') as z: z.writestr('result.txt', 'blocked, not executed')
+        self.ctx['timeout_before'] = True
+        self.run_cli('windows-inner', 'Upload', '-File', artifact, ok=False)
+        self.ctx['timeout_before'] = False
+        self.age_recovery('windows-inner')
+        first = self.run_cli('windows-inner', 'Upload', '-File', artifact, ok=False)
+        self.assertEqual(first['code'], 'UPLOAD_RECONCILE_PENDING')
+        self.assertEqual(len(self.ctx['posts']), 1)
+        self.age_recovery('windows-inner')
+        result = self.run_cli('windows-inner', 'Upload', '-File', artifact)
+        self.assertEqual(result['sha256'], sha(artifact.read_bytes()))
+        self.assertEqual(len(self.ctx['release_assets']), 1)
+
+    def test_issue9_incomplete_comment_read_never_authorizes_retransmit(self):
+        self.submit(); self.ctx['timeout_before']=True; self.poll('mac-outer')
+        self.ctx['timeout_before']=False; self.age_recovery('mac-outer')
+        self.ctx['comments']=[dict(id=n,body='note',user=dict(login='outsider')) for n in range(1,101)]
+        self.ctx['fail_page']=2
+        self.assertEqual(self.run_cli('mac-outer','Poll',ok=False)['code'],'HTTP_ERROR_503')
+        self.assertEqual(len(self.ctx['posts']),1)
+        self.ctx['fail_page']=0;self.age_recovery('mac-outer')
+        self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'],'uncertain')
+        self.age_recovery('mac-outer')
+        self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'],'confirmed')
+        self.assertEqual(len(self.ctx['posts']),2)
+
+    def test_issue9_legacy_uncertain_row_recovers_without_state_reset(self):
+        self.submit(); self.ctx['timeout_before']=True; self.poll('mac-outer')
+        self.ctx['timeout_before']=False
+        state=self.read_state('mac-outer');row=next(iter(state['outbox'].values()))
+        row.pop('last_attempt_at');row.pop('recovery');self.write_state('mac-outer',state)
+        self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'],'uncertain')
+        self.age_recovery('mac-outer')
+        self.assertEqual(self.poll('mac-outer')['outbox'][0]['status'],'confirmed')
+
+    def test_issue9_late_comment_response_is_deduplicated_without_reexecution(self):
+        event=self.submit()['event_id'];self.ctx['timeout_before']=True;self.poll('mac-outer')
+        self.ctx['timeout_before']=False;self.age_recovery('mac-outer');self.poll('mac-outer')
+        body=self.ctx['comments'][0]['body']
+        self.poll('windows-inner');self.assertTrue(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
+        # An earlier in-flight POST can become visible after the retransmission.
+        self.ctx['comments'].append(dict(id=100,body=body,user=dict(login='mac-user')))
+        self.poll('windows-inner')
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
+        state=self.read_state('windows-inner')
+        self.assertEqual(len([e for e in state['events'] if e==event]),1)
+
+    def test_issue9_upload_race_422_verifies_existing_bytes(self):
+        artifact=self.folder/'race.zip'
+        with zipfile.ZipFile(artifact,'w') as z:z.writestr('evidence.txt','immutable')
+        self.ctx['asset_race_once']=True
+        result=self.run_cli('windows-inner','Upload','-File',artifact)
+        self.assertEqual(result['sha256'],sha(artifact.read_bytes()))
+        self.assertEqual(len(self.ctx['posts']),1)
+        self.assertEqual(len(self.ctx['release_assets']),1)
+
+    def test_issue9_upload_incomplete_listing_and_content_conflict_do_not_overwrite(self):
+        artifact=self.folder/'conflict.zip'
+        with zipfile.ZipFile(artifact,'w') as z:z.writestr('evidence.txt','immutable')
+        self.ctx['timeout_before']=True;self.run_cli('windows-inner','Upload','-File',artifact,ok=False)
+        self.ctx['timeout_before']=False;self.age_recovery('windows-inner')
+        self.ctx['release_assets']=[dict(id=n,name='other-'+str(n)) for n in range(1,101)]
+        self.ctx['fail_asset_page']=2
+        self.assertEqual(self.run_cli('windows-inner','Upload','-File',artifact,ok=False)['code'],'HTTP_ERROR_503')
+        self.assertEqual(len(self.ctx['posts']),1)
+        self.ctx['fail_asset_page']=0;self.age_recovery('windows-inner')
+        row=next(iter(self.read_state('windows-inner')['uploads'].values()))
+        path='/assets/'+row['name'];data=artifact.read_bytes()
+        self.ctx['assets'][path]=b'!'*len(data)
+        self.ctx['release_assets'].append(dict(name=row['name'],state='uploaded',size=len(data),browser_download_url=self.base+path))
+        self.assertEqual(self.run_cli('windows-inner','Upload','-File',artifact,ok=False)['code'],'ARTIFACT_HASH_MISMATCH')
+        self.assertEqual(len(self.ctx['posts']),1)
 
     def test_rate_limit_survives_restart_and_recovers(self):
         self.submit(); self.ctx['post_rate'] = True

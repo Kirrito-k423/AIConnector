@@ -566,6 +566,36 @@ function Queue($E) {
     $script:State.outbox[$E.event_id]=@{event=$E;body=$body;status='pending';attempts=0;http=0;queued_at=(Epoch)}
     Save
 }
+function Start-DeliveryWrite($Row) {
+    # Persist intent before the network call. Recovery may resend only these
+    # immutable deliveries, never a Claim, SSH command, or arbitrary POST.
+    $Row.status='uncertain'; $Row.last_attempt_at=Epoch
+    $Row.attempts=1+[int](Get-Field $Row 'attempts' 0)
+    $Row.Remove('recovery'); Save
+}
+function Observe-DeliveryAbsent($Row) {
+    if ($Row.status -ne 'uncertain') { return }
+    $now=Epoch
+    if (-not (Get-Field $Row 'recovery')) {
+        $attempt=[long](Get-Field $Row 'last_attempt_at' $now)
+        # Legacy rows without a timestamp start their observation window now.
+        if ($attempt -le 0) { $attempt=$now }
+        $base=[Math]::Max(2*$TimeoutSeconds,[Math]::Max(2*$script:C.poll_seconds,$script:C.write_interval_seconds))
+        $delay=[Math]::Min(3600,$base*[Math]::Pow(2,[Math]::Min(5,[Math]::Max(0,[int](Get-Field $Row 'attempts' 1)-1))))
+        $Row.recovery=@{absent_reads=0;last_absent_at=0L;not_before=($attempt+[long]$delay)}
+    }
+    $check=$Row.recovery
+    if ($check.last_absent_at -gt 0 -and $now-$check.last_absent_at -lt $script:C.poll_seconds) { return }
+    $check.absent_reads++; $check.last_absent_at=$now
+    if ($check.absent_reads -ge 2 -and $now -ge $check.not_before) {
+        $Row.status='pending'; $check.requeued_at=$now
+        $Row.recoveries=1+[int](Get-Field $Row 'recoveries' 0)
+    }
+}
+function Reset-DeliveryAbsence($Row) {
+    $check=Get-Field $Row 'recovery'
+    if ($check) { $check.absent_reads=0; $check.last_absent_at=0L }
+}
 function Import-Comments($Comments) {
     foreach ($c in $Comments) {
         $id=[string]$c.id; $body=[string]$c.body; $digest=Hash $body
@@ -589,6 +619,21 @@ function Import-Comments($Comments) {
     foreach ($item in $script:State.outbox.Values) {
         if ($script:State.events.ContainsKey($item.event.event_id)) { $item.status='confirmed' }
     }
+    Save
+}
+function Reconcile-DeliveryComments {
+    try {
+        # Read-Comments returns only after all routes and all pages succeed.
+        Import-Comments (Read-Comments)
+    } catch {
+        foreach ($item in $script:State.outbox.Values) { Reset-DeliveryAbsence $item }
+        Save; throw
+    }
+    foreach ($item in $script:State.outbox.Values) {
+        if ($script:Relay -and -not $script:State.routes.ContainsKey($item.event.task_id)) { continue }
+        if (-not $script:State.events.ContainsKey($item.event.event_id)) { Observe-DeliveryAbsent $item }
+    }
+    $script:State.last_delivery_reconcile=Epoch
     Save
 }
 function Revision-Digest($E) {
@@ -679,13 +724,18 @@ function Auto-Transitions {
     }
     Save
 }
-function Flush-One {
+function Flush-One([bool]$Reconciled=$false) {
     if ($script:State.next_poll -gt (Epoch)) { return }
     if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
+    if (-not $Reconciled -and (Epoch)-(Get-Field $script:State 'last_delivery_reconcile' 0) -ge $script:C.poll_seconds -and @($script:State.outbox.Values | Where-Object { $_.status -eq 'uncertain' -or ($_.status -eq 'pending' -and (Get-Field $_ 'recovery')) }).Count -gt 0) {
+        Reconcile-DeliveryComments
+        $Reconciled=$true
+    }
     $runs=Runs
     foreach ($id in @($script:State.outbox.Keys | Sort-Object @{Expression={Get-Field $script:State.outbox[$_] 'last_attempt_at' 0}},@{Expression={Get-Field $script:State.outbox[$_] 'queued_at' 0}},@{Expression={$_}})) {
         $item=$script:State.outbox[$id]; $e=$item.event; $key=Run-Key $e
         if ($item.status -notin @('pending','rate_limited')) { continue }
+        if ($item.status -eq 'pending' -and (Get-Field $item 'recovery') -and -not $Reconciled) { continue }
         if ($script:State.conflicts.ContainsKey($key) -or ($runs.ContainsKey($key) -and $runs[$key].phase -eq 'conflict')) { continue }
         if ($e.parent -and -not $script:State.events.ContainsKey($e.parent)) { continue }
         if (-not $script:Token) { $script:State.last_error='TOKEN_REQUIRED'; Save; return }
@@ -698,7 +748,7 @@ function Flush-One {
             if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
             $commentsPath=$script:RepoPath+'/issues/'+$route.number+'/comments'
         }
-        $item.status='uncertain'; $item.attempts++; Save
+        Start-DeliveryWrite $item
         $r=Api $commentsPath 'POST' (Json @{body=$item.body})
         $item.http=$r.http
         $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
@@ -707,7 +757,7 @@ function Flush-One {
         } elseif ($r.http -ge 400 -and $r.http -lt 500) { $item.status='rejected'; $script:State.last_error='WRITE_REJECTED_'+$r.http }
         # A response alone never confirms a write. Reconcile through an independent full GET.
         Save
-        if ($script:State.next_poll -le (Epoch)) { Import-Comments (Read-Comments) }
+        if ($script:State.next_poll -le (Epoch)) { Reconcile-DeliveryComments }
         return
     }
 }
@@ -734,8 +784,8 @@ function Snapshot {
         }
         Atomic $row.inbox_file (Json $row); $list+=,$row
     }
-    $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http;queued_at=(Get-Field $item 'queued_at')} }
-    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count;receiver_capabilities=(Get-Field $script:State 'receiver_capabilities')}
+    $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http;queued_at=(Get-Field $item 'queued_at');recovery=(Get-Field $item 'recovery');recoveries=(Get-Field $item 'recoveries' 0)} }
+    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;uploads=$script:State.uploads;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count;receiver_capabilities=(Get-Field $script:State 'receiver_capabilities')}
     Atomic (Join-Path $StateDir 'status.json') (Json $snapshot)
     $lines=@('# AIConnector '+$Node,'','| 运行 | 状态 | 本地已领取 | 异常 |','|---|---|---|---|')
     foreach ($r in $list) { $lines+='| '+$r.key+' | '+$r.phase+' | '+$r.claimed+' | '+$r.error+' |' }
@@ -746,12 +796,26 @@ function Snapshot {
 }
 function Poll-Once {
     if ($script:State.next_poll -gt (Epoch)) { return Snapshot }
-    Import-Comments (Read-Comments)
+    Reconcile-DeliveryComments
     if ($script:Relay -and (Get-Field $script:State 'capability_issue')) { $null=Read-Capabilities }
     $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
-    Auto-Transitions; Flush-One
+    Auto-Transitions; Flush-One $true
     if (-not $script:State.last_error) { $script:State.failures=0 }
     return Snapshot
+}
+function Read-UploadAssets($Release,$Row) {
+    try {
+        $assets=@(); $complete=$false
+        for ($page=1;$page -le $script:C.max_pages;$page++) {
+            $r=Api ('/repos/'+$script:C.repository+'/releases/'+$Release.id+'/assets?per_page=100&page='+$page); Require-Response $r
+            Need ($r.json -is [Array]) 'INVALID_ASSET_LIST'; $assets+=@($r.json)
+            if ($r.json.Count -lt 100) { $complete=$true; break }
+        }
+        Need $complete 'PAGINATION_INCOMPLETE'
+        $found=@($assets | Where-Object { $_.name -ceq $Row.name })
+        Need ($found.Count -le 1) 'ASSET_CONFLICT'
+        return ,$found
+    } catch { Reset-DeliveryAbsence $Row; Save; throw }
 }
 function Upload-Zip([string]$Path) {
     Need ($script:Token -and $script:C.provider -eq 'github') 'GITHUB_TOKEN_REQUIRED_FOR_UPLOAD'
@@ -772,6 +836,8 @@ function Upload-Zip([string]$Path) {
     if (-not $script:State.uploads.ContainsKey($uploadKey)) { $script:State.uploads[$uploadKey]=@{status='pending';bytes=$bytes.Length;name=$name;manifest=$null;http=0}; Save }
     $row=$script:State.uploads[$uploadKey]
     if ($row.status -eq 'confirmed') { return $row.manifest }
+    $check=Get-Field $row 'recovery'
+    if ($row.status -eq 'uncertain' -and $check -and (Epoch)-$check.last_absent_at -lt $script:C.poll_seconds) { Fail 'UPLOAD_RECONCILE_PENDING' }
     if ($script:Relay) {
         $release=Ensure-RunRelease $identity; Need ($null -ne $release) 'RELEASE_NOT_CONFIRMED'
     } else {
@@ -780,30 +846,33 @@ function Upload-Zip([string]$Path) {
     }
     $upload=([string]$release.upload_url) -replace '\{.*$',''; $u=Assert-Url $upload; $api=Assert-Url $script:C.api_base
     Need (($u.Host -ceq 'uploads.github.com' -and $u.AbsolutePath -ceq ('/repos/'+$script:C.repository+'/releases/'+$release.id+'/assets')) -or ($api.IsLoopback -and $u.IsLoopback -and $api.Authority -ceq $u.Authority)) 'INVALID_UPLOAD_TARGET'
-    $assets=@(); $complete=$false
-    for ($page=1;$page -le $script:C.max_pages;$page++) {
-        $r=Api ('/repos/'+$script:C.repository+'/releases/'+$release.id+'/assets?per_page=100&page='+$page); Require-Response $r
-        Need ($r.json -is [Array]) 'INVALID_ASSET_LIST'; $assets+=@($r.json)
-        if ($r.json.Count -lt 100) { $complete=$true; break }
-    }
-    Need $complete 'PAGINATION_INCOMPLETE'
-    $found=@($assets | Where-Object { $_.name -ceq $name })
-    Need ($found.Count -le 1) 'ASSET_CONFLICT'
+    Need ($row.name -ceq $name -and $row.bytes -eq $bytes.Length) 'UPLOAD_IDENTITY_CHANGED'
+    $found=Read-UploadAssets $release $row
     if ($found.Count -eq 0) {
-        Need ($row.status -in @('pending','rate_limited')) 'UPLOAD_UNCERTAIN_NO_RETRY'
+        Observe-DeliveryAbsent $row; Save
+        Need ($row.status -ne 'rejected') 'UPLOAD_REJECTED'
+        Need ($row.status -in @('pending','rate_limited')) 'UPLOAD_RECONCILE_PENDING'
         if ($script:Relay) {
             $delay=[int]((Get-Field $script:State 'post_not_before' 0)-(Epoch))
             Need ($delay -le 60) 'WRITE_COOLDOWN'
             if ($delay -gt 0) { Start-Sleep -Seconds $delay }
         }
-        $row.status='uncertain'; Save
+        Start-DeliveryWrite $row
         $r=Invoke-WireHttp -Url ($upload+'?name='+[Uri]::EscapeDataString($name)) -Method POST -BinaryBody $bytes -BinaryContentType 'application/zip' -Headers @{Authorization=('Bearer '+$script:Token);Accept='application/vnd.github+json'} -Authenticated $true
         $row.http=$r.http
         $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
         if (Limited $r) { $row.status='rate_limited'; $script:State.next_poll=Cooldown $r; Save; Fail 'RATE_LIMITED' }
-        if ($r.http -ge 400 -and $r.http -lt 500) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
-        Save; Require-Response $r
-        $asset=$r.json
+        if ($r.http -eq 422) {
+            # A previous in-flight upload can win after our absence read. Verify
+            # that object rather than overwrite/delete it or trust the 422.
+            Save; $found=Read-UploadAssets $release $row
+            if ($found.Count -eq 0) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
+            $asset=$found[0]
+        } else {
+            if ($r.http -ge 400 -and $r.http -lt 500) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
+            Save; Require-Response $r
+            $asset=$r.json
+        }
     } else { $asset=$found[0] }
     Need ($asset.state -ceq 'uploaded' -and $asset.size -eq $bytes.Length -and $asset.name -ceq $name) 'ASSET_CONFLICT'
     $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }

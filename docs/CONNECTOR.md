@@ -80,13 +80,13 @@ pwsh -NoProfile -File ./Connector.ps1 -Node mac-outer -Action Upload -Key smoke/
 | `receipt` | Mac 已核对结果版本和产物并回执 |
 | `conflict` | 同一运行出现冲突事件或已接收评论被修改；停止推进该运行 |
 | outbox `pending` | 尚未发送；重启后可发送 |
-| outbox `uncertain` | 请求可能已经成功；只查原消息，不自动重发 |
+| outbox `uncertain` | 请求可能已成功；先完整读回，符合缺失观察和退避条件后重传原事件 |
 | outbox `rate_limited` | 明确限流，保存冷却期限后恢复 |
 | outbox `rejected` | 服务端明确拒绝；修复权限后用 RetryRejected 显式重新排队 |
 | `STATE_BUSY` | 另一操作持有状态锁；稍后重试本地命令 |
 | `STATE_CORRUPT` / `STATE_CONFIG_MISMATCH` | 保留原文件并停止；不得删除状态目录当作修复 |
 
-修复权限后，可使用 `-Action RetryRejected -Key <event_id>` 将明确拒绝的评论重新排队；上传使用 `upload:<运行键>:<SHA256>` 作为 Key，Issue/Release 使用 status.json 的 provisions 键，随后再次运行 `Upload`。它拒绝处理 `uncertain`，未知写入仍必须先查证。
+修复权限后，可使用 `-Action RetryRejected -Key <event_id>` 将明确拒绝的评论重新排队；上传使用 `upload:<运行键>:<SHA256>` 作为 Key，Issue/Release 使用 status.json 的 provisions 键，随后再次运行 `Upload`。它拒绝强行重置 `uncertain`。0.7.1 起，协议评论由 Poll / Flush 自动读回恢复，ZIP 由原 Upload 重试自动读回恢复；均不需要删除状态或另建运行。`UPLOAD_RECONCILE_PENDING` 表示仍在观察等待，不是永久拒绝。见 [Issue #9 修复说明](ISSUE-9-FIX.md)。
 
 `status.json` 包含 Issue/Release 链接、平台作者和评论时间线；其待发队列按消息列出状态，不把本地排队显示为远端已收到。投递失败不会丢弃已保存的任务和结果。不同任务互不覆盖。
 
@@ -94,7 +94,7 @@ pwsh -NoProfile -File ./Connector.ps1 -Node mac-outer -Action Upload -Key smoke/
 
 已领取但实验是否运行不明时，先通过内侧 AI / 服务器进程记录核查；确认终态后用原运行提交结果。需要重复实验时使用新 `run_id`；修改任务内容用新 `revision`，不编辑旧协议评论。此版本没有自动租约接管、取消正在执行的实验或自动重跑。
 
-轮询默认在完整读取所有评论页后推进状态；分页不完整不导入部分任务。限流遵守 `Retry-After` / GitHub 配额重置时间，冷却期限写入磁盘。未知 POST 结果只读回查证，不能保证网络分区时仍持续投递。
+轮询默认在完整读取所有评论页后推进状态；分页不完整不导入部分任务。限流遵守 `Retry-After` / GitHub 配额重置时间，冷却期限写入磁盘。网络分区期间保留待交付内容，网络恢复后按读回与退避规则继续交付；不能在通道不可读时推定远端缺失。
 
 ## 单轮调试与本地验证
 
