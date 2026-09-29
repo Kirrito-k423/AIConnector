@@ -5,6 +5,7 @@ param(
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
+    [ValidatePattern('^[a-zA-Z0-9_-]{0,96}$')][string]$OperationId='',
     [ValidateRange(1,120)][int]$TimeoutSeconds=30,
     [ValidateRange(0,100000)][int]$Cycles=0
 )
@@ -20,6 +21,37 @@ $defaultStateDir=-not $StateDir
 if (-not $StateDir) { $StateDir=Join-Path (Join-Path $root 'connector-state') $Node }
 $StateDir=[IO.Path]::GetFullPath($StateDir)
 $script:Token=''; $script:State=$null; $script:Lock=$null; $script:WatchLock=$null
+$script:IoScope='action:'+$Action+':'+$Key
+$script:HttpClient=$null
+if (-not $OperationId) { $OperationId=[Guid]::NewGuid().ToString('N') }
+function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
+    # No request headers, query strings, bodies, credentials, or free-form errors.
+    try {
+        $row=@{schema='aiconnector.timing.v1';at=[DateTimeOffset]::UtcNow.ToString('o');source='connector';operation_id=$OperationId;action=$Action;kind=$Kind}
+        if ($script:IoScope -cmatch '^[a-zA-Z0-9_:/-]{1,240}$') { $row.scope=$script:IoScope }
+        if ($Key -cmatch '^[a-z0-9_-]+/[1-9][0-9]*/[a-z0-9_-]+$') { $row.key=$Key }
+        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at')) {
+            if ($Values.ContainsKey($name)) { $row[$name]=$Values[$name] }
+        }
+        $trace=Join-Path $StateDir 'transport-timing.jsonl'
+        if ([IO.File]::Exists($trace) -and ([IO.FileInfo]::new($trace)).Length -ge 2097152) {
+            if ([IO.File]::Exists($trace+'.1')) { [IO.File]::Delete($trace+'.1') }
+            [IO.File]::Move($trace,$trace+'.1')
+        }
+        [IO.File]::AppendAllText($trace,(Json $row)+"`n",$script:Utf8)
+    } catch { } # Timing failure must never change a delivery or execution decision.
+}
+function Endpoint-Name([string]$Url) {
+    $path=([Uri]$Url).AbsolutePath
+    if ($path -match '/issues/comments/[0-9]+$') { return 'comment' }
+    if ($path -match '/issues/comments$') { return 'comment_feed' }
+    if ($path -match '/issues/[0-9]+/comments$') { return 'task_comments' }
+    if ($path -match '/issues$') { return 'routes' }
+    if ($path -match '/contents/') { return 'relay_manifest' }
+    if ($path -match '/assets$') { return 'release_assets' }
+    if ($path -match '/releases/tags/') { return 'release' }
+    return 'artifact_or_provision'
+}
 function Fail([string]$Code) { $e=New-Object InvalidOperationException('Connector stopped'); $e.Data['connector_code']=$Code; throw $e }
 function Need($Condition,[string]$Code) { if (-not $Condition) { Fail $Code } }
 function Error-Code($Record) {
@@ -141,7 +173,21 @@ function Open-State {
         $script:State=@{binding=$script:Binding;events=@{};comments=@{};outbox=@{};claims=@{};uploads=@{};conflicts=@{};ignored=@{};artifact_errors=@{};next_poll=0L;failures=0;last_error='';last_poll=0L}
         Save
     }
-    foreach ($field in @('routes','provisions')) { if (-not $script:State.ContainsKey($field)) { $script:State[$field]=@{} } }
+    foreach ($field in @('routes','provisions','scopes','sync')) { if (-not $script:State.ContainsKey($field)) { $script:State[$field]=@{} } }
+}
+function In-Scope([string]$Scope,[scriptblock]$Work) {
+    $previous=$script:IoScope; $script:IoScope=$Scope
+    try {
+        $row=Get-Field $script:State.scopes $Scope
+        if ($row -and $row.next_attempt -gt (Epoch)) { Trace-Event 'cooldown' @{retry_at=$row.next_attempt}; Fail 'REQUEST_COOLDOWN' }
+        $value=& $Work
+        $script:State.scopes.Remove($Scope); Save
+        return ,$value
+    } catch {
+        $row=Get-Field $script:State.scopes $Scope
+        if ($row) { $_.Exception.Data['retry_at']=$row.next_attempt }
+        throw
+    } finally { $script:IoScope=$previous }
 }
 function Close-State { if ($null -ne $script:Lock) { $script:Lock.Dispose(); $script:Lock=$null } }
 function Assert-Url([string]$Url) {
@@ -159,6 +205,7 @@ function Invoke-WireHttp {
     if ($Authenticated -and $u.Scheme -ne 'https' -and -not $u.IsLoopback) {
         Fail '带凭据的请求必须使用 HTTPS。'
     }
+    if ($null -eq $script:HttpClient) {
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.AllowAutoRedirect = $false
     $handler.UseDefaultCredentials = $false
@@ -170,11 +217,15 @@ function Invoke-WireHttp {
         $handler.Proxy = New-Object System.Net.WebProxy($Proxy)
         $handler.UseProxy = $true
     }
-    $client = New-Object System.Net.Http.HttpClient($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $script:HttpClient = New-Object System.Net.Http.HttpClient($handler)
+    $script:HttpClient.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    }
+    $client=$script:HttpClient
     $cts = New-Object Threading.CancellationTokenSource
     $cts.CancelAfter($TimeoutSeconds * 1000)
     $sw = [Diagnostics.Stopwatch]::StartNew()
+    $requestId=[Guid]::NewGuid().ToString('N'); $endpoint=Endpoint-Name $Url
+    Trace-Event 'http_started' @{request_id=$requestId;method=$Method;endpoint=$endpoint}
     $result = [ordered]@{ status = 'NETWORK_ERROR'; http = 0; elapsed_ms = 0; bytes = 0; url = (Get-SafeUrl $Url); content_type = ''; sha256 = ''; retry_after = ''; json = $null; data = $null; rate_remaining = ''; rate_reset = '' }
     $response = $null
     $req = $null
@@ -254,7 +305,8 @@ function Invoke-WireHttp {
         $script:WireDiagnostic=@{category=$result.status;http=$result.http}
         if ($null -ne $response) { $response.Dispose() }
         if ($null -ne $req) { $req.Dispose() }
-        $cts.Dispose(); $client.Dispose()
+        $cts.Dispose()
+        Trace-Event 'http_finished' @{request_id=$requestId;method=$Method;endpoint=$endpoint;http=$result.http;category=$result.status;elapsed_ms=$result.elapsed_ms;bytes=$result.bytes}
     }
     return [pscustomobject]$result
 }
@@ -279,9 +331,21 @@ function Cooldown($R) {
 }
 function Require-Response($R) {
     if ($R.status -ceq 'HTTP_OK') { return }
-    $script:State.failures++; $script:State.last_error=$R.status+'_'+$R.http
+    if (-not $script:Relay -or (Limited $R)) { $script:State.failures++ }
+    $script:State.last_error=$R.status+'_'+$R.http
     if (Limited $R) { $script:State.next_poll=Cooldown $R }
-    else { $script:State.next_poll=(Epoch)+[Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,$script:State.failures))) }
+    elseif (-not $script:Relay) { $script:State.next_poll=(Epoch)+[Math]::Min(900,30*[Math]::Pow(2,[Math]::Min(5,$script:State.failures))) }
+    else {
+        $old=Get-Field $script:State.scopes $script:IoScope
+        $count=1+[int](Get-Field $old 'failures' 0)
+        $script:State.scopes[$script:IoScope]=@{failures=$count;error=$script:State.last_error;failed_at=(Epoch);next_attempt=((Epoch)+[Math]::Min(300,5*[Math]::Pow(2,[Math]::Min(6,$count-1))))}
+        # A provider rate limit is global. A single route/asset 5xx is not.
+        # Repeated transport failures across independent operations indicate an outage.
+        $transport=@($script:State.scopes.Values | Where-Object { $_.failed_at -ge (Epoch)-60 -and $_.error -match '^(TLS_ERROR|DNS_ERROR|TIMEOUT|NETWORK_ERROR|CONNECTION_)' })
+        if ($transport.Count -ge 3 -or $R.http -eq 401) { $script:State.next_poll=(Epoch)+60 }
+    }
+    $retry=Get-Field (Get-Field $script:State.scopes $script:IoScope) 'next_attempt' $script:State.next_poll
+    Trace-Event 'retry_scheduled' @{category=$R.status;http=$R.http;retry_at=$retry}
     Save; Fail $script:State.last_error
 }
 function Read-List([string]$Path,[string]$Query='') {
@@ -565,6 +629,7 @@ function Queue($E) {
     if ($script:State.outbox.ContainsKey($E.event_id)) { return }
     $script:State.outbox[$E.event_id]=@{event=$E;body=$body;status='pending';attempts=0;http=0;queued_at=(Epoch)}
     Save
+    Trace-Event 'event_queued' @{key=(Run-Key $E);event_id=$E.event_id;event_kind=$E.kind}
 }
 function Start-DeliveryWrite($Row) {
     # Persist intent before the network call. Recovery may resend only these
@@ -612,29 +677,102 @@ function Import-Comments($Comments) {
             Need (@($script:C.authors[$e.sender]) -ccontains [string]$c.user.login) 'AUTHOR_NOT_ALLOWED'
             if ($script:Relay) { Need ($e.task_id -ceq $c.relay_task_id) 'EVENT_ISSUE_MISMATCH' }
             $key=Run-Key $e
+            if (-not $script:State.events.ContainsKey($e.event_id)) { Trace-Event 'event_observed' @{key=$key;event_id=$e.event_id;event_kind=$e.kind} }
             $script:State.events[$e.event_id]=$e
             $script:State.comments[$id]=@{digest=$digest;key=$key;event_id=$e.event_id;author=[string]$c.user.login;issue=[string]$c.relay_issue;created_at=(Source-Time $c.created_at);updated_at=(Source-Time $c.updated_at);url=[string]$c.html_url;observed_at=(Epoch)}
         } catch { $script:State.ignored[$id]='INVALID_OR_UNTRUSTED_EVENT' }
     }
     foreach ($item in $script:State.outbox.Values) {
-        if ($script:State.events.ContainsKey($item.event.event_id)) { $item.status='confirmed' }
+        if ($script:State.events.ContainsKey($item.event.event_id)) {
+            if ($item.status -ne 'confirmed') { $item.confirmed_at=Epoch; Trace-Event 'event_confirmed' @{key=(Run-Key $item.event);event_id=$item.event.event_id;event_kind=$item.event.kind;confirmed_at=$item.confirmed_at} }
+            $item.status='confirmed'
+        }
     }
     Save
 }
-function Reconcile-DeliveryComments {
+function Read-TaskComments($Route) {
+    $all=@()
+    foreach ($comment in (Read-List ($script:RepoPath+'/issues/'+$Route.number+'/comments'))) {
+        $row=As-Map $comment; $row.relay_task_id=$Route.task_id; $row.relay_issue=$Route.number; $all+=,$row
+    }
+    return ,$all
+}
+function Import-IncrementalComments {
+    Assert-Relay; $routes=Read-Routes; $byIssue=@{}
+    foreach ($route in $routes.Values) { $byIssue[$script:C.api_base.TrimEnd('/')+$script:RepoPath+'/issues/'+$route.number]=$route }
+    $query='&sort=created&direction=asc'; $cursor=[long](Get-Field $script:State.sync 'cursor' 0)
+    if ($cursor -gt 0) {
+        $since=[DateTimeOffset]::FromUnixTimeSeconds([Math]::Max(0,$cursor-[Math]::Max(120,2*$script:C.poll_seconds))).UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        $query+='&since='+[Uri]::EscapeDataString($since)
+    }
+    # No import or cursor advance unless the entire stable-order page set succeeded.
+    $comments=Read-List ($script:RepoPath+'/issues/comments') $query; $all=@(); $next=$cursor
+    foreach ($comment in $comments) {
+        $time=[DateTimeOffset]::MinValue
+        if ([DateTimeOffset]::TryParse((Source-Time (Get-Field $comment 'updated_at')),[ref]$time)) { $next=[Math]::Max($next,$time.ToUnixTimeSeconds()) }
+        $route=Get-Field $byIssue ([string](Get-Field $comment 'issue_url'))
+        if (-not $route) { continue }
+        $row=As-Map $comment; $row.relay_task_id=$route.task_id; $row.relay_issue=$route.number; $all+=,$row
+    }
+    Import-Comments $all
+    $script:State.sync.cursor=$next; $script:State.sync.updated_at=Epoch; Save
+}
+function Audit-OneRoute {
+    $routes=@($script:State.routes.Values | Sort-Object task_id)
+    if ($routes.Count -eq 0) { return }
+    $index=[int](Get-Field $script:State.sync 'audit_index' 0)%$routes.Count; $route=$routes[$index]
+    # Advance even on an unavailable old route, so it cannot monopolize the audit.
+    $script:State.sync.audit_index=($index+1)%$routes.Count; Save
     try {
-        # Read-Comments returns only after all routes and all pages succeed.
-        Import-Comments (Read-Comments)
+        $null=In-Scope ('audit:'+$route.task_id) {
+            $comments=Read-TaskComments $route; Import-Comments $comments
+            $present=@{}; foreach ($c in $comments) { $present[[string]$c.id]=$true }
+            foreach ($id in @($script:State.comments.Keys)) {
+                $old=$script:State.comments[$id]
+                if ($old.issue -ceq $route.number -and -not $present.ContainsKey($id)) { $script:State.conflicts[$old.key]='COMMENT_MISSING' }
+            }
+        }
+        $script:State.sync.Remove('audit_error'); Save
     } catch {
-        foreach ($item in $script:State.outbox.Values) { Reset-DeliveryAbsence $item }
+        if ($script:State.next_poll -gt (Epoch)) { throw }
+        $script:State.sync.audit_error=Error-Code $_; Save
+    }
+}
+function Reconcile-DeliveryComments([string]$TaskId='') {
+    try {
+        if ($script:Relay -and $TaskId) {
+            $route=Get-Field $script:State.routes $TaskId; Need ($null -ne $route) 'TASK_ISSUE_NOT_FOUND'
+            Import-Comments (Read-TaskComments $route)
+        } else { Import-Comments (Read-Comments) }
+    } catch {
+        foreach ($item in $script:State.outbox.Values) { if (-not $TaskId -or $item.event.task_id -ceq $TaskId) { Reset-DeliveryAbsence $item } }
         Save; throw
     }
     foreach ($item in $script:State.outbox.Values) {
+        if ($TaskId -and $item.event.task_id -cne $TaskId) { continue }
         if ($script:Relay -and -not $script:State.routes.ContainsKey($item.event.task_id)) { continue }
         if (-not $script:State.events.ContainsKey($item.event.event_id)) { Observe-DeliveryAbsent $item }
     }
     $script:State.last_delivery_reconcile=Epoch
     Save
+}
+function Confirm-PostedComment($Item,$Response) {
+    if (-not $script:Relay) { Reconcile-DeliveryComments; return }
+    $e=$Item.event; $route=$script:State.routes[$e.task_id]
+    $commentId=[string](Get-Field $Response.json 'id')
+    if ($Response.status -ceq 'HTTP_OK' -and $commentId -cmatch '^[1-9][0-9]*$') {
+        $r=Api ($script:RepoPath+'/issues/comments/'+$commentId)
+        if ($r.http -ne 404) {
+            Require-Response $r
+            Need ([string]$r.json.id -ceq $commentId -and [string]$r.json.issue_url -ceq ($script:C.api_base.TrimEnd('/')+$script:RepoPath+'/issues/'+$route.number)) 'POST_READBACK_MISMATCH'
+            Need ((Hash ([string]$r.json.body)) -ceq (Hash $Item.body)) 'POST_READBACK_MISMATCH'
+            $row=As-Map $r.json; $row.relay_task_id=$route.task_id; $row.relay_issue=$route.number
+            Import-Comments @($row); return
+        }
+    }
+    # Ambiguous POST / delayed visibility: search only this task, preserving the
+    # independent reads + absence window before an immutable delivery may retry.
+    Reconcile-DeliveryComments $e.task_id
 }
 function Revision-Digest($E) {
     if (-not $script:Relay) { return $E.payload_sha256 }
@@ -695,16 +833,19 @@ function Fetch-Artifacts($Artifacts,[bool]$Refresh=$false) {
         $path=Join-Path $cache ($a.sha256+'.zip'); $valid=$false
         if ([IO.File]::Exists($path)) { $bytes=[IO.File]::ReadAllBytes($path); $valid=($bytes.Length -eq $a.bytes -and (Get-Sha256 $bytes) -ceq $a.sha256) }
         if ($Refresh -or -not $valid) {
+            Trace-Event 'artifact_download_started' @{bytes=$a.bytes}
             $r=Invoke-WireHttp -Url $a.url -Limit 5242879
             Require-Response $r
             Need ($r.bytes -eq $a.bytes -and $r.sha256 -ceq $a.sha256) 'ARTIFACT_HASH_MISMATCH'
             Write-Bytes $path $r.data
+            Trace-Event 'artifact_verified' @{bytes=$a.bytes}
         }
         $paths+=@{name=$a.name;path=$path;sha256=$a.sha256;bytes=$a.bytes}
     }
     return ,$paths
 }
 function Auto-Transitions {
+    if ($script:State.next_poll -gt (Epoch)) { return }
     $runs=Runs
     foreach ($run in $runs.Values) {
         $kind=''; $parent=$null; $artifacts=@()
@@ -713,7 +854,7 @@ function Auto-Transitions {
         if (-not $kind) { continue }
         try {
             if ($kind -eq 'receipt' -and $run.result.outcome -eq 'succeeded') { Need ($run.result.actual_revision -ceq $run.task.code.revision) 'RESULT_REVISION_MISMATCH' }
-            $null=Fetch-Artifacts $artifacts
+            $null=In-Scope ('artifact:'+$run.key) { Fetch-Artifacts $artifacts }
             $script:State.artifact_errors.Remove($run.key)
             Queue (New-Event $parent $kind $parent.event_id @{status=$kind})
         } catch {
@@ -727,38 +868,54 @@ function Auto-Transitions {
 function Flush-One([bool]$Reconciled=$false) {
     if ($script:State.next_poll -gt (Epoch)) { return }
     if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
-    if (-not $Reconciled -and (Epoch)-(Get-Field $script:State 'last_delivery_reconcile' 0) -ge $script:C.poll_seconds -and @($script:State.outbox.Values | Where-Object { $_.status -eq 'uncertain' -or ($_.status -eq 'pending' -and (Get-Field $_ 'recovery')) }).Count -gt 0) {
-        Reconcile-DeliveryComments
-        $Reconciled=$true
-    }
-    $runs=Runs
-    foreach ($id in @($script:State.outbox.Keys | Sort-Object @{Expression={Get-Field $script:State.outbox[$_] 'last_attempt_at' 0}},@{Expression={Get-Field $script:State.outbox[$_] 'queued_at' 0}},@{Expression={$_}})) {
+    $runs=Runs; $manifestChecked=$false
+    foreach ($id in @($script:State.outbox.Keys | Sort-Object @{Expression={
+        $kind=$script:State.outbox[$_].event.kind
+        if ($kind -in @('result','receipt','started')) { 0 } else { 1 }
+    }},@{Expression={Get-Field $script:State.outbox[$_] 'last_attempt_at' 0}},@{Expression={Get-Field $script:State.outbox[$_] 'queued_at' 0}},@{Expression={$_}})) {
         $item=$script:State.outbox[$id]; $e=$item.event; $key=Run-Key $e
-        if ($item.status -notin @('pending','rate_limited')) { continue }
-        if ($item.status -eq 'pending' -and (Get-Field $item 'recovery') -and -not $Reconciled) { continue }
+        if ($item.status -notin @('pending','rate_limited','uncertain')) { continue }
         if ($script:State.conflicts.ContainsKey($key) -or ($runs.ContainsKey($key) -and $runs[$key].phase -eq 'conflict')) { continue }
         if ($e.parent -and -not $script:State.events.ContainsKey($e.parent)) { continue }
-        if (-not $script:Token) { $script:State.last_error='TOKEN_REQUIRED'; Save; return }
-        $item.last_attempt_at=Epoch; Save
-        $commentsPath=$script:CommentsPath
-        if ($script:Relay) {
-            $route=Ensure-TaskIssue $e; if ($null -eq $route) { return }
-            if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
-            $release=Ensure-RunRelease $e; if ($null -eq $release) { return }
-            if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
-            $commentsPath=$script:RepoPath+'/issues/'+$route.number+'/comments'
-        }
-        Start-DeliveryWrite $item
-        $r=Api $commentsPath 'POST' (Json @{body=$item.body})
-        $item.http=$r.http
-        $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
-        if (Limited $r) {
-            $item.status='rate_limited'; $script:State.failures++; $script:State.next_poll=Cooldown $r; $script:State.last_error='RATE_LIMITED'
-        } elseif ($r.http -ge 400 -and $r.http -lt 500) { $item.status='rejected'; $script:State.last_error='WRITE_REJECTED_'+$r.http }
-        # A response alone never confirms a write. Reconcile through an independent full GET.
-        Save
-        if ($script:State.next_poll -le (Epoch)) { Reconcile-DeliveryComments }
-        return
+        $scope='delivery:'+$e.task_id
+        $cool=Get-Field $script:State.scopes $scope
+        if ($script:Relay -and $cool -and $cool.next_attempt -gt (Epoch)) { continue }
+        $previous=$script:IoScope; $script:IoScope=$scope
+        try {
+            if ($item.status -eq 'uncertain' -or ($item.status -eq 'pending' -and (Get-Field $item 'recovery'))) {
+                if ($script:Relay) {
+                    $check=Get-Field $item 'recovery'
+                    if ($check -and (Epoch)-$check.last_absent_at -lt $script:C.poll_seconds) { continue }
+                    Reconcile-DeliveryComments $e.task_id
+                } elseif (-not $Reconciled) { Reconcile-DeliveryComments; $Reconciled=$true }
+                if ($item.status -notin @('pending','rate_limited')) { continue }
+            }
+            if (-not $script:Token) { $script:State.last_error='TOKEN_REQUIRED'; Save; return }
+            $commentsPath=$script:CommentsPath
+            if ($script:Relay) {
+                if (-not $manifestChecked) { Assert-Relay; $manifestChecked=$true }
+                $route=Ensure-TaskIssue $e; if ($null -eq $route) { return }
+                if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
+                $release=Ensure-RunRelease $e; if ($null -eq $release) { return }
+                if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
+                $commentsPath=$script:RepoPath+'/issues/'+$route.number+'/comments'
+            }
+            Start-DeliveryWrite $item
+            $r=Api $commentsPath 'POST' (Json @{body=$item.body})
+            $item.http=$r.http
+            $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
+            if (Limited $r) {
+                $item.status='rate_limited'; $script:State.failures++; $script:State.next_poll=Cooldown $r; $script:State.last_error='RATE_LIMITED'
+            } elseif ($r.http -ge 400 -and $r.http -lt 500) { $item.status='rejected'; $script:State.last_error='WRITE_REJECTED_'+$r.http }
+            Save
+            if ($script:State.next_poll -le (Epoch)) { Confirm-PostedComment $item $r; $script:State.scopes.Remove($scope); Save }
+            return
+        } catch {
+            $item.error=Error-Code $_; Save
+            if (-not $script:Relay -or $script:State.next_poll -gt (Epoch) -or -not $script:State.scopes.ContainsKey($scope)) { throw }
+            # A route-local failure leaves this immutable delivery pending/uncertain.
+            # The next eligible task may proceed without waiting for this route.
+        } finally { $script:IoScope=$previous }
     }
 }
 function Snapshot {
@@ -785,7 +942,7 @@ function Snapshot {
         Atomic $row.inbox_file (Json $row); $list+=,$row
     }
     $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http;queued_at=(Get-Field $item 'queued_at');recovery=(Get-Field $item 'recovery');recoveries=(Get-Field $item 'recoveries' 0)} }
-    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;uploads=$script:State.uploads;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;ignored_comments=$script:State.ignored.Count;receiver_capabilities=(Get-Field $script:State 'receiver_capabilities')}
+    $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;uploads=$script:State.uploads;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;scopes=$script:State.scopes;sync=$script:State.sync;ignored_comments=$script:State.ignored.Count;receiver_capabilities=(Get-Field $script:State 'receiver_capabilities')}
     Atomic (Join-Path $StateDir 'status.json') (Json $snapshot)
     $lines=@('# AIConnector '+$Node,'','| 运行 | 状态 | 本地已领取 | 异常 |','|---|---|---|---|')
     foreach ($r in $list) { $lines+='| '+$r.key+' | '+$r.phase+' | '+$r.claimed+' | '+$r.error+' |' }
@@ -796,8 +953,13 @@ function Snapshot {
 }
 function Poll-Once {
     if ($script:State.next_poll -gt (Epoch)) { return Snapshot }
-    Reconcile-DeliveryComments
-    if ($script:Relay -and (Get-Field $script:State 'capability_issue')) { $null=Read-Capabilities }
+    if ($script:Relay) {
+        $null=In-Scope 'poll' {
+            Import-IncrementalComments
+            if (Get-Field $script:State 'capability_issue') { $null=Read-Capabilities }
+        }
+        Audit-OneRoute
+    } else { Reconcile-DeliveryComments }
     $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
     Auto-Transitions; Flush-One $true
     if (-not $script:State.last_error) { $script:State.failures=0 }
@@ -855,7 +1017,7 @@ function Upload-Zip([string]$Path) {
         if ($script:Relay) {
             $delay=[int]((Get-Field $script:State 'post_not_before' 0)-(Epoch))
             Need ($delay -le 60) 'WRITE_COOLDOWN'
-            if ($delay -gt 0) { Start-Sleep -Seconds $delay }
+            if ($delay -gt 0) { Fail 'WRITE_COOLDOWN' }
         }
         Start-DeliveryWrite $row
         $r=Invoke-WireHttp -Url ($upload+'?name='+[Uri]::EscapeDataString($name)) -Method POST -BinaryBody $bytes -BinaryContentType 'application/zip' -Headers @{Authorization=('Bearer '+$script:Token);Accept='application/vnd.github+json'} -Authenticated $true
@@ -880,7 +1042,7 @@ function Upload-Zip([string]$Path) {
     if ($script:Relay) { Need ($manifest.url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $identity)+'/'+$name)) 'ARTIFACT_RUN_MISMATCH' }
     # An identical cached ZIP proves content, but not that this new Release URL works.
     Artifact-Valid $manifest; $null=Fetch-Artifacts @($manifest) $true
-    $row.status='confirmed'; $row.manifest=$manifest; Save
+    $row.status='confirmed'; $row.manifest=$manifest; $row.confirmed_at=Epoch; Trace-Event 'upload_verified' @{bytes=$bytes.Length;confirmed_at=$row.confirmed_at}; Save
     return $manifest
 }
 function Local-Action {
@@ -900,7 +1062,7 @@ function Local-Action {
         }
         Queue $e; return @{ok=$true;key=$key;event_id=$e.event_id;state='queued'}
     }
-    if ($Action -eq 'Upload') { return Upload-Zip $File }
+    if ($Action -eq 'Upload') { return In-Scope ('upload:'+$Key) { Upload-Zip $File } }
     if ($Action -eq 'RetryRejected') {
         $row=$null
         if ($script:State.outbox.ContainsKey($Key)) { $row=$script:State.outbox[$Key] }
@@ -975,7 +1137,7 @@ try {
             $code=Error-Code $_
             if ($null -ne $script:State -and $null -ne $script:Lock) {
                 $script:State.last_error=$code
-                if ($Action -in @('Poll','Watch') -and $script:State.next_poll -le (Epoch)) { $script:State.next_poll=(Epoch)+60 }
+                if (-not $script:Relay -and $Action -in @('Poll','Watch') -and $script:State.next_poll -le (Epoch)) { $script:State.next_poll=(Epoch)+60 }
                 Save
             }
             if ($Action -ne 'Watch') { throw }
@@ -988,6 +1150,9 @@ try {
     } while ($true)
 } catch {
     $code=Error-Code $_
-    [Console]::WriteLine((Json @{ok=$false;code=$code;node=$Node;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}))
+    $retry=Get-Field $script:State 'next_poll' 0
+    if ($_.Exception.Data.Contains('retry_at')) { $retry=[Math]::Max($retry,[long]$_.Exception.Data['retry_at']) }
+    if ($code -eq 'WRITE_COOLDOWN') { $retry=Get-Field $script:State 'post_not_before' 0 }
+    [Console]::WriteLine((Json @{ok=$false;code=$code;node=$Node;retry_at=$retry;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}))
     exit 1
-} finally { Close-State; if ($null -ne $script:WatchLock) { $script:WatchLock.Dispose() }; $script:Token='' }
+} finally { Close-State; if ($null -ne $script:WatchLock) { $script:WatchLock.Dispose() }; if ($null -ne $script:HttpClient) { $script:HttpClient.Dispose() }; $script:Token='' }

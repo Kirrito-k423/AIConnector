@@ -61,7 +61,7 @@ async function background(c){
   throw new Error('SERVICE_START_FAILED');
 }
 try {
-  if(command==='upgrade')need(fs.existsSync(file),'EXISTING_CONFIG_REQUIRED');
+  if(['upgrade','diagnostics'].includes(command))need(fs.existsSync(file),'EXISTING_CONFIG_REQUIRED');
   init();const c=loadConfig(file);
   if(command==='upgrade'){
     const {prepareUpgrade,applyUpgrade}=await import('./upgrade.mjs');
@@ -73,6 +73,12 @@ try {
       plan=prepareUpgrade(file,option('maintenance'));const backup=applyUpgrade(plan);
       await install(loadConfig(file));console.log(JSON.stringify({...plan.report,applied:true,backup,windows_acceptance:'pending actual receiver evidence'}));
     }
+  }else if(command==='diagnostics'){
+    const {diagnostics}=await import('./telemetry.mjs');
+    const snapshotFile=path.join(c.stateDir,'status.json');
+    const snapshot=fs.existsSync(snapshotFile)?JSON.parse(fs.readFileSync(snapshotFile,'utf8')):{};
+    const value=diagnostics(c,read(path.join(c.dataDir,'service.json'),{jobs:{}}),snapshot,option('key',''));
+    const output=option('output');if(output){atomic(path.resolve(output),JSON.stringify(value,null,2)+'\n');console.log(path.resolve(output));}else console.log(JSON.stringify(value,null,2));
   }else if(command==='init')console.log(file);
   else if(command==='start'){
     const {start}=await import('./server.mjs');const service=await start(file);

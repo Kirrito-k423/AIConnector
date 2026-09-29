@@ -77,7 +77,7 @@ function renderDetail(r){
     detailKey='';detailSignature='empty:'+filter;return;
   }
   const w=r.job?.worker;
-  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.activity_at,matches(r,filter),filter,
+  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.job?.timings,r.activity_at,matches(r,filter),filter,
     w&&[w.state,w.context,w.compaction,w.server_task,w.events,w.agent_started_at,w.agent_ended_at,w.execution_started_at,w.execution_ended_at,w.execution_time_source]]);
   if(detailKey===r.key&&detailSignature===signature)return;
   const same=detailKey===r.key,top=same?detail.scrollTop:0;
@@ -109,6 +109,15 @@ function renderDetail(r){
     if(a.turns!=null)parts.push(a.turns+' 轮');if(a.continuations!=null)parts.push('继续修复 '+a.continuations+' 次');
     milestones.append(el('p',parts.join(' · '),'duration'));
   }
+  const spans=[],span=(label,a,b)=>{const start=timestamp(a),end=timestamp(b);if(start&&end>=start)spans.push(label+' '+Math.round((end-start)/1000)+' 秒');};
+  const published=kind=>(r.timeline||[]).find(e=>e.kind===kind)?.published_at;
+  span('发布后等待执行',published('task'),r.result?.agent?.started_at||w?.agent_started_at);
+  span('执行结束至结果发布',r.result?.agent?.ended_at||w?.agent_ended_at,published('result'));
+  span('结果发布至回执',published('result'),published('receipt'));
+  if(spans.length)milestones.append(el('p',spans.join(' · '),'delivery-duration'));
+  const diagnose=el('button','导出本次交付诊断');diagnose.type='button';
+  diagnose.onclick=async()=>{try{const data=await api('/api/diagnostics?key='+encodeURIComponent(r.key));const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download='aiconnector-diagnostics-'+r.key.replaceAll('/','-')+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){notice(e.message,true);}};
+  milestones.append(diagnose);
   detail.append(milestones);
   if(r.job?.wait_reason)detail.append(el('p','等待原因：'+r.job.wait_reason+(r.job.wait_owner?'；当前占用者：'+r.job.wait_owner:''),'selection-note'));
   if(r.job?.resources)detail.append(disclosure('resources','机器占用 · '+r.job.resources.state,el('pre',JSON.stringify(r.job.resources,null,2))));

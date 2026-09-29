@@ -46,6 +46,21 @@ async function dashboard(t,data=fixture(),viewport={width:1440,height:900},route
 }
 const keys=page=>page.locator('#runs .run').evaluateAll(nodes=>nodes.map(n=>n.dataset.key));
 
+test('task diagnostics downloads JSON and milestones show delivery segments',async t=>{
+  const key='b-receipt/1/run',url='/api/diagnostics?key='+encodeURIComponent(key);
+  const expected={schema:'aiconnector.diagnostics.v1',key,events:[{kind:'upload_confirmed'}]};
+  const data=fixture();data.channel.runs[2].result.agent.ended_at=at('01:02');
+  const {page,requests}=await dashboard(t,data,{width:1440,height:900},{[url]:()=>expected});
+  await page.locator('[data-filter="confirmed"]').click();
+  assert.match(await page.locator('.milestones').textContent(),/执行结束至结果发布/);
+  const downloading=page.waitForEvent('download');
+  await page.getByRole('button',{name:'导出本次交付诊断'}).click();
+  const download=await downloading;
+  assert.equal(download.suggestedFilename(),'aiconnector-diagnostics-b-receipt-1-run.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(await download.path(),'utf8')),expected);
+  assert.ok(requests.some(r=>r.method==='GET'&&r.url===url));
+});
+
 test('default active filter, recent event sorting, compact 20% sidebar and milestones above content',async t=>{
   const {page}=await dashboard(t);
   assert.equal(await page.locator('[data-filter="active"]').getAttribute('aria-pressed'),'true');

@@ -73,6 +73,12 @@ jobs:
       - name: Build offline Windows delivery
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         run: python tools/build_service.py
+      - name: Relay delivery isolation and incremental readback on PowerShell 5.1
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_relay.py -v
       - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         shell: pwsh

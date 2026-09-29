@@ -194,6 +194,7 @@ export async function work(dir,secrets={}) {
   } catch(e) {failure=failure||cleanError(e);event('agent_failed',{code:failure});}
   finally {clearTimeout(timer);status.agent_ended_at=now();status.stop_reason=failure||'GOAL_VERIFIED';if(session)session.dispose();}
   try {
+    const packagingStarted=performance.now();status.packaging_started_at=now();
     const resultData={outcome:failure?'blocked':acceptance?.status==='passed'?'succeeded':'blocked',exit_code:failure?-1:execution?.exit_code??0,
       actual_revision:execution?.actual_revision||(maintenance?spec.profile.revision:'not-executed'),summary:'',
       metrics:{...report?.metrics,...(failure?{runner_error:failure}:{})},artifacts:[],acceptance:acceptance||{status:'blocked',checks:[],reason:failure},
@@ -210,6 +211,7 @@ export async function work(dir,secrets={}) {
       'report.json':strToU8(JSON.stringify(report||{},null,2)),
       'actions.json':strToU8(JSON.stringify(maintenance?.publicActions()||[],null,2)),
       'inputs.json':strToU8(JSON.stringify(inputs?.state||{initialized:false},null,2))};
+    entries['worker-timing.json']=strToU8(JSON.stringify({schema:'aiconnector.worker-timing.v1',key:spec.key,worker_started_at:status.started_at,agent_started_at:status.agent_started_at,agent_ended_at:status.agent_ended_at,packaging_started_at:status.packaging_started_at,events:status.events,delivery_timing:'Export endpoint diagnostics after delivery; this immutable ZIP predates upload and receipt.'},null,2));
     let total=0;
     for(const name of spec.profile.outputs||[]) {
       need(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}$/.test(name)&&!Object.hasOwn(entries,name),'INVALID_OUTPUT_NAME');
@@ -222,6 +224,7 @@ export async function work(dir,secrets={}) {
     }
     const bytes=zipSync(entries,{level:6});need(bytes.length<5242880,'ZIP_TOO_LARGE');
     atomic(path.join(dir,'result.zip'),bytes);save(path.join(dir,'result.json'),resultData);
+    status.packaging_ended_at=now();status.packaging_ms=Math.round(performance.now()-packagingStarted);
     status.state='ready';status.ended_at=now();status.error=failure;event('result_ready');
   } catch(e) {status.state='blocked';status.error=cleanError(e);event('packaging_failed');}
   finally {clearInterval(beat);write();unlock();}

@@ -9,11 +9,12 @@ import {snapshotAgent} from './agent-config.mjs';
 import {WatchClient,validateWatchProfile} from './watch.mjs';
 import {webTools} from './web-tools.mjs';
 import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs';
+import {timing,diagnostics} from './telemetry.mjs';
 
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
-const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact});
+const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact,timings:j.timings,delivery_attempts:j.delivery_attempts});
 async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -73,7 +74,11 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   }
   async function flush(){
     if(flushing||stopping||Date.now()<nextFlush||Date.now()<(snapshot.next_poll||0)*1000)return;
-    if(!flushNeeded&&!connector.dirty&&!(snapshot.outbox||[]).some(e=>['pending','rate_limited'].includes(e.status)))return;
+    const eligible=(snapshot.outbox||[]).some(e=>{
+      if((snapshot.scopes?.['delivery:'+e.key.split('/')[0]]?.next_attempt||0)*1000>Date.now())return false;
+      return ['pending','rate_limited'].includes(e.status)||e.status==='uncertain'&&(!e.recovery||Date.now()/1000-e.recovery.last_absent_at>=c.tickSeconds);
+    });
+    if(!flushNeeded&&!connector.dirty&&!eligible)return;
     flushing=true;nextFlush=Date.now()+Math.max(1,c.connector.write_interval_seconds||1)*1000;
     try{snapshot=await connector.call('Flush');flushNeeded=false;connector.dirty=false;}catch(e){activity.last_error=cleanError(e);activity.diagnostic=e.diagnostic;nextFlush=Date.now()+10000;}finally{flushing=false;}
   }
@@ -98,6 +103,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       if(req.method==='GET'&&url.pathname==='/api/server-readiness'){reply(200,serverReadiness(c));return;}
       if(req.method==='GET'&&url.pathname==='/api/server-catalog'){reply(200,await serverCatalog(c));return;}
       if(req.method==='GET'&&url.pathname==='/api/status'){reply(200,status());return;}
+      if(req.method==='GET'&&url.pathname==='/api/diagnostics'){reply(200,diagnostics(c,ledger,snapshot,url.searchParams.get('key')||''));return;}
       if(req.method==='GET'&&url.pathname==='/api/capabilities'){reply(200,{local:localCapabilities(),receiver:snapshot.receiver_capabilities||null});return;}
       if(req.method==='GET'&&url.pathname==='/api/result') {
         const job=ledger.jobs[url.searchParams.get('key')];need(job,'RESULT_NOT_FOUND');
@@ -125,7 +131,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
           const bytes=Buffer.from(data.zipBase64,'base64');need(bytes.length>4&&bytes.length<5242880&&bytes.subarray(0,2).toString()==='PK','INVALID_INPUT_ZIP');
           zipFile=path.join(c.dataDir,'submissions',sha(key)+'.zip');atomic(zipFile,bytes);
         }
-        ledger.submissions[key]={key,digest,task,zipFile,state:'pending',error:'',created_at:now()};persist();lastTick=0;void tick();reply(202,{key,state:'pending'});return;
+        ledger.submissions[key]={key,digest,task,zipFile,state:'pending',error:'',created_at:now()};persist();timing(c.dataDir,'task_submitted',{key});lastTick=0;void tick();reply(202,{key,state:'pending'});return;
       }
       if(url.pathname==='/api/settings') {
         need(typeof data.githubToken==='string'&&typeof data.apiKey==='string','INVALID_CREDENTIALS');

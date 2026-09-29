@@ -7,9 +7,10 @@ import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {validateWatchProfile} from './watch.mjs';
 import {Resources} from './resources.mjs';
 import {checkRequirements,capabilities,VERSION} from './capabilities.mjs';
+import {timing} from './telemetry.mjs';
 
 export class Runner {
-  constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});this.resources=new Resources(config,ledger,persist);this.pending=new Map();this.delivering=false;
+  constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});this.resources=new Resources(config,ledger,persist);this.pending=new Map();
     for(const job of Object.values(ledger.jobs))if(!job.resources&&['claiming','launching','running','unknown'].includes(job.state)){job.resources={keys:['*'],state:'unknown',error:'LEGACY_EXECUTION_SCOPE_UNKNOWN'};persist();}
   }
   schedule(id,work){if(this.pending.has(id))return;const promise=Promise.resolve().then(work).catch(e=>{this.ledger.runner_error=cleanError(e);this.persist();}).finally(()=>this.pending.delete(id));this.pending.set(id,promise);}
@@ -114,7 +115,7 @@ export class Runner {
     if(['confirmed','blocked'].includes(job.state))return;
     const row=(snapshot.runs||[]).find(x=>x.key===job.key);
     if(row?.phase==='conflict'){job.state='blocked';job.error='RUN_CONFLICT';this.persist();return;}
-    if(row?.phase==='receipt'){job.state='confirmed';job.confirmed_at=now();job.error='';this.persist();return;}
+    if(row?.phase==='receipt'){job.state='confirmed';job.confirmed_at=now();job.timings??={};job.timings.receipt_observed_at=job.confirmed_at;job.error='';timing(this.c.dataDir,'receipt_observed',{key:job.key});this.persist();return;}
     const worker=read(path.join(job.dir,'worker.json'));
     if(worker)job.worker=worker;
     job.process_exit=read(path.join(job.dir,'worker-exit.json'));
@@ -131,15 +132,21 @@ export class Runner {
     }
     if(worker?.state==='blocked'){job.state='blocked';job.error=worker.error;this.persist();return;}
     if(worker?.state==='ready'&& !['submitted','confirmed'].includes(job.state)) {
+      job.timings??={};
+      for(const name of ['started_at','agent_started_at','agent_ended_at','packaging_started_at','packaging_ended_at','packaging_ms'])if(worker[name]!==undefined)job.timings[name==='started_at'?'worker_started_at':name]=worker[name];
+      if(!job.timings.ready_observed_at){job.timings.ready_observed_at=now();job.timings.result_ready_at=worker.ended_at||null;timing(this.c.dataDir,'result_ready_observed',{key:job.key});}
       job.state='delivering';this.persist();
-      if(!this.delivering&&Date.now()>=(job.delivery_retry_at||0)){this.delivering=true;this.schedule('delivery:'+job.key,async()=>{
+      // Admit a bounded set of independent durable deliveries. The transport
+      // still serializes API writes; one route's retry window does not own a gate.
+      if(!this.pending.has('delivery:'+job.key)&&[...this.pending.keys()].filter(k=>k.startsWith('delivery:')).length<4&&Date.now()>=(job.delivery_retry_at||0)){this.schedule('delivery:'+job.key,async()=>{
       try {
+        job.delivery_attempts=(job.delivery_attempts||0)+1;job.timings.delivery_attempt_at=now();this.persist();
+        timing(this.c.dataDir,'delivery_attempt',{key:job.key,attempt:job.delivery_attempts});
         const result=read(path.join(job.dir,'result.json'));need(result,'RESULT_MISSING');
-        if(!job.artifact){job.artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'result.zip')});this.persist();}
+        if(!job.artifact){job.timings.upload_queued_at??=now();this.persist();job.artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'result.zip')});job.timings.upload_confirmed_at=now();timing(this.c.dataDir,'upload_confirmed',{key:job.key,bytes:job.artifact.bytes});this.persist();}
         const completed={...result,artifacts:[job.artifact]};
-        await this.connector.call('Complete',{key:job.key,data:completed});job.state='submitted';job.submitted_at=now();job.error='';this.persist();
-      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;job.delivery_retry_at=Date.now()+10000;this.persist();}
-      this.delivering=false;
+        await this.connector.call('Complete',{key:job.key,data:completed});job.state='submitted';job.submitted_at=now();job.timings.result_queued_at=job.submitted_at;job.error='';timing(this.c.dataDir,'result_queued',{key:job.key});this.persist();
+      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;job.delivery_retry_at=Math.max(Date.now()+10000,e.retryAt||0);timing(this.c.dataDir,'delivery_retry',{key:job.key,code:job.error,retry_at:job.delivery_retry_at});this.persist();}
       });}
       return;
     }

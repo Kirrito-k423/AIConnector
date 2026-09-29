@@ -20,12 +20,26 @@ class RelayAPI(TaskAPI):
         u = urlparse(self.path)
         self.ctx['gets'].append(u.path)
         page = int(parse_qs(u.query).get('page', ['1'])[0])
+        self.ctx.setdefault('get_queries', []).append(self.path)
+        if u.path in self.ctx.get('fail_paths', {}):
+            return self.reply({}, self.ctx['fail_paths'][u.path])
         if '/contents/.aiconnector/relay.json' in u.path:
             return self.reply(dict(encoding='base64', content=base64.b64encode(json.dumps(self.ctx['descriptor']).encode()).decode()))
         if u.path == '/repos/test/tasks/issues':
             if self.ctx.get('issue_page_failure') == page:
                 return self.reply({}, 503)
             return self.reply(self.ctx['issues'][(page-1)*100:page*100])
+        if u.path == '/repos/test/tasks/issues/comments':
+            if self.ctx['fail_page'] == page: return self.reply({}, 503)
+            rows = self.ctx['comments']
+            since = parse_qs(u.query).get('since', [''])[0]
+            if since:
+                rows = [c for c in rows if c.get('updated_at', c.get('created_at', '9999')) > since]
+            return self.reply([{**c, 'issue_url':self.ctx['base']+f'/repos/test/tasks/issues/{c["issue_number"]}'} for c in rows[(page-1)*100:page*100]])
+        single = re.fullmatch(r'/repos/test/tasks/issues/comments/(\d+)', u.path)
+        if single:
+            row = next((c for c in self.ctx['comments'] if c['id'] == int(single[1])), None)
+            return self.reply({**row, 'issue_url':self.ctx['base']+f'/repos/test/tasks/issues/{row["issue_number"]}'} if row else {}, 200 if row else 404)
         match = re.fullmatch(r'/repos/test/tasks/issues/(\d+)/comments', u.path)
         if match:
             if self.ctx['fail_page'] == page:
@@ -156,6 +170,7 @@ class RelayTests(unittest.TestCase):
 
     def clear_cooldown(self, node):
         state = self.read_state(node); state['next_poll'] = 0; state['post_not_before'] = 0
+        state['scopes'] = {}
         raw = json.dumps(state, separators=(',', ':')).encode()
         (self.folder/node/'state.json').write_text(json.dumps(dict(
             schema='aiconnector.store.v1', sha256=sha(raw), data_base64=base64.b64encode(raw).decode())))
@@ -336,6 +351,63 @@ class RelayTests(unittest.TestCase):
         self.ctx['comments'][0]['created_at']='2026-09-26T10:00:01+08:00'
         row=self.poll('windows-inner')['runs'][0]['timeline'][0]
         self.assertEqual(row['published_at'],'2026-09-26T02:00:01.000Z')
+
+    def seed_history(self, count):
+        for i in range(count):
+            meta=dict(schema='aiconnector.task-issue.v1',namespace=self.config['namespace'],task_id=f'history-{i}',coordinator='mac-outer',worker='windows-inner')
+            number=len(self.ctx['issues'])+1
+            self.ctx['issues'].append(dict(number=number,body='AIConnector task issue v1\n\n```json\n'+json.dumps(meta)+'\n```',user=dict(login='mac-user'),html_url=f'https://github.com/test/tasks/issues/{number}',created_at='2026-09-26T01:00:00Z'))
+
+    def test_one_delivery_does_not_read_unrelated_issue_comments(self):
+        self.seed_history(16);self.submit();self.ctx['gets'].clear()
+        self.run_cli('mac-outer','Flush')
+        self.assertLessEqual(len(self.ctx['gets']),6,self.ctx['gets'])
+        self.assertFalse(any(re.fullmatch(r'/repos/test/tasks/issues/\d+/comments',p) for p in self.ctx['gets']))
+        self.assertEqual(self.read_state('mac-outer')['outbox'][next(iter(self.read_state('mac-outer')['outbox']))]['status'],'confirmed')
+
+    def test_poll_is_incremental_and_audits_only_one_route(self):
+        self.ready();self.seed_history(16);self.poll('windows-inner');self.ctx['gets'].clear();self.ctx['get_queries'].clear()
+        self.poll('windows-inner')
+        self.assertLessEqual(len(self.ctx['gets']),6,self.ctx['gets'])
+        self.assertTrue(any('/issues/comments?' in p and 'since=' in p for p in self.ctx['get_queries']))
+
+    def test_unrelated_history_failure_does_not_cool_down_zip_upload(self):
+        self.ready();self.run_cli('windows-inner','Claim','-Key',self.key);self.seed_history(1)
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/2/comments':503}
+        self.poll('windows-inner');self.poll('windows-inner')
+        state=self.read_state('windows-inner');self.assertEqual(state['next_poll'],0)
+        self.assertTrue(any(v.get('error')=='HTTP_ERROR_503' for v in state['scopes'].values()))
+        asset=self.run_cli('windows-inner','Upload','-Key',self.key,'-File',self.zip_path())
+        self.assertGreater(asset['bytes'],0)
+
+    def test_incremental_page_failure_preserves_cursor_and_imports_nothing(self):
+        self.ready();before=self.read_state('windows-inner')
+        self.ctx['comments'] += [dict(id=1000+i,issue_number=1,body='human note',user=dict(login='outsider'),updated_at='2026-09-26T03:00:00Z') for i in range(100)]
+        self.ctx['fail_page']=2
+        self.run_cli('windows-inner','Poll',ok=False)
+        after=self.read_state('windows-inner')
+        self.assertEqual(before['sync']['cursor'],after['sync']['cursor'])
+        self.assertEqual(before['events'],after['events'])
+
+    def test_deleted_old_comment_is_detected_by_bounded_audit(self):
+        self.complete_flow();self.ctx['comments'].pop(0)
+        snapshot=self.poll('windows-inner')
+        self.assertEqual(snapshot['runs'][0]['phase'],'conflict')
+
+    def test_transport_timing_records_independent_confirmation_without_credentials(self):
+        self.submit();self.poll('mac-outer')
+        raw=(self.folder/'mac-outer/transport-timing.jsonl').read_text()
+        self.assertNotIn('MAC_TOKEN',raw);self.assertNotIn('Authorization',raw);self.assertNotIn(self.task['objective'],raw)
+        rows=[json.loads(line) for line in raw.splitlines()]
+        self.assertTrue(any(r['kind']=='event_queued' and r['key']==self.key for r in rows))
+        self.assertTrue(any(r['kind']=='event_confirmed' and r['key']==self.key for r in rows))
+        self.assertTrue(any(r['kind']=='http_finished' and r['endpoint']=='comment' and r['elapsed_ms']>=0 for r in rows))
+
+    def test_single_comment_429_remains_a_global_rate_limit(self):
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/comments/1':429}
+        self.submit();self.run_cli('mac-outer','Flush',ok=False)
+        state=self.read_state('mac-outer');self.assertGreater(state['next_poll'],time.time())
+        self.assertEqual(self.run_cli('mac-outer','Upload','-Key',self.key,'-File',self.zip_path(),ok=False)['code'],'CHANNEL_COOLDOWN')
 
 
 if __name__ == '__main__': unittest.main(verbosity=2)
