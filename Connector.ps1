@@ -6,6 +6,7 @@ param(
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
     [ValidatePattern('^[a-zA-Z0-9_-]{0,96}$')][string]$OperationId='',
+    [ValidatePattern('^(|[a-f0-9]{48})$')][string]$ClaimOwner='',
     [ValidateRange(1,120)][int]$TimeoutSeconds=30,
     [ValidateRange(0,3600)][int]$PollSeconds=0,
     [ValidateRange(0,100000)][int]$Cycles=0
@@ -1107,14 +1108,24 @@ function Local-Action {
     Need ($Node -eq 'windows-inner' -and $runs.ContainsKey($Key)) 'UNKNOWN_WORKER_RUN'
     $run=$runs[$Key]; Need ($run.phase -ne 'conflict') 'RUN_CONFLICT'
     if ($Action -eq 'Claim') {
-        if ($script:State.claims.ContainsKey($Key)) { return @{ok=$true;key=$Key;execute=$false;reason='ALREADY_CLAIMED'} }
+        if ($script:State.claims.ContainsKey($Key)) {
+            $claim=$script:State.claims[$Key]
+            # Replay only the original supervisor's durable handoff. An owner
+            # is private local state, never inferred from a public started event.
+            if ($ClaimOwner -and (Get-Field $claim 'owner') -ceq $ClaimOwner -and
+                $claim.status -ceq 'claimed' -and $run.phase -in @('accepted','started') -and -not $run.error) {
+                $null=Fetch-Artifacts $run.task.artifacts
+                return @{ok=$true;key=$Key;execute=$true;task=$run.task;claim_event_id=$claim.event_id;claim_owner=$ClaimOwner;replayed=$true}
+            }
+            return @{ok=$true;key=$Key;execute=$false;reason='ALREADY_CLAIMED'}
+        }
         Need ($run.phase -eq 'accepted') 'RUN_NOT_READY'
         $null=Fetch-Artifacts $run.task.artifacts
         $e=New-Event $run.events.task 'started' $run.events.accepted.event_id @{status='started'}
-        $script:State.claims[$Key]=@{event_id=$e.event_id;status='claimed';claimed_at=(Epoch)}
+        $script:State.claims[$Key]=@{event_id=$e.event_id;status='claimed';claimed_at=(Epoch);owner=$ClaimOwner}
         # Claim and outbox are committed together, before execution permission is returned.
         Queue $e; $null=Snapshot
-        return @{ok=$true;key=$Key;execute=$true;task=$run.task;claim_event_id=$e.event_id}
+        return @{ok=$true;key=$Key;execute=$true;task=$run.task;claim_event_id=$e.event_id;claim_owner=$ClaimOwner;replayed=$false}
     }
     Need ($Action -eq 'Complete' -and $File -and $script:State.claims.ContainsKey($Key)) 'RESULT_REQUIRES_LOCAL_CLAIM'
     $claim=$script:State.claims[$Key]

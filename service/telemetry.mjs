@@ -42,7 +42,7 @@ export function diagnostics(c,ledger,snapshot,key='') {
   return {schema:'aiconnector.diagnostics.v1',generated_at:new Date().toISOString(),node:c.node,key:key||null,
     retention:'Each timing stream retains the current and previous 2 MiB files; a run export includes the latest 2000 matching events.',
     limitation:'Delivery timing after result.zip creation stays local; export both endpoints to correlate the full handoff.',
-    jobs:Object.values(ledger.jobs||{}).filter(j=>!key||j.key===key).map(j=>({key:j.key,state:j.state,timings:j.timings,delivery_attempts:j.delivery_attempts})),
+    jobs:Object.values(ledger.jobs||{}).filter(j=>!key||j.key===key).map(j=>({key:j.key,state:j.state,timings:j.timings,delivery_attempts:j.delivery_attempts,claim_attempts:j.claim_attempts,claim_retry_at:j.wait_reason==='CLAIM_RETRY'?j.next_attempt:undefined})),
     channel:{last_poll:snapshot.last_poll,next_poll:snapshot.next_poll,scopes:snapshot.scopes,sync:snapshot.sync},
     events:selected.slice(-2000),truncated:selected.length>2000};
 }

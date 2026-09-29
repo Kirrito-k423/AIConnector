@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {zipSync,strToU8} from 'fflate';
-import {ROOT,sha,now,save,read,atomic,alive,need,safeEnv,cleanError} from './common.mjs';
+import {ROOT,sha,now,id,save,read,atomic,alive,need,safeEnv,cleanError} from './common.mjs';
 import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {validateWatchProfile} from './watch.mjs';
 import {Resources} from './resources.mjs';
@@ -17,6 +17,11 @@ export class Runner {
   async idle(){while(this.pending.size)await Promise.allSettled([...this.pending.values()]);}
   slots(){return Object.values(this.jobs).filter(j=>['reserving','claiming','launching','running'].includes(j.state)||j.state==='unknown'&&alive(j.worker?.pid||j.pid)).length;}
   get jobs(){return this.ledger.jobs;}
+  unlaunched(job){
+    return !job.claimed_at&&!job.pid&&!job.worker&&!job.process_exit&&!job.process_failure&&
+      !['spec.json','worker.json','worker-exit.json','worker-failure.json','execution-intent.json','execution.json','watch-task.json','result.json','result.zip'].some(f=>fs.existsSync(path.join(job.dir,f)));
+  }
+  retryableClaim(job){return /^[a-f0-9]{48}$/.test(job.claim_owner||'')&&!job.claim_rejected&&this.unlaunched(job);}
   blocked(job,reason){
     const result={outcome:'blocked',exit_code:-1,actual_revision:'not-executed',summary:`任务未执行：${reason}。请匹配接收端实际能力后创建新运行。`,metrics:{runner_error:reason},artifacts:[],acceptance:{status:'blocked',reason,checks:[]},execution:{started_at:null,ended_at:null,executed:false},agent:{version:VERSION,started_at:null,ended_at:now(),duration_ms:0,turns:0,tool_steps:0,tools:[],stop_reason:reason}};
     atomic(path.join(job.dir,'result.zip'),zipSync({'result.json':strToU8(JSON.stringify(result))}));save(path.join(job.dir,'result.json'),result);
@@ -50,7 +55,8 @@ export class Runner {
     for(const job of Object.values(this.jobs).filter(j=>j.state==='waiting').sort((a,b)=>(a.sequence||0)-(b.sequence||0))){
       if(this.slots()>=(this.c.runner.maxConcurrentRuns??1))break;
       if((job.next_attempt||0)>Date.now()||this.pending.has('start:'+job.key))continue;
-      const row=(snapshot.runs||[]).find(r=>r.key===job.key&&r.phase==='accepted'&&!r.error);if(!row)continue;
+      if(job.claim_owner&&!this.retryableClaim(job)){job.state='unknown';job.error='CLAIM_LAUNCH_STATE_UNKNOWN';this.persist();continue;}
+      const row=(snapshot.runs||[]).find(r=>r.key===job.key&&!r.error&&(r.phase==='accepted'||r.phase==='started'&&this.retryableClaim(job)));if(!row)continue;
       const profile=this.c.runner.profiles[row.task.environment.target];
       const conflict=this.resources.conflict(job,this.resources.keys(profile||{},job.key));
       if(conflict){job.wait_reason='RESOURCE_BUSY';job.wait_owner=conflict.key;continue;}
@@ -71,12 +77,15 @@ export class Runner {
           job.state='waiting';job.next_attempt=Date.now()+5000;this.persist();return;
         }
       }catch(e){preflightError=cleanError(e);}
+      // Persist the owner before contacting the transport. Reuse it across
+      // lost replies/restarts; a fresh owner cannot take over an existing claim.
+      job.claim_owner??=id();job.claim_attempts=(job.claim_attempts||0)+1;
       job.state='claiming';delete job.wait_reason;delete job.wait_owner;this.persist();
       try {
-        // A persisted claim intent never authorizes execution on recovery by itself.
-        const claim=await this.connector.call('Claim',{key:row.key});
-        if(!claim.execute){job.state='unknown';job.error='CLAIM_OWNERSHIP_UNKNOWN';this.persist();return;}
-        job.claimed_at=now();this.persist();
+        // The durable transport must revalidate ownership on every retry.
+        const claim=await this.connector.call('Claim',{key:row.key,claimOwner:job.claim_owner});
+        if(!claim.execute||claim.claim_owner!==job.claim_owner){job.claim_rejected=true;job.state='unknown';job.error='CLAIM_OWNERSHIP_UNKNOWN';this.persist();return;}
+        job.claimed_at=now();job.claim_event_id=claim.claim_event_id;job.error='';delete job.next_attempt;this.persist();
         if(preflightError){this.blocked(job,preflightError);return;}
         fs.mkdirSync(path.join(dir,'inputs'),{recursive:true,mode:0o700});
         for(const artifact of claim.task.artifacts) {
@@ -103,7 +112,7 @@ export class Runner {
         child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
         job.pid=child.pid;job.state='running';this.persist();child.unref();this.ledger.runner_error='';return;
-      }catch(e){job.diagnostic=e.diagnostic;if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);this.persist();return;}
+      }catch(e){job.diagnostic=e.diagnostic;if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);job.next_attempt=Math.max(job.next_attempt||0,e.retryAt||0);this.persist();return;}
   }
   async reconcile(job,snapshot) {
     if(this.pending.has('start:'+job.key))return;
@@ -118,14 +127,19 @@ export class Runner {
     if(row?.phase==='receipt'){job.state='confirmed';job.confirmed_at=now();job.timings??={};job.timings.receipt_observed_at=job.confirmed_at;job.error='';timing(this.c.dataDir,'receipt_observed',{key:job.key});this.persist();return;}
     const worker=read(path.join(job.dir,'worker.json'));
     if(worker)job.worker=worker;
-    job.process_exit=read(path.join(job.dir,'worker-exit.json'));
-    job.process_failure=read(path.join(job.dir,'worker-failure.json'));
-    // A failed Claim reply is not evidence of a launched worker. The durable
-    // stage and absence of every launch artifact let us close this attempt,
-    // without granting another execution permission or consulting a TTL.
-    if(['claiming','unknown'].includes(job.state)&&!job.claimed_at&&!job.pid&&!worker&&
-      !job.process_exit&&!job.process_failure&&
-      !['spec.json','execution-intent.json','execution.json','watch-task.json'].some(f=>fs.existsSync(path.join(job.dir,f)))&&
+    job.process_exit=read(path.join(job.dir,'worker-exit.json'))??job.process_exit;
+    job.process_failure=read(path.join(job.dir,'worker-failure.json'))??job.process_failure;
+    // Only a persisted owner + absence of ALL launch evidence permits asking
+    // Claim again. Claim itself decides ownership; age/TTL grants no authority.
+    if(['claiming','unknown'].includes(job.state)&&this.retryableClaim(job)&&
+      row&&['accepted','started'].includes(row.phase)&&!row.error){
+      const delay=Math.min(60000,1000*2**Math.min(6,Math.max(0,(job.claim_attempts||1)-1)));
+      job.recovery={kind:'claim-retry-before-launch',at:now(),previous_error:job.error};
+      job.state='waiting';job.next_attempt=Math.max(job.next_attempt||0,Date.now()+delay);job.wait_reason='CLAIM_RETRY';
+      timing(this.c.dataDir,'claim_retry',{key:job.key,attempt:job.claim_attempts||1,retry_at:job.next_attempt});this.persist();return;
+    }
+    // Legacy claims have no owner and cannot safely be upgraded into a replay.
+    if(['claiming','unknown'].includes(job.state)&&!job.claim_owner&&this.unlaunched(job)&&
       row?.claimed&&['accepted','started'].includes(row.phase)&&!row.error){
       job.recovery={kind:'claim-reconciled-before-launch',at:now(),previous_error:job.error};
       this.blocked(job,'CLAIM_RECONCILED_NOT_EXECUTED');return;

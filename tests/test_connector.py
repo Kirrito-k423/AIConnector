@@ -495,6 +495,41 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(sum(v.get('execute') is True for v in values),1,values)
         self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
 
+    def test_owned_claim_replays_same_handoff_only_for_original_owner_before_completion(self):
+        self.ready(); owner='a'*48
+        before=len(self.ctx['posts'])
+        first=self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner',owner)
+        self.assertTrue(first['execute']); self.assertFalse(first['replayed'])
+        for _ in range(2):
+            replay=self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner',owner)
+            self.assertTrue(replay['execute']); self.assertTrue(replay['replayed'])
+            self.assertEqual(replay['claim_event_id'],first['claim_event_id'])
+            self.assertEqual(replay['task'],first['task'])
+        self.assertEqual(len(self.ctx['posts']),before,'Claim commits locally and sends no HTTP POST')
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner','b'*48)['execute'])
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
+        self.poll('windows-inner')
+        self.assertEqual(len(self.ctx['posts']),before+1,'one original started event')
+        self.assertTrue(self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner',owner)['execute'])
+        self.run_cli('windows-inner','Complete','-Key',self.key,'-File',self.resultfile)
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner',owner)['execute'])
+
+    def test_legacy_claim_cannot_be_adopted_by_a_new_owner(self):
+        self.ready();self.run_cli('windows-inner','Claim','-Key',self.key)
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner','a'*48)['execute'])
+
+    def test_competing_owned_claims_only_original_owner_can_replay(self):
+        self.ready()
+        def claim(owner):
+            return subprocess.run(self.command('windows-inner','Claim','-Key',self.key,'-ClaimOwner',owner),capture_output=True,
+                env=dict(os.environ,AICONNECTOR_GITHUB_TOKEN='WIN_TOKEN'),encoding='utf-8',timeout=20)
+        with ThreadPoolExecutor(max_workers=2) as pool: responses=list(pool.map(claim,['a'*48,'b'*48]))
+        values=[json.loads(p.stdout.strip().splitlines()[-1]) for p in responses]
+        winners=[v for v in values if v.get('execute') is True];self.assertEqual(len(winners),1,values)
+        owner=winners[0]['claim_owner']
+        self.assertTrue(self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner',owner)['execute'])
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key,'-ClaimOwner','b'*48 if owner=='a'*48 else 'a'*48)['execute'])
+
     def test_watch_polls_with_persistent_state(self):
         self.submit(); self.poll('mac-outer')
         self.run_cli('windows-inner','Watch','-Cycles','2')

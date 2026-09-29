@@ -59,7 +59,7 @@ jobs:
         run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip --maintenance-repeats 6
   windows-service:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,6 +79,12 @@ jobs:
           PYTHONUTF8: '1'
           PWSH: powershell.exe
         run: python -m unittest discover -s tests -p test_relay.py -v
+      - name: Claim ownership and competing callers on PowerShell 5.1
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_connector.py -k claim -v
       - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         shell: pwsh

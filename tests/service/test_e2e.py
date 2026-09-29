@@ -188,6 +188,12 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.model.calls),2);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
 
     def test_lost_claim_reply_reconciles_without_launch_and_next_task_completes(self):
+        self.lost_claim_reply_recovery(owned=False)
+
+    def test_issue11_owned_lost_claim_reply_restarts_original_run_exactly_once(self):
+        self.lost_claim_reply_recovery(owned=True)
+
+    def lost_claim_reply_recovery(self, owned):
         # Claim really commits through PowerShell; emulate losing its response
         # before Runner has recorded permission or created a worker spec.
         self.write_inputs()
@@ -201,20 +207,36 @@ class ServiceTests(unittest.TestCase):
         connector('mac-outer','Submit','-File',self.taskfile)
         for _ in range(4):
             connector('mac-outer','Poll');connector('windows-inner','Poll')
-        self.assertTrue(connector('windows-inner','Claim','-Key',self.key)['execute'])
-        connector('windows-inner','Poll')
         script="""import path from 'node:path';import {loadConfig,save,sha,now} from './service/common.mjs';
-const c=loadConfig(process.argv[1]),key=process.argv[2];save(path.join(c.dataDir,'service.json'),{binding:sha(JSON.stringify({node:c.node,connector:c.connector})),jobs:{[key]:{key,dir:path.join(c.dataDir,'jobs',sha(key)),state:'unknown',error:'CONNECTOR_ERROR',created_at:now()}},submissions:{},created_at:now()});"""
-        subprocess.run([NODE,'--input-type=module','-e',script,str(self.configs['windows-inner'][0]),self.key],cwd=SERVICE_ROOT,check=True)
+const c=loadConfig(process.argv[1]),key=process.argv[2],owner=process.argv[3];save(path.join(c.dataDir,'service.json'),{binding:sha(JSON.stringify({node:c.node,connector:c.connector})),jobs:{[key]:{key,dir:path.join(c.dataDir,'jobs',sha(key)),state:'claiming',claim_owner:owner||undefined,claim_attempts:1,created_at:now()}},submissions:{},created_at:now()});"""
+        # The owner is durable before Claim. Discard its returned permission as
+        # if the supervisor died, then restart a fresh supervisor from disk.
+        owner='a'*48 if owned else ''
+        subprocess.run([NODE,'--input-type=module','-e',script,str(self.configs['windows-inner'][0]),self.key,owner],cwd=SERVICE_ROOT,check=True)
+        claim=connector('windows-inner','Claim','-Key',self.key,*(['-ClaimOwner',owner] if owned else []))
+        self.assertTrue(claim['execute'])
+        connector('windows-inner','Poll')
         self.launch('mac-outer');self.launch('windows-inner')
         row=self.until(lambda:self.phase('mac-outer','receipt'))
-        self.assertEqual(row['result']['outcome'],'blocked');self.assertFalse(row['result']['execution']['executed'])
-        self.assertEqual(len(self.model.calls),0)
+        self.assertEqual(row['result']['outcome'],'succeeded' if owned else 'blocked')
+        if not owned:self.assertFalse(row['result']['execution']['executed'])
+        self.assertEqual(len(self.model.calls),2 if owned else 0)
+        if owned:
+            job=self.until(lambda:self.job('confirmed'))
+            self.assertEqual(job['recovery']['kind'],'claim-retry-before-launch')
+            self.stop('windows-inner',graceful=True)
+            state=json.loads((Path(self.configs['windows-inner'][1]['dataDir'])/'service.json').read_text(encoding='utf-8'))
+            persisted=json.loads(state['data'])['jobs'][self.key]
+            self.assertEqual(persisted['claim_owner'],owner);self.assertEqual(persisted['claim_attempts'],2)
+            self.assertEqual(persisted['claim_event_id'],claim['claim_event_id'])
+            self.launch('windows-inner')
+            self.assertEqual(len(self.model.calls),2)
+            self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
         # publish() adds an input ZIP, so this changes the task contract as well
         # as its run ID and must use a new immutable revision.
         self.key='pi-smoke/2/run-002';self.task.update(run_id='run-002',revision=2);self.publish()
         row=self.until(lambda:self.phase('mac-outer','receipt'))
-        self.assertEqual(row['result']['outcome'],'succeeded');self.assertEqual(len(self.model.calls),2)
+        self.assertEqual(row['result']['outcome'],'succeeded');self.assertEqual(len(self.model.calls),4 if owned else 2)
 
     def test_issue9_lost_deliveries_recover_across_restart_without_reexecuting_pi(self):
         self.ctx['drop_delivery_once']={'started':1,'result-asset':1,'result':1}

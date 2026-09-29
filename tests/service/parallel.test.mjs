@@ -25,7 +25,7 @@ test('four real isolated Pi processes run concurrently; slow delivery does not h
  const runs=Array.from({length:6},(_,i)=>({key:`parallel/1/run-${i}`,phase:'accepted',task:{requirements:{mode:'smoke',checks:['cpu-smoke']},environment:{target:'smoke'},invocation:{entry:'smoke',arguments:[]},code:{repository:'builtin',revision:'builtin-smoke-v1'},artifacts:[]}}));
  const claims=[],completed=[];let releaseUpload;const uploadGate=new Promise(r=>releaseUpload=r);
  const connector={call:async(action,args)=>{
-   if(action==='Claim'){claims.push(args.key);return {execute:true,task:runs.find(r=>r.key===args.key).task};}
+   if(action==='Claim'){claims.push(args.key);return {execute:true,claim_owner:args.claimOwner,task:runs.find(r=>r.key===args.key).task};}
    if(action==='Upload'){await uploadGate;return {sha256:'fixture'};}
    if(action==='Complete'){completed.push(args.key);return {};}
    assert.fail(action);

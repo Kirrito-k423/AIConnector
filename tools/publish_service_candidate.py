@@ -43,10 +43,10 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All three Windows service workflow jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.3 enables 10-second incremental polling while refreshing catalog, capabilities and integrity audits every 60 seconds. '
-           'New task issues are discovered in the same incremental poll; rate-limit backoff and serial transport are preserved. '
-           'Upgrade both endpoints using existing config and state; upgrade sets service pollSeconds=10 unless explicitly configured. This release does not fix the separate Claim/Pi failures from the 0.7.2 intranet retest. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-PERFORMANCE.md\n\n'
+           '0.7.4 fixes Issue #11 with owner-bound idempotent Claim recovery. A lost Claim reply before any launch evidence now resumes the original run with bounded backoff, preserving its event and machine reservation. '
+           'Existing launch evidence, foreign or legacy claim ownership, completed results and real protocol conflicts never authorize automatic re-execution. No TTL unlock or history rewrite is introduced. '
+           'Upgrade the Windows receiver using its existing config and state; Mac remains protocol compatible. Ten-second polling is preserved. '
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/ISSUE-11-FIX.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

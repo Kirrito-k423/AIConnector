@@ -77,3 +77,39 @@ test('public started alone and any launch evidence must never authorize automati
    }finally{fs.rmSync(dir,{recursive:true,force:true});}
  }
 });
+
+test('owned Claim retries preserve identity and backoff; rejected ownership stops retrying',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC claim retry '));
+ try{
+   const ledger={jobs:{}},calls=[],snap={runs:[{key:'x/1/y',phase:'accepted',task:{environment:{target:'missing'}}}]};
+   const c={dataDir:dir,node:'windows-inner',runner:{enabled:true,profiles:{}},connector:{token_env:'FAKE'}};
+   const connector={call:async(action,args)=>{assert.equal(action,'Claim');assert.equal(ledger.jobs[args.key].claim_owner,args.claimOwner);calls.push(args.claimOwner);if(calls.length<3)throw new Error('CONNECTOR_ERROR');return {execute:false};}};
+   let r=new Runner(c,connector,ledger,()=>{},{githubToken:'fixture'});
+   await r.tick(snap);await r.idle();const job=ledger.jobs['x/1/y'];assert.equal(job.state,'unknown');assert.match(job.claim_owner,/^[a-f0-9]{48}$/);
+   // Committed replies and uncommitted replies use the same recovery path.
+   snap.runs[0].phase='started';snap.runs[0].claimed=true;
+   r=new Runner(c,connector,ledger,()=>{},{githubToken:'fixture'});
+   for(let n=1;n<=2;n++){
+     const before=Date.now();await r.tick(snap);await r.idle();
+     assert.equal(job.state,'waiting');assert.ok(job.next_attempt>=before+1000*2**(n-1));assert.equal(calls.length,n);
+     await r.tick(snap);await r.idle();assert.equal(calls.length,n,'retry window must persist across ticks');
+     job.next_attempt=0;await r.tick(snap);await r.idle();
+   }
+   assert.equal(calls.length,3);assert.equal(new Set(calls).size,1);assert.equal(job.claim_rejected,true);
+   await r.tick(snap);await r.idle();assert.equal(calls.length,3);assert.equal(job.state,'unknown');assert.equal(fs.existsSync(path.join(job.dir,'result.json')),false);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('owned recovery never crosses launch evidence or a real protocol conflict, regardless of age',async()=>{
+ for(const evidence of ['spec.json','worker.json','worker-exit.json','worker-failure.json','execution-intent.json','execution.json','watch-task.json','result.json','result.zip','claimed_at','pid','conflict']){
+   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC owned fence '));
+   try{
+     const job={key:'x/1/y',dir,state:'unknown',claim_owner:'a'.repeat(48),created_at:'2000-01-01T00:00:00Z'};
+     if(evidence.includes('.'))save(path.join(dir,evidence),{});
+     if(evidence==='claimed_at')job.claimed_at='2000-01-01T00:00:00Z';if(evidence==='pid')job.pid=99999999;
+     const r=new Runner({runner:{enabled:false}},{call:()=>assert.fail('must not replay')},{jobs:{[job.key]:job}},()=>{},{});
+     await r.tick({runs:[{key:job.key,phase:evidence==='conflict'?'conflict':'started',claimed:true}]});
+     assert.equal(job.state,evidence==='conflict'?'blocked':'unknown',evidence);
+   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+ }
+});
