@@ -14,6 +14,9 @@ export function prepareUpgrade(file,policyFile){
     need(!['reserving','claiming','launching','running'].includes(job.state)&&!alive(worker.pid||job.pid),'UPGRADE_ACTIVE_WORKER');
   }
   disk.runner??={};disk.runner.profiles??={};disk.runner.agent=agentConfig(disk.runner.agent,disk.runner.model);
+  // Scheduling is a service preference, outside the durable channel identity.
+  // Keep the original connector JSON and ledger binding intact on upgrade.
+  disk.pollSeconds??=10;
   if(policyFile){
     const policy=json(policyFile);need(policy.profileId&&/^[a-z0-9][a-z0-9_-]{0,63}$/.test(policy.profileId),'INVALID_PROFILE_ID');
     need(policy.profile?.kind==='maintenance','MAINTENANCE_PROFILE_REQUIRED');validateProfile(policy.profile);
@@ -24,7 +27,7 @@ export function prepareUpgrade(file,policyFile){
     disk.runner.agent=agentConfig(disk.runner.agent,disk.runner.model);
   }
   snapshotAgent(disk.runner.agent,path.dirname(c.file));
-  return {c,before,disk,report:{version:VERSION,node:c.node,config_sha256_before:sha(before),profiles:Object.keys(disk.runner.profiles),maintenance_activated:Boolean(policyFile),preserves:['node','connector','dataDir','credentials','existing profiles','task/run IDs'],requires_os_service_rebind:true}};
+  return {c,before,disk,report:{version:VERSION,node:c.node,poll_seconds:disk.pollSeconds,config_sha256_before:sha(before),profiles:Object.keys(disk.runner.profiles),maintenance_activated:Boolean(policyFile),preserves:['node','connector','dataDir','credentials','existing profiles','task/run IDs'],requires_os_service_rebind:true}};
 }
 export function applyUpgrade(plan){
   need(sha(fs.readFileSync(plan.c.file))===sha(plan.before),'CONFIG_CHANGED_DURING_UPGRADE');

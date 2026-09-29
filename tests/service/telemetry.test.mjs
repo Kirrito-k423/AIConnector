@@ -9,9 +9,10 @@ import {Connector} from '../../service/connector.mjs';
 test('timing correlates queue wait and request work without exporting bodies or headers',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC timing '));
   try {
-    const c={dataDir:dir,stateDir:path.join(dir,'connector'),node:'windows-inner',connector:{token_env:'AICONNECTOR_FIXTURE'}};
+    const c={dataDir:dir,stateDir:path.join(dir,'connector'),node:'windows-inner',tickSeconds:10,connector:{token_env:'AICONNECTOR_FIXTURE',poll_seconds:60}};
     let release;const gate=new Promise(r=>release=r);
     const connector=new Connector(c,{},async(_exe,args)=>{
+      assert.equal(args[args.indexOf('-PollSeconds')+1],'10');
       if(args[args.indexOf('-Action')+1]==='Poll')await gate;
       return {code:0,out:'{"ok":true}\n'};
     });

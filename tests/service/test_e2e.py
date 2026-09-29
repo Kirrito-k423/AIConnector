@@ -319,6 +319,8 @@ const c=loadConfig(process.argv[1]),key=process.argv[2];save(path.join(c.dataDir
             r=subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),'upgrade','--config',str(path),'--maintenance',str(policy),'--apply'],capture_output=True,encoding='utf-8',timeout=60)
             self.assertEqual(r.returncode,0,r.stdout+r.stderr);self.until(lambda:self.get(node),20)
             after=json.loads(path.read_text());self.assertEqual(after['dataDir'],before['dataDir']);self.assertEqual(after['runner']['model'],before['runner']['model'])
+            self.assertEqual(after['pollSeconds'],10)
+            self.assertEqual(self.get(node)['service']['poll_seconds'],10)
             self.assertIn('upgrade-check',self.get(node)['service']['runner']['profiles'])
             self.assertTrue(list(self.folder.glob(node+'.local.json.pre-*.local.json')))
         finally:

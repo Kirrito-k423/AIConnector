@@ -34,6 +34,14 @@ PWSH=/absolute/path/to/pwsh python3 tools/benchmark_transport.py \
   --baseline /tmp/aic071-Connector.ps1 --output /tmp/transport-comparison.json
 ```
 
+## 0.7.3：10 秒增量轮询
+
+新安装默认 `poll_seconds: 10`。已有安装运行官方 upgrade 后，在原服务配置增加 `pollSeconds: 10`；已显式设置的 `pollSeconds` 保留。原 connector JSON、任务账本绑定、凭据和机器预留保持原样，避免只改 connector 配置导致 `SERVICE_CONFIG_BINDING_MISMATCH`。服务把有效间隔传给 PowerShell `-PollSeconds`；公网最小值现在为 10 秒。
+
+每 10 秒查询新评论；Relay 描述、任务目录、能力公告与单个历史任务审计保持约 60 秒节奏。增量流出现未知 Issue 的可信任务评论时，在同一次轮询补查目录并接收，不额外等 60 秒。新能力公告也会触发提前读取；删除或篡改的历史记录由轮转核查继续检测。
+
+10 秒是正常情况下的检查间隔，不是端到端交付承诺。请求超过间隔时继续串行等待；429、Retry-After 和服务端重置时间优先，不能为了保持 10 秒绕过退避。GitHub 的认证请求配额由同一用户共享，不能简单把两端所有历史读取频率扩大六倍：[GitHub REST 限流说明](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)。
+
 ## 计时和诊断导出
 
 两端自动记录队列等待、操作实际开始/结束、HTTP 分类/状态/耗时/字节数、冷却及重试、评论观察与独立确认。Windows 额外记录 Pi 开始/结束、打包开始/结束/单调时钟耗时、结果就绪、上传入队/确认和结果入队；Mac 记录下载校验与回执。

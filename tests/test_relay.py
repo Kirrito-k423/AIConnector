@@ -154,6 +154,7 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(len(self.ctx['comments']),1);self.assertEqual(len(self.ctx['issues']),1)
         s=self.poll('mac-outer');self.assertEqual(s['runs'],[]);self.assertEqual(s['receiver_capabilities']['data']['version'],'0.6.0')
         self.ctx['comments'][0]['body']+=' changed'
+        self.expire_poll_maintenance('mac-outer')
         r=self.run_cli('mac-outer','Poll',ok=False);self.assertEqual(r.get('error',r.get('code')),'CAPABILITIES_COMMENT_MISSING')
 
     def test_capability_ambiguous_write_is_blocked_and_rate_limit_recovers_without_duplicate(self):
@@ -174,6 +175,13 @@ class RelayTests(unittest.TestCase):
         raw = json.dumps(state, separators=(',', ':')).encode()
         (self.folder/node/'state.json').write_text(json.dumps(dict(
             schema='aiconnector.store.v1', sha256=sha(raw), data_base64=base64.b64encode(raw).decode())))
+
+    def expire_poll_maintenance(self, node, **fields):
+        state=self.read_state(node)
+        state['sync'].update(fields or dict(catalog_checked_at=0,audit_checked_at=0,capabilities_checked_at=0))
+        raw=json.dumps(state,separators=(',', ':')).encode()
+        (self.folder/node/'state.json').write_text(json.dumps(dict(
+            schema='aiconnector.store.v1',sha256=sha(raw),data_base64=base64.b64encode(raw).decode())))
 
     def test_handoff_creates_one_issue_one_release_and_persists_timeline(self):
         self.complete_flow()
@@ -220,6 +228,7 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(self.poll('windows-inner')['runs'], [])
         self.assertEqual(len(self.ctx['comments']), 1)
         self.ctx['issues'][0]['user']['login'] = 'outsider'
+        self.expire_poll_maintenance('windows-inner')
         self.assertEqual(self.run_cli('windows-inner','Poll',ok=False)['code'], 'TASK_ISSUE_MISSING_OR_CHANGED')
 
     def test_modified_or_duplicate_issue_stops_before_acceptance(self):
@@ -230,6 +239,7 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(self.read_state('windows-inner')['events'], {})
         self.ctx['issues'].pop(); self.clear_cooldown('windows-inner'); self.poll('windows-inner')
         self.ctx['issues'][0]['body'] = self.ctx['issues'][0]['body'].replace('初始目标', '改写目标')
+        self.expire_poll_maintenance('windows-inner')
         self.assertEqual(self.run_cli('windows-inner','Poll',ok=False)['code'], 'TASK_ISSUE_CHANGED')
 
     def test_issue_closed_and_title_changed_do_not_cancel_or_rerun(self):
@@ -334,6 +344,7 @@ class RelayTests(unittest.TestCase):
         self.ctx['issue_page_failure'] = 2
         self.run_cli('windows-inner','Poll',ok=False)
         self.assertEqual(self.read_state('windows-inner')['events'], {})
+        self.expire_poll_maintenance('mac-outer')
         self.run_cli('mac-outer','Poll',ok=False)
         self.assertEqual(self.ctx['posts'].count('/repos/test/tasks/issues'), 1)
 
@@ -374,7 +385,8 @@ class RelayTests(unittest.TestCase):
     def test_unrelated_history_failure_does_not_cool_down_zip_upload(self):
         self.ready();self.run_cli('windows-inner','Claim','-Key',self.key);self.seed_history(1)
         self.ctx['fail_paths']={'/repos/test/tasks/issues/2/comments':503}
-        self.poll('windows-inner');self.poll('windows-inner')
+        self.expire_poll_maintenance('windows-inner',catalog_checked_at=0,audit_checked_at=0,audit_index=0)
+        self.poll('windows-inner');self.expire_poll_maintenance('windows-inner',audit_checked_at=0);self.poll('windows-inner')
         state=self.read_state('windows-inner');self.assertEqual(state['next_poll'],0)
         self.assertTrue(any(v.get('error')=='HTTP_ERROR_503' for v in state['scopes'].values()))
         asset=self.run_cli('windows-inner','Upload','-Key',self.key,'-File',self.zip_path())
@@ -391,8 +403,38 @@ class RelayTests(unittest.TestCase):
 
     def test_deleted_old_comment_is_detected_by_bounded_audit(self):
         self.complete_flow();self.ctx['comments'].pop(0)
+        self.expire_poll_maintenance('windows-inner')
         snapshot=self.poll('windows-inner')
         self.assertEqual(snapshot['runs'][0]['phase'],'conflict')
+
+    def test_fast_poll_reuses_catalog_but_discovers_new_task_in_the_same_cycle(self):
+        self.ready();self.ctx['gets'].clear()
+        self.poll('windows-inner')
+        self.assertEqual(self.ctx['gets'],['/repos/test/tasks/issues/comments'])
+        self.task['task_id']='new-fast-task';self.write_inputs();self.submit();self.poll('mac-outer')
+        self.ctx['gets'].clear()
+        snapshot=self.poll('windows-inner')
+        self.assertTrue(any(r['key'].startswith('new-fast-task/') for r in snapshot['runs']))
+        self.assertIn('/repos/test/tasks/issues',self.ctx['gets'])
+
+    def test_ten_second_override_preserves_existing_state_and_rate_limit(self):
+        self.ready();before=self.read_state('windows-inner')
+        snapshot=self.run_cli('windows-inner','Poll','-PollSeconds','10')
+        self.assertEqual(snapshot['runs'][0]['key'],self.key)
+        self.assertEqual(self.read_state('windows-inner')['binding'],before['binding'])
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/comments':429}
+        self.run_cli('windows-inner','Poll','-PollSeconds','10',ok=False)
+        count=len(self.ctx['gets']);snapshot=self.run_cli('windows-inner','Poll','-PollSeconds','10')
+        self.assertGreater(snapshot['next_poll'],time.time())
+        self.assertEqual(len(self.ctx['gets']),count)
+
+    def test_public_channel_accepts_ten_seconds_but_rejects_nine(self):
+        # Status does not make HTTP requests: validate the real public boundary.
+        self.config['api_base']='https://api.github.com'
+        self.config['artifact_prefixes']=['https://github.com/test/tasks/releases/download/']
+        self.write_config()
+        self.assertEqual(self.run_cli('mac-outer','Status','-PollSeconds','10')['node'],'mac-outer')
+        self.assertEqual(self.run_cli('mac-outer','Status','-PollSeconds','9',ok=False)['code'],'POLL_INTERVAL_TOO_SHORT')
 
     def test_transport_timing_records_independent_confirmation_without_credentials(self):
         self.submit();self.poll('mac-outer')

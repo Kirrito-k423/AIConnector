@@ -25,6 +25,7 @@ export class Connector {
       if(data) {temporary=path.join(this.c.dataDir,'requests',id()+'.json'); atomic(temporary,JSON.stringify(data));file=temporary;}
       const args=['-NoLogo','-NoProfile','-NonInteractive','-File',path.join(ROOT,'Connector.ps1'),'-Action',action,'-OperationId',operation,'-Node',this.c.node,'-Config',this.c.connectorConfig,'-StateDir',this.c.stateDir,'-Proxy',this.c.proxy,'-TimeoutSeconds',String(this.c.httpTimeoutSeconds??30)];
       if(key)args.push('-Key',key); if(file)args.push('-File',file);
+      if(this.c.tickSeconds!==undefined)args.push('-PollSeconds',String(this.c.tickSeconds));
       try {
         const token=this.secrets.githubToken||process.env[this.c.connector.token_env]||'';
         // PowerShell/.NET needs the native Windows environment (e.g. windir and

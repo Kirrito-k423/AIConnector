@@ -7,6 +7,7 @@ param(
     [string]$Proxy='system', [switch]$PromptToken,
     [ValidatePattern('^[a-zA-Z0-9_-]{0,96}$')][string]$OperationId='',
     [ValidateRange(1,120)][int]$TimeoutSeconds=30,
+    [ValidateRange(0,3600)][int]$PollSeconds=0,
     [ValidateRange(0,100000)][int]$Cycles=0
 )
 $ErrorActionPreference='Stop'
@@ -697,8 +698,15 @@ function Read-TaskComments($Route) {
     }
     return ,$all
 }
+function Refresh-PollCatalog {
+    Assert-Relay; $routes=Read-Routes
+    $script:State.sync.catalog_checked_at=Epoch; Save
+    return $routes
+}
 function Import-IncrementalComments {
-    Assert-Relay; $routes=Read-Routes; $byIssue=@{}
+    $routes=$script:State.routes
+    if ((Epoch)-(Get-Field $script:State.sync 'catalog_checked_at' 0) -ge 60) { $routes=Refresh-PollCatalog }
+    $byIssue=@{}
     foreach ($route in $routes.Values) { $byIssue[$script:C.api_base.TrimEnd('/')+$script:RepoPath+'/issues/'+$route.number]=$route }
     $query='&sort=created&direction=asc'; $cursor=[long](Get-Field $script:State.sync 'cursor' 0)
     if ($cursor -gt 0) {
@@ -707,9 +715,23 @@ function Import-IncrementalComments {
     }
     # No import or cursor advance unless the entire stable-order page set succeeded.
     $comments=Read-List ($script:RepoPath+'/issues/comments') $query; $all=@(); $next=$cursor
+    # Discover a new task immediately, without refreshing every historical route
+    # on each fast poll. Only allowed protocol authors can request this refresh.
+    $unknown=@($comments | Where-Object {
+        -not $byIssue.ContainsKey([string](Get-Field $_ 'issue_url')) -and
+        ([string]$_.body).StartsWith('AIConnector task v1') -and
+        (@($script:C.authors['mac-outer'])+@($script:C.authors['windows-inner'])) -ccontains [string]$_.user.login
+    })
+    if ($unknown.Count -gt 0) {
+        $routes=Refresh-PollCatalog; $byIssue=@{}
+        foreach ($route in $routes.Values) { $byIssue[$script:C.api_base.TrimEnd('/')+$script:RepoPath+'/issues/'+$route.number]=$route }
+    }
     foreach ($comment in $comments) {
         $time=[DateTimeOffset]::MinValue
         if ([DateTimeOffset]::TryParse((Source-Time (Get-Field $comment 'updated_at')),[ref]$time)) { $next=[Math]::Max($next,$time.ToUnixTimeSeconds()) }
+        if (([string]$comment.body).StartsWith('AIConnector capabilities v1') -and
+            @($script:C.authors['windows-inner']) -ccontains [string]$comment.user.login -and
+            [long]$comment.id -gt [long](Get-Field (Get-Field $script:State 'receiver_capabilities') 'comment_id' 0)) { $script:State.sync.capabilities_dirty=$true }
         $route=Get-Field $byIssue ([string](Get-Field $comment 'issue_url'))
         if (-not $route) { continue }
         $row=As-Map $comment; $row.relay_task_id=$route.task_id; $row.relay_issue=$route.number; $all+=,$row
@@ -718,11 +740,12 @@ function Import-IncrementalComments {
     $script:State.sync.cursor=$next; $script:State.sync.updated_at=Epoch; Save
 }
 function Audit-OneRoute {
+    if ((Epoch)-(Get-Field $script:State.sync 'audit_checked_at' 0) -lt 60) { return }
     $routes=@($script:State.routes.Values | Sort-Object task_id)
     if ($routes.Count -eq 0) { return }
     $index=[int](Get-Field $script:State.sync 'audit_index' 0)%$routes.Count; $route=$routes[$index]
     # Advance even on an unavailable old route, so it cannot monopolize the audit.
-    $script:State.sync.audit_index=($index+1)%$routes.Count; Save
+    $script:State.sync.audit_index=($index+1)%$routes.Count; $script:State.sync.audit_checked_at=Epoch; Save
     try {
         $null=In-Scope ('audit:'+$route.task_id) {
             $comments=Read-TaskComments $route; Import-Comments $comments
@@ -956,7 +979,10 @@ function Poll-Once {
     if ($script:Relay) {
         $null=In-Scope 'poll' {
             Import-IncrementalComments
-            if (Get-Field $script:State 'capability_issue') { $null=Read-Capabilities }
+            if ((Get-Field $script:State 'capability_issue') -and
+                ((Get-Field $script:State.sync 'capabilities_dirty' $false) -or (Epoch)-(Get-Field $script:State.sync 'capabilities_checked_at' 0) -ge 60)) {
+                $null=Read-Capabilities; $script:State.sync.capabilities_checked_at=Epoch; $script:State.sync.Remove('capabilities_dirty'); Save
+            }
         }
         Audit-OneRoute
     } else { Reconcile-DeliveryComments }
@@ -1104,8 +1130,9 @@ try {
     Need (-not $api.Query -and -not $api.Fragment) 'INVALID_API_URL'
     Need ($script:C.token_env -cmatch '^AICONNECTOR_[A-Z0-9_]+$') 'INVALID_TOKEN_ENV'
     if (-not $script:Relay) { Need ($script:C.release_tag -cmatch '^[A-Za-z0-9_.-]{1,64}$') 'INVALID_RELEASE_TAG' }
+    if ($PollSeconds -gt 0) { $script:C.poll_seconds=$PollSeconds }
     Need ((Is-Integer $script:C.poll_seconds) -and $script:C.poll_seconds -ge 1 -and $script:C.poll_seconds -le 3600) 'INVALID_POLL_INTERVAL'
-    Need ($api.IsLoopback -or $script:C.poll_seconds -ge 15) 'POLL_INTERVAL_TOO_SHORT'
+    Need ($api.IsLoopback -or $script:C.poll_seconds -ge 10) 'POLL_INTERVAL_TOO_SHORT'
     Need ((Is-Integer $script:C.max_pages) -and $script:C.max_pages -ge 1 -and $script:C.max_pages -le 100) 'INVALID_PAGE_LIMIT'
     Need ((Is-Integer $script:C.write_interval_seconds) -and $script:C.write_interval_seconds -ge 0 -and $script:C.write_interval_seconds -le 300) 'INVALID_WRITE_INTERVAL'
     foreach ($n in @('mac-outer','windows-inner')) { Need ($script:C.authors[$n] -is [Array] -and $script:C.authors[$n].Count -ge 1) 'MISSING_ALLOWED_AUTHORS' }

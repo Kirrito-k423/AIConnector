@@ -43,9 +43,9 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All three Windows service workflow jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.2 reduces history-dependent delivery readback, prioritizes ready uploads, and isolates route-local failures. '
-           'Adds incremental comment sync with rotating integrity audits, segmented timing, and per-run dashboard/CLI diagnostics. '
-           'Immutable delivery recovery and machine reservations are preserved. Upgrade both endpoints using the existing config and state. '
+           '0.7.3 enables 10-second incremental polling while refreshing catalog, capabilities and integrity audits every 60 seconds. '
+           'New task issues are discovered in the same incremental poll; rate-limit backoff and serial transport are preserved. '
+           'Upgrade both endpoints using existing config and state; upgrade sets service pollSeconds=10 unless explicitly configured. This release does not fix the separate Claim/Pi failures from the 0.7.2 intranet retest. '
            f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-PERFORMANCE.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:

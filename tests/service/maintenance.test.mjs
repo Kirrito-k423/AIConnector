@@ -105,6 +105,9 @@ test('upgrade preserves identity, model, vault and profiles while backing up and
   fs.mkdirSync(original.dataDir);fs.writeFileSync(path.join(original.dataDir,'credentials.dpapi'),'OPAQUE_VAULT');
   const plan=prepareUpgrade(file,policy);assert.deepEqual(JSON.parse(fs.readFileSync(file)),original,'dry-run must not write');
   const backup=applyUpgrade(plan),updated=JSON.parse(fs.readFileSync(file));assert.deepEqual(JSON.parse(fs.readFileSync(backup)),original);
+  assert.equal(updated.pollSeconds,10);assert.equal(plan.report.poll_seconds,10);
+  assert.equal(JSON.parse(fs.readFileSync(connector)).poll_seconds,60,'do not change channel identity');
+  updated.pollSeconds=30;fs.writeFileSync(file,JSON.stringify(updated));assert.equal(prepareUpgrade(file).disk.pollSeconds,30,'preserve explicit service preference');
   assert.deepEqual(updated.runner.model,original.runner.model);assert.deepEqual(updated.runner.profiles['local-smoke'],original.runner.profiles['local-smoke']);assert.equal(updated.dataDir,original.dataDir);assert.equal(updated.node,original.node);
   assert.equal(fs.readFileSync(path.join(original.dataDir,'credentials.dpapi'),'utf8'),'OPAQUE_VAULT');assert.equal(updated.runner.profiles.maintenance.kind,'maintenance');
  }finally{fs.rmSync(dir,{recursive:true,force:true});}

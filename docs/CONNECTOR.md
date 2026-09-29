@@ -9,7 +9,7 @@ Windows 使用自带 PowerShell 5.1；Mac 使用 PowerShell 7。中间件不启�
 1. 完整解压 `AIConnector.zip`，保留整个 `AIConnector` 目录。
 2. Windows 双击 `Start-Windows-Connector.cmd`。Mac 运行 `./Start-Mac-Connector.command`；若解压工具没保留执行权限，运行 `zsh ./Start-Mac-Connector.command`。
 3. 在各自终端输入 GitHub Token，隐藏输入且只保存在进程内存。两端默认使用 `Kirrito-k423/AIConnector-Relay`：一项任务一个 Issue，一次运行一个 Release，由程序自动登记。组织规则见 [专用仓库格式](RELAY.md)。
-4. 保持终端运行。默认约 60 秒轮询一次；Ctrl+C 停止，重新启动后从原状态目录继续。
+4. 保持终端运行。默认约 10 秒检查新任务与结果；历史完整性核查每 60 秒轮转一次；Ctrl+C 停止，重新启动后从原状态目录继续。
 
 新布局自动创建任务 Issue 和运行 Release，Token 需要该专用仓库的 Issues、Contents 写权限。也可设置本机进程环境变量 `AICONNECTOR_GITHUB_TOKEN`。请勿将 Token 填入任务 JSON、配置或 Issue。
 
