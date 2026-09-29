@@ -722,7 +722,12 @@ function Import-IncrementalComments {
         ([string]$_.body).StartsWith('AIConnector task v1') -and
         (@($script:C.authors['mac-outer'])+@($script:C.authors['windows-inner'])) -ccontains [string]$_.user.login
     })
-    if ($unknown.Count -gt 0) {
+    $newCapability=@($comments | Where-Object {
+        -not (Get-Field $script:State 'capability_issue') -and
+        ([string]$_.body).StartsWith('AIConnector capabilities v1') -and
+        @($script:C.authors['windows-inner']) -ccontains [string]$_.user.login
+    })
+    if ($unknown.Count -gt 0 -or $newCapability.Count -gt 0) {
         $routes=Refresh-PollCatalog; $byIssue=@{}
         foreach ($route in $routes.Values) { $byIssue[$script:C.api_base.TrimEnd('/')+$script:RepoPath+'/issues/'+$route.number]=$route }
     }

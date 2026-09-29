@@ -428,6 +428,13 @@ class RelayTests(unittest.TestCase):
         self.assertGreater(snapshot['next_poll'],time.time())
         self.assertEqual(len(self.ctx['gets']),count)
 
+    def test_first_capability_issue_is_discovered_before_catalog_refresh_deadline(self):
+        self.assertIsNone(self.poll('mac-outer')['receiver_capabilities'])
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.3',digest='c'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        self.assertEqual(self.poll('mac-outer')['receiver_capabilities']['data']['version'],'0.7.3')
+
     def test_public_channel_accepts_ten_seconds_but_rejects_nine(self):
         # Status does not make HTTP requests: validate the real public boundary.
         self.config['api_base']='https://api.github.com'
