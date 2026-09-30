@@ -19,7 +19,7 @@ async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-export async function start(configFile,{secrets:givenSecrets}={}) {
+export async function start(configFile,{secrets:givenSecrets,connector:givenConnector}={}) {
   const c=loadConfig(configFile);fs.mkdirSync(c.dataDir,{recursive:true,mode:0o700});
   const unlock=lock(path.join(c.dataDir,'service.lock'));
   const ledgerFile=path.join(c.dataDir,'service.json');
@@ -32,7 +32,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   const authFile=path.join(c.dataDir,'dashboard.token');
   if(!fs.existsSync(authFile))atomic(authFile,id());
   const token=fs.readFileSync(authFile,'utf8');
-  const connector=new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
+  const connector=givenConnector??new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
   let snapshot={runs:[],outbox:[]},busy=false,submitting=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
   const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
@@ -60,13 +60,17 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
       if(Date.now()-lastTick>=c.tickSeconds*1000) {
         lastTick=Date.now();
         for(const draft of Object.values(ledger.submissions)) {
-          if(draft.state==='queued')continue;
+          if(['queued','rejected'].includes(draft.state))continue;
           try {
             if(draft.zipFile&&!draft.artifact){draft.artifact=await connector.call('Upload',{key:draft.key,file:draft.zipFile});persist();}
             await connector.call('Submit',{data:{...draft.task,artifacts:draft.artifact?[draft.artifact]:draft.task.artifacts}});
             flushNeeded=true;
             draft.state='queued';draft.error='';persist();
-          } catch(e){draft.error=cleanError(e);persist();}
+          } catch(e){
+            draft.error=cleanError(e);
+            if(['RUN_IS_IMMUTABLE','REVISION_IS_IMMUTABLE'].includes(draft.error))draft.state='rejected';
+            persist();
+          }
         }
         persist();
       }
