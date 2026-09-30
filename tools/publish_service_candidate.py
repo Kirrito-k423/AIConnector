@@ -43,10 +43,10 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All three Windows service workflow jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.4 fixes Issue #11 with owner-bound idempotent Claim recovery. A lost Claim reply before any launch evidence now resumes the original run with bounded backoff, preserving its event and machine reservation. '
-           'Existing launch evidence, foreign or legacy claim ownership, completed results and real protocol conflicts never authorize automatic re-execution. No TTL unlock or history rewrite is introduced. '
-           'Upgrade the Windows receiver using its existing config and state; Mac remains protocol compatible. Ten-second polling is preserved. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/ISSUE-11-FIX.md\n\n'
+           '0.7.5 reuses a resident PowerShell transport, HTTP connections and unchanged snapshots, and drains up to four ready events within a bounded batch. '
+           'A freshly uploaded result ZIP can be announced before sender public redownload; Mac still downloads and verifies the artifact before receipt. Ambiguous uploads and existing assets still require sender content reconciliation. '
+           'Owner-bound Claim recovery, machine reservations, durable write pacing and ten-second polling are preserved. Upgrade both endpoints using the existing config and state. '
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-075.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

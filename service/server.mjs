@@ -33,7 +33,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   if(!fs.existsSync(authFile))atomic(authFile,id());
   const token=fs.readFileSync(authFile,'utf8');
   const connector=new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
-  let snapshot={runs:[],outbox:[]},busy=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0;
+  let snapshot={runs:[],outbox:[]},busy=false,submitting=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
   const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
   async function tick() {
@@ -51,7 +51,12 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         try {snapshot=await connector.call('Poll');activity.last_error='';activity.diagnostic=null;}
         catch(e){activity.last_error=cleanError(e);activity.diagnostic=e.diagnostic;try{snapshot=await connector.call('Status');}catch{}}
       }
-      if(stopping)return;
+    }catch(e){activity.last_error=cleanError(e);}
+    finally{busy=false;activity.busy=false;}
+  }
+  async function submit(){
+    if(submitting||stopping)return;submitting=true;
+    try{
       if(Date.now()-lastTick>=c.tickSeconds*1000) {
         lastTick=Date.now();
         for(const draft of Object.values(ledger.submissions)) {
@@ -66,7 +71,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
         persist();
       }
     }catch(e){activity.last_error=cleanError(e);}
-    finally{busy=false;activity.busy=false;}
+    finally{submitting=false;}
   }
   async function supervise(){
     if(supervising||stopping)return;supervising=true;
@@ -131,7 +136,7 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
           const bytes=Buffer.from(data.zipBase64,'base64');need(bytes.length>4&&bytes.length<5242880&&bytes.subarray(0,2).toString()==='PK','INVALID_INPUT_ZIP');
           zipFile=path.join(c.dataDir,'submissions',sha(key)+'.zip');atomic(zipFile,bytes);
         }
-        ledger.submissions[key]={key,digest,task,zipFile,state:'pending',error:'',created_at:now()};persist();timing(c.dataDir,'task_submitted',{key});lastTick=0;void tick();reply(202,{key,state:'pending'});return;
+        ledger.submissions[key]={key,digest,task,zipFile,state:'pending',error:'',created_at:now()};persist();timing(c.dataDir,'task_submitted',{key});lastTick=0;void submit();reply(202,{key,state:'pending'});return;
       }
       if(url.pathname==='/api/settings') {
         need(typeof data.githubToken==='string'&&typeof data.apiKey==='string','INVALID_CREDENTIALS');
@@ -191,14 +196,14 @@ export async function start(configFile,{secrets:givenSecrets}={}) {
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'127.0.0.1',resolve);});
   atomic(path.join(c.dataDir,'service-info.json'),JSON.stringify({pid:process.pid,url:origin,started_at:now()}));
-  const interval=setInterval(()=>{void tick();void supervise();void flush();},1000);void tick();void supervise();
+  const interval=setInterval(()=>{void submit();void tick();void supervise();void flush();},1000);void submit();void tick();void supervise();
   let closePromise;
   const close=()=>closePromise??=(async()=>{
     stopping=true;clearInterval(interval);await new Promise(resolve=>server.close(resolve));
     // An in-flight tick may enqueue more transport work after its current call.
     // Keep ownership until that entire tick and its subprocesses have drained.
-    while(busy||supervising||flushing)await new Promise(resolve=>setTimeout(resolve,25));
-    await runner.idle();await connector.tail;unlock();
+    while(busy||submitting||supervising||flushing)await new Promise(resolve=>setTimeout(resolve,25));
+    await runner.idle();await connector.close();unlock();
   })();
   return {server,close,status,token,url:origin,config:c};
 }

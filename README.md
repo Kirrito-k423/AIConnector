@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.2 优化结果交付与故障恢复。** 减少重复读取历史评论，优先发送已完成 ZIP，按任务隔离临时网络故障，并增加队列、Pi、打包、HTTP、重试及回执的分段计时。看板可导出单次运行诊断。保留并行 Pi、机器预留和不可变交付恢复。内网实际耗时需在两端升级后复测。
+**v0.7.5 优化交互与结果交付。** 常驻传输进程复用连接及快照，批量发送就绪事件；结果发布不等待新上传 ZIP 的发送端公网自检，Mac 校验通过后才回执。不确定上传仍核对已有资产，保留领取恢复、机器预留和 10 秒轮询。内网实际耗时需在两端升级后复测。
 
-[下载服务候选包 v0.7.2-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.2-rc.1) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+[下载服务候选包 v0.7.5-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.5-rc.1) · [本版优化与验收](docs/TRANSPORT-075.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 

@@ -85,6 +85,12 @@ jobs:
           PYTHONUTF8: '1'
           PWSH: powershell.exe
         run: python -m unittest discover -s tests -p test_connector.py -k claim -v
+      - name: Resident transport, exclusive ownership and deferred ZIP verification on PowerShell 5.1
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_resident.py -v
       - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         shell: pwsh

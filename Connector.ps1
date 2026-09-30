@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Watch','Flush','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Watch','Serve','Flush','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -15,6 +15,7 @@ $ErrorActionPreference='Stop'
 $script:Utf8=New-Object Text.UTF8Encoding($false)
 # JSON is consumed by Node/Python as UTF-8, including on Windows PowerShell 5.1.
 [Console]::OutputEncoding=$script:Utf8
+[Console]::InputEncoding=$script:Utf8
 $OutputEncoding=$script:Utf8
 Add-Type -AssemblyName System.Net.Http
 $root=[IO.Path]::GetDirectoryName($PSCommandPath)
@@ -25,6 +26,9 @@ $StateDir=[IO.Path]::GetFullPath($StateDir)
 $script:Token=''; $script:State=$null; $script:Lock=$null; $script:WatchLock=$null
 $script:IoScope='action:'+$Action+':'+$Key
 $script:HttpClient=$null
+$script:SavedStateHash=''; $script:ProjectionHashes=@{}; $script:ProjectionWrites=0
+$script:DeferUploadVerification=$false
+$script:Resident=$false; $script:SnapshotCache=$null; $script:SnapshotStateHash=''
 if (-not $OperationId) { $OperationId=[Guid]::NewGuid().ToString('N') }
 function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
     # No request headers, query strings, bodies, credentials, or free-form errors.
@@ -32,7 +36,7 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
         $row=@{schema='aiconnector.timing.v1';at=[DateTimeOffset]::UtcNow.ToString('o');source='connector';operation_id=$OperationId;action=$Action;kind=$Kind}
         if ($script:IoScope -cmatch '^[a-zA-Z0-9_:/-]{1,240}$') { $row.scope=$script:IoScope }
         if ($Key -cmatch '^[a-z0-9_-]+/[1-9][0-9]*/[a-z0-9_-]+$') { $row.key=$Key }
-        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at')) {
+        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent')) {
             if ($Values.ContainsKey($name)) { $row[$name]=$Values[$name] }
         }
         $trace=Join-Path $StateDir 'transport-timing.jsonl'
@@ -154,9 +158,14 @@ function Atomic([string]$Path,[string]$Text) {
 }
 function Save {
     $body=Canonical $script:State
-    $serialized=Json @{schema='aiconnector.store.v1';sha256=(Hash $body);data_base64=[Convert]::ToBase64String($script:Utf8.GetBytes($body))}
+    $digest=Hash $body
+    if ($digest -ceq $script:SavedStateHash) { return }
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    $serialized=Json @{schema='aiconnector.store.v1';sha256=$digest;data_base64=[Convert]::ToBase64String($script:Utf8.GetBytes($body))}
     Need ($script:Utf8.GetByteCount($serialized) -le 16777216) 'STATE_CAPACITY_REACHED'
     Atomic (Join-Path $StateDir 'state.json') $serialized
+    $script:SavedStateHash=$digest
+    Trace-Event 'state_saved' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;bytes=$script:Utf8.GetByteCount($serialized)}
 }
 function Open-State {
     [IO.Directory]::CreateDirectory($StateDir)|Out-Null
@@ -170,6 +179,7 @@ function Open-State {
             $candidate=Parse $body
             Need ($candidate.binding -ceq $script:Binding) 'STATE_CONFIG_MISMATCH'
             $script:State=$candidate
+            $script:SavedStateHash=$saved.sha256
         } catch { if ($_.Exception.Data['connector_code']) { throw }; Fail 'STATE_CORRUPT' }
     } else {
         $script:State=@{binding=$script:Binding;events=@{};comments=@{};outbox=@{};claims=@{};uploads=@{};conflicts=@{};ignored=@{};artifact_errors=@{};next_poll=0L;failures=0;last_error='';last_poll=0L}
@@ -938,7 +948,7 @@ function Flush-One([bool]$Reconciled=$false) {
             } elseif ($r.http -ge 400 -and $r.http -lt 500) { $item.status='rejected'; $script:State.last_error='WRITE_REJECTED_'+$r.http }
             Save
             if ($script:State.next_poll -le (Epoch)) { Confirm-PostedComment $item $r; $script:State.scopes.Remove($scope); Save }
-            return
+            return $true
         } catch {
             $item.error=Error-Code $_; Save
             if (-not $script:Relay -or $script:State.next_poll -gt (Epoch) -or -not $script:State.scopes.ContainsKey($scope)) { throw }
@@ -947,16 +957,49 @@ function Flush-One([bool]$Reconciled=$false) {
         } finally { $script:IoScope=$previous }
     }
 }
+function Flush-Batch {
+    # Preserve parent order and persisted write pacing. Never wait out backoff.
+    $watch=[Diagnostics.Stopwatch]::StartNew(); $sent=0
+    for ($n=0;$n -lt 4;$n++) {
+        if ($n -gt 0) {
+            $delay=[Math]::Max(0,(Get-Field $script:State 'post_not_before' 0)-(Epoch))
+            if ($delay -gt 1 -or $watch.Elapsed.TotalSeconds+$delay -ge 5) { break }
+            if ($delay -gt 0) { Start-Sleep -Milliseconds ([int]($delay*1000)) }
+        }
+        if ($watch.Elapsed.TotalSeconds -ge 5 -or -not (Flush-One)) { break }
+        $sent++
+    }
+    Trace-Event 'flush_batch' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;events_sent=$sent}
+}
+function Project-Changed([string]$Path,[string]$Text) {
+    $digest=Hash $Text
+    if (-not $script:ProjectionHashes.ContainsKey($Path) -and [IO.File]::Exists($Path)) {
+        $script:ProjectionHashes[$Path]=Hash ([IO.File]::ReadAllText($Path,$script:Utf8))
+    }
+    if ((Get-Field $script:ProjectionHashes $Path) -ceq $digest -and [IO.File]::Exists($Path)) { return }
+    Atomic $Path $Text; $script:ProjectionHashes[$Path]=$digest; $script:ProjectionWrites++
+}
 function Snapshot {
+    $watch=[Diagnostics.Stopwatch]::StartNew(); $script:ProjectionWrites=0
+    if ($script:Resident -and $null -ne $script:SnapshotCache -and $script:SnapshotStateHash -ceq $script:SavedStateHash) {
+        Trace-Event 'snapshot_cached' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;files_written=0}
+        return $script:SnapshotCache
+    }
     $runs=Runs; $list=@(); $inbox=Join-Path $StateDir 'inbox'; [IO.Directory]::CreateDirectory($inbox)|Out-Null
+    $sourcesByEvent=@{}
+    foreach ($source in $script:State.comments.Values) {
+        $id=[string]$source.event_id; if (-not $id) { continue }
+        $previous=Get-Field $sourcesByEvent $id
+        if (-not $previous -or ([string]$source.created_at -clt [string]$previous.created_at) -or
+            ([string]$source.created_at -ceq [string]$previous.created_at -and [string]$source.url -clt [string]$previous.url)) { $sourcesByEvent[$id]=$source }
+    }
     foreach ($run in @($runs.Values | Sort-Object key)) {
         $row=@{key=$run.key;phase=$run.phase;error=$run.error;task=(Get-Field $run 'task');result=(Get-Field $run 'result');claimed=$script:State.claims.ContainsKey($run.key);inbox_file=(Join-Path $inbox ((Hash $run.key)+'.json'))}
         $row.timeline=@()
         foreach ($kind in @('task','accepted','started','result','receipt')) {
             if (-not $run.events.ContainsKey($kind)) { continue }
             $e=$run.events[$kind]
-            $sources=@($script:State.comments.Values | Where-Object { $_.event_id -ceq $e.event_id } | Sort-Object created_at,url)
-            $source=$null; if ($sources.Count -gt 0) { $source=$sources[0] }
+            $source=Get-Field $sourcesByEvent $e.event_id
             $row.timeline+=@{kind=$kind;sender=$e.sender;event_id=$e.event_id;author=(Get-Field $source 'author');published_at=(Source-Time (Get-Field $source 'created_at'));observed_at=(Get-Field $source 'observed_at');url=(Get-Field $source 'url')}
         }
         if ($script:Relay -and $run.events.ContainsKey('task')) {
@@ -968,17 +1011,18 @@ function Snapshot {
             $d=Get-Field $run $which
             if ($d) { foreach ($a in $d.artifacts) { $row.local_artifacts+=@{name=$a.name;path=(Join-Path (Join-Path $StateDir 'artifacts') ($a.sha256+'.zip'))} } }
         }
-        Atomic $row.inbox_file (Json $row); $list+=,$row
+        Project-Changed $row.inbox_file (Json $row); $list+=,$row
     }
     $outbox=@(); foreach ($item in $script:State.outbox.Values) { $outbox+=@{event_id=$item.event.event_id;key=(Run-Key $item.event);kind=$item.event.kind;status=$item.status;attempts=$item.attempts;http=$item.http;queued_at=(Get-Field $item 'queued_at');recovery=(Get-Field $item 'recovery');recoveries=(Get-Field $item 'recoveries' 0)} }
     $snapshot=@{schema='aiconnector.status.v1';node=$Node;runs=$list;outbox=$outbox;uploads=$script:State.uploads;provisions=$script:State.provisions;next_poll=$script:State.next_poll;last_poll=$script:State.last_poll;last_error=$script:State.last_error;scopes=$script:State.scopes;sync=$script:State.sync;ignored_comments=$script:State.ignored.Count;receiver_capabilities=(Get-Field $script:State 'receiver_capabilities')}
-    Atomic (Join-Path $StateDir 'status.json') (Json $snapshot)
+    Project-Changed (Join-Path $StateDir 'status.json') (Json $snapshot)
     $lines=@('# AIConnector '+$Node,'','| 运行 | 状态 | 本地已领取 | 异常 |','|---|---|---|---|')
     foreach ($r in $list) { $lines+='| '+$r.key+' | '+$r.phase+' | '+$r.claimed+' | '+$r.error+' |' }
     $pending=@($outbox | Where-Object { $_.status -ne 'confirmed' })
     $lines+=@('','未确认消息：'+$pending.Count,'最后通道异常：'+$script:State.last_error,'','回执只确认结果和产物完整收到；实验结论由 AI 或人评估。')
-    Atomic (Join-Path $StateDir 'status.md') ($lines -join "`n")
-    Save; return $snapshot
+    Project-Changed (Join-Path $StateDir 'status.md') ($lines -join "`n")
+    Save; $script:SnapshotCache=$snapshot; $script:SnapshotStateHash=$script:SavedStateHash
+    Trace-Event 'snapshot_built' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;files_written=$script:ProjectionWrites}; return $snapshot
 }
 function Poll-Once {
     if ($script:State.next_poll -gt (Epoch)) { return Snapshot }
@@ -993,7 +1037,7 @@ function Poll-Once {
         Audit-OneRoute
     } else { Reconcile-DeliveryComments }
     $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
-    Auto-Transitions; Flush-One $true
+    Auto-Transitions; $null=Flush-One $true
     if (-not $script:State.last_error) { $script:State.failures=0 }
     return Snapshot
 }
@@ -1041,6 +1085,7 @@ function Upload-Zip([string]$Path) {
     $upload=([string]$release.upload_url) -replace '\{.*$',''; $u=Assert-Url $upload; $api=Assert-Url $script:C.api_base
     Need (($u.Host -ceq 'uploads.github.com' -and $u.AbsolutePath -ceq ('/repos/'+$script:C.repository+'/releases/'+$release.id+'/assets')) -or ($api.IsLoopback -and $u.IsLoopback -and $api.Authority -ceq $u.Authority)) 'INVALID_UPLOAD_TARGET'
     Need ($row.name -ceq $name -and $row.bytes -eq $bytes.Length) 'UPLOAD_IDENTITY_CHANGED'
+    $freshUpload=$false
     $found=Read-UploadAssets $release $row
     if ($found.Count -eq 0) {
         Observe-DeliveryAbsent $row; Save
@@ -1065,22 +1110,32 @@ function Upload-Zip([string]$Path) {
         } else {
             if ($r.http -ge 400 -and $r.http -lt 500) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
             Save; Require-Response $r
-            $asset=$r.json
+            $asset=$r.json; $freshUpload=$r.http -eq 201
         }
     } else { $asset=$found[0] }
     Need ($asset.state -ceq 'uploaded' -and $asset.size -eq $bytes.Length -and $asset.name -ceq $name) 'ASSET_CONFLICT'
     $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }
     $manifest=@{name=$manifestName;bytes=$bytes.Length;sha256=$sha;url=[string]$asset.browser_download_url}
     if ($script:Relay) { Need ($manifest.url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $identity)+'/'+$name)) 'ARTIFACT_RUN_MISMATCH' }
-    # An identical cached ZIP proves content, but not that this new Release URL works.
-    Artifact-Valid $manifest; $null=Fetch-Artifacts @($manifest) $true
-    $row.status='confirmed'; $row.manifest=$manifest; $row.confirmed_at=Epoch; Trace-Event 'upload_verified' @{bytes=$bytes.Length;confirmed_at=$row.confirmed_at}; Save
+    Artifact-Valid $manifest
+    # Only a fresh result POST may leave public validation to the receiving Mac.
+    # An ambiguous response, 422, or existing asset still requires byte equality.
+    $digest=[string](Get-Field $asset 'digest')
+    Need (-not $digest -or $digest -ceq ('sha256:'+$sha)) 'ARTIFACT_HASH_MISMATCH'
+    $deferred=$script:DeferUploadVerification -and $script:Relay -and $Node -ceq 'windows-inner' -and $freshUpload
+    Trace-Event 'upload_api_confirmed' @{bytes=$bytes.Length}
+    if (-not $deferred) { $null=Fetch-Artifacts @($manifest) $true }
+    $row.public_verification='sender_verified'; if ($deferred) { $row.public_verification='receiver_required' }
+    $row.status='confirmed'; $row.manifest=$manifest; $row.confirmed_at=Epoch
+    $kind='upload_verified'; if ($deferred) { $kind='upload_verification_deferred' }
+    Trace-Event $kind @{bytes=$bytes.Length;confirmed_at=$row.confirmed_at}; Save
     return $manifest
 }
 function Local-Action {
-    if ($Action -eq 'Flush') { Auto-Transitions; Flush-One; return Snapshot }
+    if ($Action -eq 'Flush') { Auto-Transitions; Flush-Batch; return Snapshot }
     if ($Action -eq 'Advertise') { return Advertise-Capabilities }
     if ($Action -eq 'Capabilities') { Assert-Relay; $null=Read-Routes; return @{receiver_capabilities=(Read-Capabilities)} }
+    if ($Action -eq 'Status') { return Snapshot }
     $runs=Runs
     if ($Action -eq 'Submit') {
         Need ($Node -eq 'mac-outer' -and $File) 'SUBMIT_REQUIRES_COORDINATOR_AND_FILE'
@@ -1104,7 +1159,6 @@ function Local-Action {
         $row.status='pending'; Save
         return @{ok=$true;key=$Key;state='pending'}
     }
-    if ($Action -eq 'Status') { return Snapshot }
     Need ($Node -eq 'windows-inner' -and $runs.ContainsKey($Key)) 'UNKNOWN_WORKER_RUN'
     $run=$runs[$Key]; Need ($run.phase -ne 'conflict') 'RUN_CONFLICT'
     if ($Action -eq 'Claim') {
@@ -1133,6 +1187,35 @@ function Local-Action {
     if ($claim.status -eq 'completed') { Need ($claim.result_id -ceq $e.event_id) 'RESULT_IS_IMMUTABLE' }
     $claim.status='completed'; $claim.result_id=$e.event_id; Queue $e; $null=Snapshot
     return @{ok=$true;key=$Key;event_id=$e.event_id;state='queued'}
+}
+function Serve-Requests {
+    $script:Resident=$true
+    Open-State
+    [Console]::WriteLine((Json @{schema='aiconnector.transport.v1';ready=$true}))
+    while ($null -ne ($line=[Console]::ReadLine())) {
+        $requestId=''; $watch=[Diagnostics.Stopwatch]::StartNew()
+        try {
+            Need ($script:Utf8.GetByteCount($line) -le 65536) 'TRANSPORT_REQUEST_TOO_LARGE'
+            $request=Parse $line; $requestId=[string]$request.operation_id
+            Need ($requestId -cmatch '^[a-zA-Z0-9_-]{1,96}$') 'INVALID_OPERATION_ID'
+            $script:OperationId=$requestId
+            Need ($request.action -cin @('Submit','Poll','Flush','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
+            $script:Action=[string]$request.action; $script:OperationId=$requestId
+            $script:Key=[string]$request.key; $script:File=[string]$request.file; $script:ClaimOwner=[string]$request.claim_owner
+            Need ($script:Key.Length -le 300 -and $script:File.Length -le 4096 -and $script:ClaimOwner -cmatch '^(|[a-f0-9]{48})$') 'INVALID_TRANSPORT_ARGUMENT'
+            $script:Token=[string]$request.token; $script:IoScope='action:'+$Action+':'+$Key
+            $script:WireDiagnostic=$null; $script:DeferUploadVerification=$true
+            Trace-Event 'action_started'
+            if ($Action -eq 'Poll') { $value=Poll-Once } else { $value=Local-Action }
+            [Console]::WriteLine((Json @{id=$requestId;ok=$true;value=$value}))
+        } catch {
+            $code=Error-Code $_; $script:State.last_error=$code; Save
+            $retry=Get-Field $script:State 'next_poll' 0
+            if ($_.Exception.Data.Contains('retry_at')) { $retry=[Math]::Max($retry,[long]$_.Exception.Data['retry_at']) }
+            if ($code -eq 'WRITE_COOLDOWN') { $retry=Get-Field $script:State 'post_not_before' 0 }
+            [Console]::WriteLine((Json @{id=$requestId;ok=$false;error=@{ok=$false;code=$code;node=$Node;retry_at=$retry;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}}))
+        } finally { Trace-Event 'action_finished' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds}; $script:Token='' }
+    }
 }
 try {
     $script:C=Read-Json $Config
@@ -1166,10 +1249,11 @@ try {
     $script:Binding=Hash (Canonical $bindingData)
     $script:Token=[Environment]::GetEnvironmentVariable($script:C.token_env)
     if ($PromptToken -and -not $script:Token) { $secure=Read-Host '平台 Token（隐藏输入，回车只读）' -AsSecureString; $script:Token=(New-Object Net.NetworkCredential('', $secure)).Password }
-    if ($Action -eq 'Watch') {
+    if ($Action -in @('Watch','Serve')) {
         [IO.Directory]::CreateDirectory($StateDir)|Out-Null
         try { $script:WatchLock=[IO.File]::Open((Join-Path $StateDir 'watch.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) } catch { Fail 'WATCH_ALREADY_RUNNING' }
     }
+    if ($Action -eq 'Serve') { Serve-Requests; return }
     $iteration=0
     do {
         try {

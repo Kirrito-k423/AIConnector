@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {ROOT, run, atomic, id, need,now,safeDiagnostic} from './common.mjs';
+import {ROOT, atomic, id, need,now,safeDiagnostic} from './common.mjs';
 import {timing} from './telemetry.mjs';
+import {Transport} from './transport.mjs';
 
 export class Connector {
-  constructor(config,secrets={},invoke=run) {this.c=config;this.secrets=secrets;this.invoke=invoke;this.queue=[];this.running=false;this.waiters=[];}
+  constructor(config,secrets={},invoke) {this.c=config;this.secrets=secrets;this.invoke=invoke;this.transport=invoke?null:new Transport(config);this.queue=[];this.running=false;this.waiters=[];}
+  async close(){await this.tail;await this.transport?.close();}
   get tail(){return !this.running&&!this.queue.length?Promise.resolve():new Promise(resolve=>this.waiters.push(resolve));}
   async drain(){
     if(this.running)return;this.running=true;
@@ -32,7 +34,7 @@ export class Connector {
         // PowerShell/.NET needs the native Windows environment (e.g. windir and
         // ProgramData). This is our trusted transport, not an experiment tool.
         const env={...process.env,[this.c.connector.token_env]:token};delete env.PSModulePath;
-        const result=await this.invoke(this.c.powershell,args,{env});
+        const result=this.transport?await this.transport.call(action,{operation_id:operation,key:key||'',file:file||'',claim_owner:claimOwner||'',token},env):await this.invoke(this.c.powershell,args,{env});
         const values=result.out.split(/\r?\n/).filter(x=>x.startsWith('{')).map(x=>JSON.parse(x));
         const value=values.at(-1);
         need(value,'CONNECTOR_NO_JSON');
