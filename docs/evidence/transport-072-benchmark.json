@@ -1,0 +1,283 @@
+{
+  "scope": "Synthetic local API; real PowerShell processes; no WAN or A5 speed claim",
+  "added_get_delay_ms": 25,
+  "repeats": 3,
+  "rows": [
+    {
+      "version": "baseline",
+      "historical_issues": 0,
+      "samples": [
+        {
+          "delivery": {
+            "gets": 7,
+            "wall_ms": 1098.8
+          },
+          "steady_poll": {
+            "gets": 3,
+            "wall_ms": 818.79
+          }
+        },
+        {
+          "delivery": {
+            "gets": 7,
+            "wall_ms": 1110.48
+          },
+          "steady_poll": {
+            "gets": 3,
+            "wall_ms": 808.36
+          }
+        },
+        {
+          "delivery": {
+            "gets": 7,
+            "wall_ms": 1106.86
+          },
+          "steady_poll": {
+            "gets": 3,
+            "wall_ms": 810.73
+          }
+        }
+      ],
+      "median": {
+        "delivery": {
+          "gets": 7,
+          "wall_ms": 1106.86
+        },
+        "steady_poll": {
+          "gets": 3,
+          "wall_ms": 810.73
+        }
+      }
+    },
+    {
+      "version": "candidate",
+      "historical_issues": 0,
+      "samples": [
+        {
+          "delivery": {
+            "gets": 6,
+            "wall_ms": 1039.13
+          },
+          "steady_poll": {
+            "gets": 4,
+            "wall_ms": 925.74
+          }
+        },
+        {
+          "delivery": {
+            "gets": 6,
+            "wall_ms": 1058.12
+          },
+          "steady_poll": {
+            "gets": 4,
+            "wall_ms": 946.86
+          }
+        },
+        {
+          "delivery": {
+            "gets": 6,
+            "wall_ms": 1049.3
+          },
+          "steady_poll": {
+            "gets": 4,
+            "wall_ms": 932.83
+          }
+        }
+      ],
+      "median": {
+        "delivery": {
+          "gets": 6,
+          "wall_ms": 1049.3
+        },
+        "steady_poll": {
+          "gets": 4,
+          "wall_ms": 932.83
+        }
+      }
+    },
+    {
+      "version": "baseline",
+      "historical_issues": 16,
+      "samples": [
+        {
+          "delivery": {
+            "gets": 23,
+            "wall_ms": 1869.75
+          },
+          "steady_poll": {
+            "gets": 19,
+            "wall_ms": 1493.86
+          }
+        },
+        {
+          "delivery": {
+            "gets": 23,
+            "wall_ms": 1875.13
+          },
+          "steady_poll": {
+            "gets": 19,
+            "wall_ms": 1480.53
+          }
+        },
+        {
+          "delivery": {
+            "gets": 23,
+            "wall_ms": 1869.21
+          },
+          "steady_poll": {
+            "gets": 19,
+            "wall_ms": 1440.95
+          }
+        }
+      ],
+      "median": {
+        "delivery": {
+          "gets": 23,
+          "wall_ms": 1869.75
+        },
+        "steady_poll": {
+          "gets": 19,
+          "wall_ms": 1480.53
+        }
+      }
+    },
+    {
+      "version": "candidate",
+      "historical_issues": 16,
+      "samples": [
+        {
+          "delivery": {
+            "gets": 6,
+            "wall_ms": 1264.73
+          },
+          "steady_poll": {
+            "gets": 4,
+            "wall_ms": 1060.89
+          }
+        },
+        {
+          "delivery": {
+            "gets": 6,
+            "wall_ms": 1255.61
+          },
+          "steady_poll": {
+            "gets": 4,
+            "wall_ms": 1099.24
+          }
+        },
+        {
+          "delivery": {
+            "gets": 6,
+            "wall_ms": 1257.47
+          },
+          "steady_poll": {
+            "gets": 4,
+            "wall_ms": 1057.38
+          }
+        }
+      ],
+      "median": {
+        "delivery": {
+          "gets": 6,
+          "wall_ms": 1257.47
+        },
+        "steady_poll": {
+          "gets": 4,
+          "wall_ms": 1060.89
+        }
+      }
+    },
+    {
+      "version": "baseline",
+      "historical_issues": 100,
+      "samples": [
+        {
+          "delivery": {
+            "gets": 110,
+            "wall_ms": 5968.32
+          },
+          "steady_poll": {
+            "gets": 104,
+            "wall_ms": 4434.73
+          }
+        },
+        {
+          "delivery": {
+            "gets": 110,
+            "wall_ms": 6014.06
+          },
+          "steady_poll": {
+            "gets": 104,
+            "wall_ms": 4445.87
+          }
+        },
+        {
+          "delivery": {
+            "gets": 110,
+            "wall_ms": 6089.69
+          },
+          "steady_poll": {
+            "gets": 104,
+            "wall_ms": 4459.6
+          }
+        }
+      ],
+      "median": {
+        "delivery": {
+          "gets": 110,
+          "wall_ms": 6014.06
+        },
+        "steady_poll": {
+          "gets": 104,
+          "wall_ms": 4445.87
+        }
+      }
+    },
+    {
+      "version": "candidate",
+      "historical_issues": 100,
+      "samples": [
+        {
+          "delivery": {
+            "gets": 8,
+            "wall_ms": 2686.82
+          },
+          "steady_poll": {
+            "gets": 5,
+            "wall_ms": 2064.23
+          }
+        },
+        {
+          "delivery": {
+            "gets": 8,
+            "wall_ms": 2734.26
+          },
+          "steady_poll": {
+            "gets": 5,
+            "wall_ms": 2599.06
+          }
+        },
+        {
+          "delivery": {
+            "gets": 8,
+            "wall_ms": 3083.19
+          },
+          "steady_poll": {
+            "gets": 5,
+            "wall_ms": 2168.36
+          }
+        }
+      ],
+      "median": {
+        "delivery": {
+          "gets": 8,
+          "wall_ms": 2734.26
+        },
+        "steady_poll": {
+          "gets": 5,
+          "wall_ms": 2168.36
+        }
+      }
+    }
+  ]
+}

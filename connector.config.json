@@ -5,7 +5,7 @@
   "api_base": "https://api.github.com",
   "repository": "Kirrito-k423/AIConnector-Relay",
   "token_env": "AICONNECTOR_GITHUB_TOKEN",
-  "poll_seconds": 60,
+  "poll_seconds": 10,
   "write_interval_seconds": 3,
   "max_pages": 10,
   "authors": {

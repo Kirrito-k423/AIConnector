@@ -1,0 +1,7 @@
+@echo off
+setlocal EnableExtensions DisableDelayedExpansion
+set "AIC_ROOT=%~dp0"
+set "AIC_CONNECTOR_SHA=__SERVICE_CONNECTOR_SHA__"
+set "AIC_INSTALL_SHA=__SERVICE_INSTALL_SHA__"
+powershell.exe -NoLogo -NoProfile -Command "$env:PSModulePath=$PSHOME+'\Modules'; $ErrorActionPreference='Stop'; try { $files=@(@{path=(Join-Path $env:AIC_ROOT 'Connector.ps1');sha=$env:AIC_CONNECTOR_SHA},@{path=(Join-Path $env:AIC_ROOT 'service\install-windows.ps1');sha=$env:AIC_INSTALL_SHA}); foreach($f in $files){if($f.sha -match '^[a-f0-9]{64}$' -and (Get-FileHash -LiteralPath $f.path -Algorithm SHA256).Hash -ne $f.sha){throw 'CHECKSUM_MISMATCH'}}; $policy=Get-ExecutionPolicy; if($policy -eq 'AllSigned' -or $policy -eq 'Restricted'){Write-Output ('EXECUTION_POLICY_BLOCKED: '+$policy);exit 3}; $marked=@($files | Where-Object { (Get-Content -LiteralPath $_.path -Stream Zone.Identifier -ErrorAction SilentlyContinue) -match '^ZoneId=[34]$' }); if($policy -eq 'RemoteSigned' -and $marked.Count -gt 0){if((Get-ExecutionPolicy -Scope MachinePolicy) -ne 'Undefined' -or (Get-ExecutionPolicy -Scope UserPolicy) -ne 'Undefined'){throw 'ORGANIZATION_POLICY_REQUIRES_ADMIN'};Write-Output 'Package script checksums match. If you trust this package, remove download marks from these two scripts only. Execution policy is unchanged.';if((Read-Host 'Trust the downloaded package? [Y/N]') -ne 'Y'){exit 3};foreach($f in $marked){Unblock-File -LiteralPath $f.path}};exit 0 } catch { Write-Output $_.Exception.Message;exit 4 }"
+exit /b %ERRORLEVEL%
