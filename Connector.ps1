@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Watch','Serve','Flush','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -29,6 +29,7 @@ $script:HttpClient=$null
 $script:SavedStateHash=''; $script:ProjectionHashes=@{}; $script:ProjectionWrites=0
 $script:DeferUploadVerification=$false
 $script:Resident=$false; $script:SnapshotCache=$null; $script:SnapshotStateHash=''
+$script:MetadataCache=@{}; $script:MetadataCredential=''
 if (-not $OperationId) { $OperationId=[Guid]::NewGuid().ToString('N') }
 function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
     # No request headers, query strings, bodies, credentials, or free-form errors.
@@ -314,6 +315,7 @@ function Invoke-WireHttp {
         else { $category=Error-Code $_; if ($category -in @('CONNECTION_REFUSED','CONNECTION_RESET','DNS_ERROR','TLS_ERROR','HTTP_TIMEOUT')) { $result.status=$category } else { $result.status = 'NETWORK_ERROR' } }
     } finally {
         $sw.Stop(); $result.elapsed_ms = $sw.ElapsedMilliseconds
+        if ($result.status -cne 'HTTP_OK') { $script:MetadataCache.Clear() }
         $script:WireDiagnostic=@{category=$result.status;http=$result.http}
         if ($null -ne $response) { $response.Dispose() }
         if ($null -ne $req) { $req.Dispose() }
@@ -343,6 +345,7 @@ function Cooldown($R) {
 }
 function Require-Response($R) {
     if ($R.status -ceq 'HTTP_OK') { return }
+    $script:MetadataCache.Clear()
     if (-not $script:Relay -or (Limited $R)) { $script:State.failures++ }
     $script:State.last_error=$R.status+'_'+$R.http
     if (Limited $R) { $script:State.next_poll=Cooldown $R }
@@ -452,11 +455,27 @@ function Display-Text($Text,[int]$Limit=512) {
 function Relay-Descriptor {
     return @{schema='aiconnector.relay.v1';repository=$script:C.repository;namespace=$script:C.namespace;layout='task-issues-run-releases-v1';protocol='aiconnector.task.v1';max_artifact_bytes=5242879}
 }
+function Cached-Metadata([string]$Name) {
+    if (-not $script:Resident) { return $null }
+    $row=Get-Field $script:MetadataCache $Name
+    if ($row -and (Epoch) -lt $row.expires_at) { Trace-Event 'metadata_cached'; return $row.value }
+    $script:MetadataCache.Remove($Name); return $null
+}
+function Cache-Metadata([string]$Name,$Value) {
+    # Successful validation only; no disk persistence, negative entries or TTL extension on hits.
+    if ($script:Resident) {
+        foreach ($id in @($script:MetadataCache.Keys)) { if ($script:MetadataCache[$id].expires_at -le (Epoch)) { $script:MetadataCache.Remove($id) } }
+        if ($script:MetadataCache.Count -ge 128) { $old=@($script:MetadataCache.Keys | Sort-Object @{Expression={$script:MetadataCache[$_].expires_at}})[0]; $script:MetadataCache.Remove($old) }
+        $script:MetadataCache[$Name]=@{expires_at=((Epoch)+30);value=$Value}
+    }
+}
 function Assert-Relay {
+    if (Cached-Metadata 'manifest') { return }
     $r=Api ($script:RepoPath+'/contents/.aiconnector/relay.json'); Require-Response $r
     Need ($r.json.encoding -ceq 'base64') 'INVALID_RELAY_MANIFEST'
     try { $d=Parse ($script:Utf8.GetString([Convert]::FromBase64String($r.json.content))) } catch { Fail 'INVALID_RELAY_MANIFEST' }
     Need ((Canonical $d) -ceq (Canonical (Relay-Descriptor))) 'RELAY_MANIFEST_MISMATCH'
+    Cache-Metadata 'manifest' $true
 }
 function Metadata-Body([string]$Marker,[string]$Text,$Metadata) {
     return $Marker+"`n`n"+$Text+"`n`n"+'```json'+"`n"+(Canonical $Metadata)+"`n"+'```'
@@ -497,7 +516,7 @@ function Read-Routes {
         $routes[$m.task_id]=$route
     }
     foreach ($id in $script:State.routes.Keys) { Need ($routes.ContainsKey($id)) 'TASK_ISSUE_MISSING_OR_CHANGED' }
-    $script:State.routes=$routes; Save
+    $script:State.routes=$routes; Save; Cache-Metadata 'routes' $routes
     return $routes
 }
 function Read-Capabilities {
@@ -563,7 +582,8 @@ function Provision([string]$Id,[string]$Path,$Body) {
     return $true
 }
 function Ensure-TaskIssue($E) {
-    $routes=Read-Routes; $id='issue:'+ $E.task_id
+    $routes=Cached-Metadata 'routes'; if (-not $routes -or -not $routes.ContainsKey($E.task_id)) { $routes=Read-Routes }
+    $id='issue:'+ $E.task_id
     if ($routes.ContainsKey($E.task_id)) {
         if ($script:State.provisions.ContainsKey($id)) { $script:State.provisions[$id].status='confirmed'; Save }
         return $routes[$E.task_id]
@@ -591,8 +611,9 @@ function Release-Metadata($E) { return @{schema='aiconnector.run-release.v1';nam
 function Release-Link($E) {
     return 'https://github.com/'+$script:C.repository+'/releases/tag/'+(Run-Tag $E)
 }
-function Ensure-RunRelease($E) {
+function Ensure-RunRelease($E,[bool]$IdentityCache=$false) {
     $tag=Run-Tag $E; $id='release:'+(Run-Key $E)
+    if ($IdentityCache) { $cached=Cached-Metadata $id; if ($cached) { return $cached } }
     $r=Api ($script:RepoPath+'/releases/tags/'+$tag)
     if ($r.http -eq 404) {
         $text='运行：`'+(Run-Key $E)+'`。'+"`n`n"+'任务记录： https://github.com/'+$script:C.repository+'/issues?q='+[Uri]::EscapeDataString('[AIC]['+$E.task_id+']')+"`n`n"+
@@ -614,6 +635,7 @@ function Ensure-RunRelease($E) {
         Need (-not $previous -or $previous -ceq $digest) 'RUN_RELEASE_CHANGED'
     } else { $script:State.provisions[$id]=@{http=200} }
     $script:State.provisions[$id].status='confirmed'; $script:State.provisions[$id].digest=$digest; Save
+    Cache-Metadata $id $release
     return $release
 }
 function Event-Body($E) {
@@ -894,6 +916,7 @@ function Auto-Transitions {
         try {
             if ($kind -eq 'receipt' -and $run.result.outcome -eq 'succeeded') { Need ($run.result.actual_revision -ceq $run.task.code.revision) 'RESULT_REVISION_MISMATCH' }
             $null=In-Scope ('artifact:'+$run.key) { Fetch-Artifacts $artifacts }
+            if ($kind -eq 'accepted') { Trace-Event 'acceptance_inputs_verified' @{key=$run.key} }
             $script:State.artifact_errors.Remove($run.key)
             Queue (New-Event $parent $kind $parent.event_id @{status=$kind})
         } catch {
@@ -910,7 +933,10 @@ function Flush-One([bool]$Reconciled=$false) {
     $runs=Runs; $manifestChecked=$false
     foreach ($id in @($script:State.outbox.Keys | Sort-Object @{Expression={
         $kind=$script:State.outbox[$_].event.kind
-        if ($kind -in @('result','receipt','started')) { 0 } else { 1 }
+        $item=$script:State.outbox[$_]
+        $priority=1; if ($kind -in @('accepted','started')) { $priority=0 }
+        # Old results/tasks eventually outrank new controls; never starve a delivery.
+        $priority-[Math]::Floor(((Epoch)-(Get-Field $item 'queued_at' (Epoch)))/30)
     }},@{Expression={Get-Field $script:State.outbox[$_] 'last_attempt_at' 0}},@{Expression={Get-Field $script:State.outbox[$_] 'queued_at' 0}},@{Expression={$_}})) {
         $item=$script:State.outbox[$id]; $e=$item.event; $key=Run-Key $e
         if ($item.status -notin @('pending','rate_limited','uncertain')) { continue }
@@ -935,7 +961,7 @@ function Flush-One([bool]$Reconciled=$false) {
                 if (-not $manifestChecked) { Assert-Relay; $manifestChecked=$true }
                 $route=Ensure-TaskIssue $e; if ($null -eq $route) { return }
                 if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
-                $release=Ensure-RunRelease $e; if ($null -eq $release) { return }
+                $release=Ensure-RunRelease $e $true; if ($null -eq $release) { return }
                 if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
                 $commentsPath=$script:RepoPath+'/issues/'+$route.number+'/comments'
             }
@@ -960,7 +986,8 @@ function Flush-One([bool]$Reconciled=$false) {
 function Flush-Batch {
     # Preserve parent order and persisted write pacing. Never wait out backoff.
     $watch=[Diagnostics.Stopwatch]::StartNew(); $sent=0
-    for ($n=0;$n -lt 4;$n++) {
+    $limit=4; if ($script:Resident) { $limit=1 }
+    for ($n=0;$n -lt $limit;$n++) {
         if ($n -gt 0) {
             $delay=[Math]::Max(0,(Get-Field $script:State 'post_not_before' 0)-(Epoch))
             if ($delay -gt 1 -or $watch.Elapsed.TotalSeconds+$delay -ge 5) { break }
@@ -1037,7 +1064,10 @@ function Poll-Once {
         Audit-OneRoute
     } else { Reconcile-DeliveryComments }
     $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
-    Auto-Transitions; $null=Flush-One $true
+    Auto-Transitions
+    # Return discovery/admission state before a slow write. The service drives
+    # Flush separately; the standalone Poll/Watch contract still sends one event.
+    if (-not $script:Resident) { $null=Flush-One $true }
     if (-not $script:State.last_error) { $script:State.failures=0 }
     return Snapshot
 }
@@ -1055,7 +1085,7 @@ function Read-UploadAssets($Release,$Row) {
         return ,$found
     } catch { Reset-DeliveryAbsence $Row; Save; throw }
 }
-function Upload-Zip([string]$Path) {
+function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
     Need ($script:Token -and $script:C.provider -eq 'github') 'GITHUB_TOKEN_REQUIRED_FOR_UPLOAD'
     Need ($script:State.next_poll -le (Epoch)) 'CHANNEL_COOLDOWN'
     $info=[IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
@@ -1069,8 +1099,13 @@ function Upload-Zip([string]$Path) {
         $identity=Identity-FromKey $Key; Assert-Relay
         if ($Node -eq 'windows-inner') { Need ($script:State.claims.ContainsKey($Key)) 'RESULT_UPLOAD_REQUIRES_CLAIM' }
         $role='input'; if ($Node -eq 'windows-inner') { $role='result' }
+        if ($Diagnostics) {
+            Need ($Node -ceq 'windows-inner' -and (Get-Field (Runs) $Key).phase -in @('result','receipt')) 'DIAGNOSTICS_REQUIRE_PUBLISHED_RESULT'
+            $role='diagnostics'
+        }
         $name=$role+'--'+$Node+'--'+$sha+'.zip'; $uploadKey='upload:'+$Key+':'+$sha
     }
+    Need (-not $Diagnostics -or $script:Relay) 'DIAGNOSTICS_REQUIRE_RELAY'
     if (-not $script:State.uploads.ContainsKey($uploadKey)) { $script:State.uploads[$uploadKey]=@{status='pending';bytes=$bytes.Length;name=$name;manifest=$null;http=0}; Save }
     $row=$script:State.uploads[$uploadKey]
     if ($row.status -eq 'confirmed') { return $row.manifest }
@@ -1122,7 +1157,7 @@ function Upload-Zip([string]$Path) {
     # An ambiguous response, 422, or existing asset still requires byte equality.
     $digest=[string](Get-Field $asset 'digest')
     Need (-not $digest -or $digest -ceq ('sha256:'+$sha)) 'ARTIFACT_HASH_MISMATCH'
-    $deferred=$script:DeferUploadVerification -and $script:Relay -and $Node -ceq 'windows-inner' -and $freshUpload
+    $deferred=$script:DeferUploadVerification -and $script:Relay -and $Node -ceq 'windows-inner' -and $freshUpload -and -not $Diagnostics
     Trace-Event 'upload_api_confirmed' @{bytes=$bytes.Length}
     if (-not $deferred) { $null=Fetch-Artifacts @($manifest) $true }
     $row.public_verification='sender_verified'; if ($deferred) { $row.public_verification='receiver_required' }
@@ -1149,7 +1184,7 @@ function Local-Action {
         }
         Queue $e; return @{ok=$true;key=$key;event_id=$e.event_id;state='queued'}
     }
-    if ($Action -eq 'Upload') { return In-Scope ('upload:'+$Key) { Upload-Zip $File } }
+    if ($Action -in @('Upload','UploadDiagnostics')) { return In-Scope ('upload:'+$Key) { Upload-Zip $File ($Action -ceq 'UploadDiagnostics') } }
     if ($Action -eq 'RetryRejected') {
         $row=$null
         if ($script:State.outbox.ContainsKey($Key)) { $row=$script:State.outbox[$Key] }
@@ -1199,16 +1234,19 @@ function Serve-Requests {
             $request=Parse $line; $requestId=[string]$request.operation_id
             Need ($requestId -cmatch '^[a-zA-Z0-9_-]{1,96}$') 'INVALID_OPERATION_ID'
             $script:OperationId=$requestId
-            Need ($request.action -cin @('Submit','Poll','Flush','Status','Claim','Complete','Upload','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
+            Need ($request.action -cin @('Submit','Poll','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
             $script:Action=[string]$request.action; $script:OperationId=$requestId
             $script:Key=[string]$request.key; $script:File=[string]$request.file; $script:ClaimOwner=[string]$request.claim_owner
             Need ($script:Key.Length -le 300 -and $script:File.Length -le 4096 -and $script:ClaimOwner -cmatch '^(|[a-f0-9]{48})$') 'INVALID_TRANSPORT_ARGUMENT'
             $script:Token=[string]$request.token; $script:IoScope='action:'+$Action+':'+$Key
+            $credential=Hash $script:Token
+            if ($script:MetadataCredential -cne $credential) { $script:MetadataCache.Clear(); $script:MetadataCredential=$credential }
             $script:WireDiagnostic=$null; $script:DeferUploadVerification=$true
             Trace-Event 'action_started'
             if ($Action -eq 'Poll') { $value=Poll-Once } else { $value=Local-Action }
             [Console]::WriteLine((Json @{id=$requestId;ok=$true;value=$value}))
         } catch {
+            $script:MetadataCache.Clear()
             $code=Error-Code $_; $script:State.last_error=$code; Save
             $retry=Get-Field $script:State 'next_poll' 0
             if ($_.Exception.Data.Contains('retry_at')) { $retry=[Math]::Max($retry,[long]$_.Exception.Data['retry_at']) }

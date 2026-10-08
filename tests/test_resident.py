@@ -5,6 +5,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 import unittest
 from urllib.parse import urlparse
 
@@ -29,11 +30,11 @@ class Resident:
         ready = self.lines.get(timeout=15)
         assert ready and ready.get('ready') is True, ready
 
-    def call(self, action, key='', file='', owner='', ok=True):
+    def call(self, action, key='', file='', owner='', ok=True, token=None):
         self.count += 1
         op = str(self.count)
         self.process.stdin.write(json.dumps(dict(action=action, operation_id=op, key=key,
-            file=str(file), claim_owner=owner, token='MAC_TOKEN' if self.node=='mac-outer' else 'WIN_TOKEN'))+'\n')
+            file=str(file), claim_owner=owner, token=token or ('MAC_TOKEN' if self.node=='mac-outer' else 'WIN_TOKEN')))+'\n')
         self.process.stdin.flush()
         reply = self.lines.get(timeout=30)
         assert reply and reply['id'] == op, reply
@@ -103,7 +104,7 @@ class ResidentTests(unittest.TestCase):
             manifest=r.call('Upload',key=c.key,file=path)
             self.assertFalse(any(p.startswith('/assets/') for p in c.ctx['gets']))
             c.result['artifacts']=[manifest];c.write_inputs()
-            r.call('Complete',key=c.key,file=c.resultfile);r.call('Flush')
+            r.call('Complete',key=c.key,file=c.resultfile);r.call('Flush');r.call('Flush')
         s=c.poll('mac-outer')
         self.assertEqual(s['runs'][0]['phase'],'result')
         self.assertEqual(s['runs'][0]['error'],'ARTIFACT_HASH_MISMATCH')
@@ -125,7 +126,7 @@ class ResidentTests(unittest.TestCase):
             self.assertEqual(r.call('Upload',key=c.key,file=path,ok=False)['code'],'ARTIFACT_HASH_MISMATCH')
         self.assertEqual(len(c.ctx['posts']),posts)
 
-    def test_flush_drains_ready_messages_with_a_bound_and_keeps_run_identity(self):
+    def test_flush_yields_after_one_message_and_keeps_run_identity(self):
         c=self.case;c.ready()
         before=len(c.ctx['comments'])
         with self.runtime('mac-outer') as r:
@@ -133,11 +134,64 @@ class ResidentTests(unittest.TestCase):
                 c.task['run_id']='batch-'+str(n);c.write_inputs();r.call('Submit',file=c.taskfile)
             first=r.call('Flush')
             sent=len(c.ctx['comments'])-before
-            self.assertGreater(sent,1);self.assertLessEqual(sent,4)
+            self.assertEqual(sent,1)
             self.assertEqual(sum(i['status']=='confirmed' for i in first['outbox']),sent+1)
-            r.call('Flush');r.call('Flush')
+            for _ in range(5):r.call('Flush')
         self.assertEqual(len(c.ctx['comments'])-before,6)
         self.assertEqual(len(set(i['body'] for i in c.ctx['comments'])),len(c.ctx['comments']))
+
+    def test_poll_returns_pending_acceptance_without_waiting_for_comment_write(self):
+        c=self.case;c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            before=len(c.ctx['comments']);s=r.call('Poll')
+            self.assertEqual(len(c.ctx['comments']),before)
+            self.assertEqual(s['runs'][0]['phase'],'task')
+            self.assertEqual(s['outbox'][0]['kind'],'accepted')
+            self.assertEqual(r.call('Claim',key=c.key,owner='a'*48,ok=False)['code'],'RUN_NOT_READY')
+            self.assertEqual(r.call('Flush')['runs'][0]['phase'],'accepted')
+            self.assertTrue(r.call('Claim',key=c.key,owner='a'*48)['execute'])
+
+    def test_metadata_cache_reuses_success_only_and_clears_after_failed_readback(self):
+        c=self.case;c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            r.call('Poll');c.ctx['gets'].clear();r.call('Flush')
+            first=list(c.ctx['gets']);self.assertNotIn('/repos/test/tasks/issues',first)
+            r.call('Claim',key=c.key,owner='a'*48);c.ctx['gets'].clear();r.call('Flush')
+            self.assertFalse(any('/contents/' in p or '/releases/tags/' in p or p=='/repos/test/tasks/issues' for p in c.ctx['gets']))
+            c.ctx['fail_paths']={'/repos/test/tasks/issues/comments':503}
+            r.call('Poll',ok=False);c.ctx['fail_paths']={}
+            c.result['artifacts']=[];c.write_inputs();r.call('Complete',key=c.key,file=c.resultfile)
+            c.ctx['descriptor']['namespace']='changed'
+            posts=len(c.ctx['posts']);r.call('Flush',ok=False)
+            self.assertEqual(len(c.ctx['posts']),posts)
+
+    def test_diagnostics_cannot_publish_before_result_and_never_mutate_result(self):
+        c=self.case;c.ready();c.run_cli('windows-inner','Claim','-Key',c.key)
+        with self.runtime('windows-inner') as r:
+            file=c.zip_path();posts=len(c.ctx['posts'])
+            self.assertEqual(r.call('UploadDiagnostics',key=c.key,file=file,ok=False)['code'],'DIAGNOSTICS_REQUIRE_PUBLISHED_RESULT')
+            self.assertEqual(len(c.ctx['posts']),posts)
+            r.call('Complete',key=c.key,file=c.resultfile);r.call('Flush');r.call('Flush')
+            comments=list(c.ctx['comments']);asset=r.call('UploadDiagnostics',key=c.key,file=file)
+            self.assertTrue(asset['name'].startswith('diagnostics--windows-inner--'))
+            self.assertEqual(c.ctx['comments'],comments)
+            before=len(c.ctx['posts']);self.assertEqual(r.call('UploadDiagnostics',key=c.key,file=file),asset)
+            self.assertEqual(len(c.ctx['posts']),before)
+
+    def test_metadata_cache_expires_without_sliding_and_credential_change_invalidates(self):
+        c=self.case;c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            r.call('Poll');r.call('Flush');r.call('Claim',key=c.key,owner='a'*48)
+            c.ctx['descriptor']['namespace']='changed';posts=len(c.ctx['posts'])
+            # A credential refresh invalidates even a recently confirmed entry.
+            self.assertEqual(r.call('Flush',token='NEW_WIN_TOKEN',ok=False)['code'],'RELAY_MANIFEST_MISMATCH')
+            self.assertEqual(len(c.ctx['posts']),posts)
+            c.ctx['descriptor']['namespace']=c.config['namespace'];r.call('Flush')
+            c.result['artifacts']=[];c.write_inputs();r.call('Complete',key=c.key,file=c.resultfile)
+            c.ctx['descriptor']['namespace']='changed';posts=len(c.ctx['posts'])
+            time.sleep(31)
+            self.assertEqual(r.call('Flush',ok=False)['code'],'RELAY_MANIFEST_MISMATCH')
+            self.assertEqual(len(c.ctx['posts']),posts)
 
 
 if __name__=='__main__': unittest.main()

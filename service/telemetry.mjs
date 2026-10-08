@@ -46,3 +46,24 @@ export function diagnostics(c,ledger,snapshot,key='') {
     channel:{last_poll:snapshot.last_poll,next_poll:snapshot.next_poll,scopes:snapshot.scopes,sync:snapshot.sync},
     events:selected.slice(-2000),truncated:selected.length>2000};
 }
+
+export function deliveryDiagnostics(c,ledger,snapshot,key){
+  const value=diagnostics(c,ledger,snapshot,key),job=(ledger.jobs||{})[key];
+  const stamps={};
+  for(const [name,time]of Object.entries(job?.timings||{})){
+    if(/^[a-z_]+_at$/.test(name)&&typeof time==='string'&&/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(time))stamps[name]=time;
+    else if(name==='packaging_ms'&&Number.isFinite(time))stamps[name]=time;
+  }
+  const allowed=new Set([...fields,'schema','at','source','kind','scope','event_id','event_kind','method','endpoint','request_id','http','category','confirmed_at','files_written','events_sent']);
+  const events=value.events.map(event=>Object.fromEntries(Object.entries(event).filter(([name,item])=>{
+    if(!allowed.has(name))return false;
+    if(typeof item==='number')return Number.isFinite(item);
+    if(typeof item!=='string')return false;
+    if(name==='key')return keyPattern.test(item);
+    return /^[a-zA-Z0-9_:/.+-]{1,240}$/.test(item);
+  })));
+  return {schema:'aiconnector.delivery-diagnostics.v1',key,node:c.node,generated_at:value.generated_at,
+    scope:'Windows local clock; result publication already observed. This frozen sidecar predates its own upload and may predate Mac receipt.',
+    timings:stamps,delivery_attempts:job?.delivery_attempts||0,claim_attempts:job?.claim_attempts||0,
+    events,truncated:value.truncated,retention:value.retention};
+}

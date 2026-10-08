@@ -43,9 +43,10 @@ export class Connector {
       } finally {if(['Claim','Complete','Submit'].includes(action))this.dirty=true;this.activity={...this.activity,running:false,milliseconds:Date.now()-started};timing(this.c.dataDir,'action_finished',{operation_id:operation,action,key,elapsed_ms:Date.now()-started,total_ms:Date.now()-queued});if(temporary)fs.unlinkSync(temporary);}
     };
     return new Promise((resolve,reject)=>{
-      // Finish deliveries (including their parent events) before background scans.
-      // Aging still prevents a busy result stream from starving discovery.
-      const priority={Status:0,Complete:0,Flush:0,Upload:1,Claim:2,Submit:3,Poll:5,Advertise:6}[action]??8;
+      // Free Pi slots need discovery and owned claims before bulk transfers.
+      // Ten-second aging bounds starvation; an active HTTP call is not replayed
+      // or preempted. Flush yields after one comment in the resident runtime.
+      const priority={Status:0,Complete:0,Claim:0,Flush:1,Submit:2,Poll:3,Upload:4,Advertise:6,UploadDiagnostics:8}[action]??8;
       this.queue.push({execute,resolve,reject,priority,at:queued});void this.drain();
     });
   }

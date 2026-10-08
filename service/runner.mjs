@@ -7,7 +7,7 @@ import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {validateWatchProfile} from './watch.mjs';
 import {Resources} from './resources.mjs';
 import {checkRequirements,capabilities,VERSION} from './capabilities.mjs';
-import {timing} from './telemetry.mjs';
+import {timing,deliveryDiagnostics} from './telemetry.mjs';
 
 export class Runner {
   constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});this.resources=new Resources(config,ledger,persist);this.pending=new Map();
@@ -44,24 +44,49 @@ export class Runner {
     need(task.invocation.arguments.length===0||p.allowTaskArguments===true,'TASK_ARGUMENTS_DISABLED');return p;
   }
   async tick(snapshot) {
-    for(const job of Object.values(this.jobs))await this.reconcile(job,snapshot);
+    for(const job of Object.values(this.jobs)){await this.reconcile(job,snapshot);this.exportDiagnostics(job,snapshot);}
     if(!this.c.runner.enabled||this.c.node!=='windows-inner')return;
     if(!(this.secrets.githubToken||process.env[this.c.connector.token_env])){this.ledger.runner_error='GITHUB_CREDENTIAL_REQUIRED';return;}
     // Stable admission time controls scheduling; dashboard activity sorting is separate.
     for(const row of snapshot.runs||[]){
       if(row.phase!=='accepted'||row.error||this.jobs[row.key])continue;
-      this.jobs[row.key]={key:row.key,dir:path.join(this.c.dataDir,'jobs',sha(row.key)),state:'waiting',created_at:now(),sequence:this.ledger.next_sequence=(this.ledger.next_sequence||0)+1,error:''};this.persist();
+      const admitted=now();
+      this.jobs[row.key]={key:row.key,dir:path.join(this.c.dataDir,'jobs',sha(row.key)),state:'waiting',created_at:admitted,diagnostics_enabled:true,timings:{accepted_observed_at:admitted,admitted_at:admitted},sequence:this.ledger.next_sequence=(this.ledger.next_sequence||0)+1,error:''};
+      timing(this.c.dataDir,'run_admitted',{key:row.key});this.persist();
     }
     for(const job of Object.values(this.jobs).filter(j=>j.state==='waiting').sort((a,b)=>(a.sequence||0)-(b.sequence||0))){
-      if(this.slots()>=(this.c.runner.maxConcurrentRuns??1))break;
+      if(this.slots()>=(this.c.runner.maxConcurrentRuns??1)){this.waiting(job,'CAPACITY_BUSY');continue;}
       if((job.next_attempt||0)>Date.now()||this.pending.has('start:'+job.key))continue;
       if(job.claim_owner&&!this.retryableClaim(job)){job.state='unknown';job.error='CLAIM_LAUNCH_STATE_UNKNOWN';this.persist();continue;}
       const row=(snapshot.runs||[]).find(r=>r.key===job.key&&!r.error&&(r.phase==='accepted'||r.phase==='started'&&this.retryableClaim(job)));if(!row)continue;
       const profile=this.c.runner.profiles[row.task.environment.target];
       const conflict=this.resources.conflict(job,this.resources.keys(profile||{},job.key));
-      if(conflict){job.wait_reason='RESOURCE_BUSY';job.wait_owner=conflict.key;continue;}
+      if(conflict){this.waiting(job,'RESOURCE_BUSY',conflict.key);continue;}
       job.state='reserving';job.resources??={keys:this.resources.keys(profile||{},job.key),state:'reserving'};this.persist();this.schedule('start:'+job.key,()=>this.launch(job,row));
     }
+  }
+  waiting(job,reason,owner){
+    if(job.wait_reason===reason&&job.wait_owner===owner)return;
+    job.wait_reason=reason;job.wait_owner=owner;job.timings??={};job.timings.wait_changed_at=now();
+    timing(this.c.dataDir,'scheduler_wait',{key:job.key,code:reason});this.persist();
+  }
+  exportDiagnostics(job,snapshot){
+    // Only runs admitted by this version opt in. Never backfill history or
+    // modify the immutable result ZIP; this low-priority sidecar follows result.
+    const row=(snapshot.runs||[]).find(r=>r.key===job.key);
+    if(!job.diagnostics_enabled||!['result','receipt'].includes(row?.phase)||row.error||job.delivery_diagnostics?.artifact||this.pending.has('diagnostics:'+job.key)||Date.now()<(job.delivery_diagnostics?.retry_at||0))return;
+    if([...this.pending.keys()].some(k=>k.startsWith('diagnostics:')))return;
+    this.schedule('diagnostics:'+job.key,async()=>{
+      job.timings??={};job.timings.result_published_observed_at??=now();
+      const file=path.join(job.dir,'delivery-diagnostics.zip');
+      job.delivery_diagnostics??={};job.delivery_diagnostics.state='uploading';this.persist();
+      try{
+        // Freeze bytes before upload, so lost replies/restarts reconcile one SHA.
+        if(!fs.existsSync(file))atomic(file,zipSync({'delivery-diagnostics.json':strToU8(JSON.stringify(deliveryDiagnostics(this.c,this.ledger,snapshot,job.key),null,2))}));
+        job.delivery_diagnostics.artifact=await this.connector.call('UploadDiagnostics',{key:job.key,file});job.delivery_diagnostics.state='published';job.delivery_diagnostics.published_at=now();delete job.delivery_diagnostics.error;this.persist();
+      }
+      catch(e){job.delivery_diagnostics.state='retrying';job.delivery_diagnostics.error=cleanError(e);job.delivery_diagnostics.retry_at=Math.max(Date.now()+60000,e.retryAt||0);this.persist();}
+    });
   }
   async launch(job,row) {
       let profile,agent,preflightError='';
@@ -73,26 +98,30 @@ export class Runner {
       }catch(e){preflightError=cleanError(e);}
       const dir=job.dir;
       try{
+        job.timings??={};job.timings.resource_acquire_started_at=now();timing(this.c.dataDir,'resource_acquire_started',{key:job.key});this.persist();
         if(!preflightError&&!await this.resources.acquire(job,profile)){
-          job.state='waiting';job.next_attempt=Date.now()+5000;this.persist();return;
+          job.state='waiting';job.next_attempt=Date.now()+5000;this.waiting(job,'RESOURCE_BUSY');this.persist();return;
         }
+        if(!preflightError){job.timings.resource_acquired_at=now();timing(this.c.dataDir,'resource_acquired',{key:job.key});}
       }catch(e){preflightError=cleanError(e);}
       // Persist the owner before contacting the transport. Reuse it across
       // lost replies/restarts; a fresh owner cannot take over an existing claim.
       job.claim_owner??=id();job.claim_attempts=(job.claim_attempts||0)+1;
       job.state='claiming';delete job.wait_reason;delete job.wait_owner;this.persist();
       try {
+        job.timings.claim_queued_at=now();timing(this.c.dataDir,'claim_queued',{key:job.key});this.persist();
         // The durable transport must revalidate ownership on every retry.
         const claim=await this.connector.call('Claim',{key:row.key,claimOwner:job.claim_owner});
         if(!claim.execute||claim.claim_owner!==job.claim_owner){job.claim_rejected=true;job.state='unknown';job.error='CLAIM_OWNERSHIP_UNKNOWN';this.persist();return;}
         job.claimed_at=now();job.claim_event_id=claim.claim_event_id;job.error='';delete job.next_attempt;this.persist();
+        job.timings.claim_confirmed_at=job.claimed_at;timing(this.c.dataDir,'claim_confirmed',{key:job.key});
         if(preflightError){this.blocked(job,preflightError);return;}
         fs.mkdirSync(path.join(dir,'inputs'),{recursive:true,mode:0o700});
         for(const artifact of claim.task.artifacts) {
           const src=path.join(this.c.stateDir,'artifacts',artifact.sha256+'.zip'), bytes=fs.readFileSync(src);
           need(bytes.length===artifact.bytes&&sha(bytes)===artifact.sha256,'INPUT_HASH_MISMATCH');atomic(path.join(dir,'inputs',artifact.name),bytes);
         }
-        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,reservation:job.resources?.remote,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
+        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,startupTimings:job.timings,reservation:job.resources?.remote,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
         job.state='launching';job.claimed_at=now();this.persist();
         const proxy=this.c.runner.proxy||'system';const modelEnv={};
         if(proxy!=='direct')for(const name of ['HTTP_PROXY','HTTPS_PROXY'])if(proxy!=='system'||process.env[name])modelEnv[name]=proxy==='system'?process.env[name]:proxy;
@@ -111,7 +140,7 @@ export class Runner {
         });
         child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
-        job.pid=child.pid;job.state='running';this.persist();child.unref();this.ledger.runner_error='';return;
+        job.pid=child.pid;job.state='running';job.timings.worker_spawned_at=now();timing(this.c.dataDir,'worker_spawned',{key:job.key});this.persist();child.unref();this.ledger.runner_error='';return;
       }catch(e){job.diagnostic=e.diagnostic;if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);job.next_attempt=Math.max(job.next_attempt||0,e.retryAt||0);this.persist();return;}
   }
   async reconcile(job,snapshot) {

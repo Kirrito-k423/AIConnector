@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {timing,diagnostics,readTiming} from '../../service/telemetry.mjs';
+import {timing,diagnostics,deliveryDiagnostics,readTiming} from '../../service/telemetry.mjs';
 import {Connector} from '../../service/connector.mjs';
 
 test('timing correlates queue wait and request work without exporting bodies or headers',async()=>{
@@ -27,6 +27,18 @@ test('timing correlates queue wait and request work without exporting bodies or 
     assert.equal(new Set(result.events.map(e=>e.operation_id)).size,1);
     assert.throws(()=>diagnostics(c,{jobs:{}},{},'../secret'),/INVALID_RUN_ID/);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('public delivery sidecar exports only bounded correlation fields and times',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC safe export '));
+ try{
+   const key='sample/1/run-1',c={dataDir:dir,stateDir:dir,node:'windows-inner'};
+   fs.writeFileSync(path.join(dir,'service-timing.jsonl'),JSON.stringify({schema:'aiconnector.timing.v1',at:new Date().toISOString(),key,kind:'http_finished',endpoint:'asset',method:'POST',elapsed_ms:42,headers:'SECRET_TOKEN',url:'https://private',category:'PRIVATE SECRET TOKEN'})+'\n');
+   const result=deliveryDiagnostics(c,{jobs:{[key]:{dir:'/private/path',worker:{secret:'SECRET_TOKEN'},timings:{claim_queued_at:new Date().toISOString(),bad_at:'SECRET_TOKEN',packaging_ms:5},claim_attempts:1}}},{scopes:{secret:'SECRET_TOKEN'}},key);
+   assert.equal(result.timings.packaging_ms,5);assert.ok(result.timings.claim_queued_at);
+   assert.equal(result.events[0].elapsed_ms,42);assert.ok(!JSON.stringify(result).includes('SECRET'));
+   assert.ok(!JSON.stringify(result).includes('/private'));
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 
 test('bounded timing export survives rotation and ignores an unfinished last line',()=>{

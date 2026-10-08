@@ -211,7 +211,7 @@ export async function work(dir,secrets={}) {
       'report.json':strToU8(JSON.stringify(report||{},null,2)),
       'actions.json':strToU8(JSON.stringify(maintenance?.publicActions()||[],null,2)),
       'inputs.json':strToU8(JSON.stringify(inputs?.state||{initialized:false},null,2))};
-    entries['worker-timing.json']=strToU8(JSON.stringify({schema:'aiconnector.worker-timing.v1',key:spec.key,worker_started_at:status.started_at,agent_started_at:status.agent_started_at,agent_ended_at:status.agent_ended_at,packaging_started_at:status.packaging_started_at,events:status.events,delivery_timing:'Export endpoint diagnostics after delivery; this immutable ZIP predates upload and receipt.'},null,2));
+    entries['worker-timing.json']=strToU8(JSON.stringify({schema:'aiconnector.worker-timing.v1',key:spec.key,startup_timings:spec.startupTimings||{},worker_started_at:status.started_at,agent_started_at:status.agent_started_at,agent_ended_at:status.agent_ended_at,packaging_started_at:status.packaging_started_at,events:status.events,delivery_timing:'Post-publication diagnostics are a separate diagnostics--windows-inner--SHA256.zip Release asset; this immutable result ZIP predates upload and receipt.'},null,2));
     let total=0;
     for(const name of spec.profile.outputs||[]) {
       need(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}$/.test(name)&&!Object.hasOwn(entries,name),'INVALID_OUTPUT_NAME');

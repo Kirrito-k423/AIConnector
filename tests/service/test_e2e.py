@@ -13,6 +13,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 import zipfile
 import io
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -150,7 +151,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(row['result']['metrics']['measurement_at'],'2026-09-27T11:25:50.600Z')
         self.assertEqual(row['result']['outcome'],'succeeded');self.assertTrue(row['result']['execution']['started_at'])
         self.assertEqual(len(row['timeline']),5);self.assertEqual(len(self.model.calls),2)
-        assets=self.ctx['assets'];self.assertEqual(len(assets),2)
+        assets=self.ctx['assets'];self.assertGreaterEqual(len(assets),2)
         result=next(b for p,b in assets.items() if '/result--' in p)
         self.assertLess(len(result),5242880)
         with zipfile.ZipFile(io.BytesIO(result))as z:
@@ -162,6 +163,16 @@ class ServiceTests(unittest.TestCase):
             for key in ('summary','metrics','agent','model_report'):
                 self.assertEqual(embedded[key],row['result'][key],key)
         self.until(lambda:self.job('confirmed'))
+        exported=self.until(lambda:(self.job() or {}).get('delivery_diagnostics',{}).get('artifact'))
+        self.assertTrue(exported['name'].startswith('diagnostics--windows-inner--'))
+        diagnostic_bytes=self.ctx['assets'][urlparse(exported['url']).path]
+        with zipfile.ZipFile(io.BytesIO(diagnostic_bytes))as z:
+            delivery=json.loads(z.read('delivery-diagnostics.json'))
+            self.assertEqual(delivery['key'],self.key)
+            self.assertTrue(delivery['timings']['claim_queued_at'])
+            self.assertTrue(delivery['timings']['result_published_observed_at'])
+            self.assertTrue(any(e['kind']=='event_confirmed' and e.get('event_kind')=='result' for e in delivery['events']))
+            self.assertNotIn('WIN_TOKEN',json.dumps(delivery));self.assertNotIn('LOCAL_FIXTURE_KEY',json.dumps(delivery))
         self.stop('windows-inner');self.launch('windows-inner')
         diagnostics=self.get('windows-inner','/api/diagnostics?key='+self.key)
         self.assertEqual(diagnostics['schema'],'aiconnector.diagnostics.v1')
