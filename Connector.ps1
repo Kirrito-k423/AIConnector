@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Audit','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -30,6 +30,7 @@ $script:SavedStateHash=''; $script:ProjectionHashes=@{}; $script:ProjectionWrite
 $script:DeferUploadVerification=$false
 $script:Resident=$false; $script:SnapshotCache=$null; $script:SnapshotStateHash=''
 $script:MetadataCache=@{}; $script:MetadataCredential=''
+$script:Profiler=$null; $script:CanonicalDepth=0
 if (-not $OperationId) { $OperationId=[Guid]::NewGuid().ToString('N') }
 function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
     # No request headers, query strings, bodies, credentials, or free-form errors.
@@ -37,7 +38,7 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
         $row=@{schema='aiconnector.timing.v1';at=[DateTimeOffset]::UtcNow.ToString('o');source='connector';operation_id=$OperationId;action=$Action;kind=$Kind}
         if ($script:IoScope -cmatch '^[a-zA-Z0-9_:/-]{1,240}$') { $row.scope=$script:IoScope }
         if ($Key -cmatch '^[a-z0-9_-]+/[1-9][0-9]*/[a-z0-9_-]+$') { $row.key=$Key }
-        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent')) {
+        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent','stage','cpu_ms','exception_type','native_code','line')) {
             if ($Values.ContainsKey($name)) { $row[$name]=$Values[$name] }
         }
         $trace=Join-Path $StateDir 'transport-timing.jsonl'
@@ -45,8 +46,35 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
             if ([IO.File]::Exists($trace+'.1')) { [IO.File]::Delete($trace+'.1') }
             [IO.File]::Move($trace,$trace+'.1')
         }
-        [IO.File]::AppendAllText($trace,(Json $row)+"`n",$script:Utf8)
+        [IO.File]::AppendAllText($trace,(ConvertTo-Json -InputObject $row -Depth 50 -Compress)+"`n",$script:Utf8)
     } catch { } # Timing failure must never change a delivery or execution decision.
+}
+function Start-Profiling {
+    try {
+        if (-not ('AIConnector.RuntimeProfiler' -as [type])) { Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $root 'service/runtime-profiler.cs'))) }
+        $script:CpuProcess=[Diagnostics.Process]::GetCurrentProcess()
+        $script:Profiler=New-Object AIConnector.RuntimeProfiler((Join-Path $StateDir 'runtime-windows.jsonl'))
+        Trace-Event 'profiler_ready' @{category=('powershell_'+$PSVersionTable.PSVersion.ToString().Replace('.','_'))}
+    } catch { Trace-Event 'profiler_unavailable' @{category=(Error-Code $_)} }
+}
+function Start-Stage([string]$Name) {
+    if ($null -eq $script:Profiler) { return $null }
+    try { $script:Profiler.Push($Name); return @{name=$Name;watch=[Diagnostics.Stopwatch]::StartNew();cpu=$script:CpuProcess.TotalProcessorTime.TotalMilliseconds} } catch { return $null }
+}
+function Stop-Stage($Stage) {
+    if ($null -eq $Stage) { return }
+    try {
+        $script:Profiler.Pop()
+        $elapsed=$Stage.watch.Elapsed.TotalMilliseconds
+        if ($elapsed -ge 100) { Trace-Event 'stage_finished' @{stage=$Stage.name;elapsed_ms=[long]$elapsed;cpu_ms=[long]($script:CpuProcess.TotalProcessorTime.TotalMilliseconds-$Stage.cpu)} }
+    } catch { }
+}
+function Trace-Fault($Record,[string]$Stage) {
+    try {
+        $exception=$Record.Exception
+        while ($exception.InnerException) { $exception=$exception.InnerException }
+        Trace-Event 'stage_failed' @{stage=$Stage;category=(Error-Code $Record);exception_type=$exception.GetType().FullName;native_code=($exception.HResult -band 65535);line=$Record.InvocationInfo.ScriptLineNumber}
+    } catch { }
 }
 function Endpoint-Name([string]$Url) {
     $path=([Uri]$Url).AbsolutePath
@@ -98,17 +126,28 @@ function As-Map($O) {
     if ($O -is [Array]) { $a=@(); foreach ($v in $O) { $a+=,(As-Map $v) }; return ,$a }
     return $O
 }
-function Json($O) { return ConvertTo-Json -InputObject $O -Depth 50 -Compress }
+function Json($O) {
+    if ($script:CanonicalDepth -gt 0) { return Json-Work $O }
+    $stage=Start-Stage 'json.serialize'
+    try { Json-Work $O } catch { Trace-Fault $_ 'json.serialize'; throw } finally { Stop-Stage $stage }
+}
+function Json-Work($O) { return ConvertTo-Json -InputObject $O -Depth 50 -Compress }
 function Canonical($O) {
+    $stage=Start-Stage 'canonical'
+    try {
+    $script:CanonicalDepth++; try { Canonical-Work $O } finally { $script:CanonicalDepth-- }
+     } catch { Trace-Fault $_ 'canonical'; throw } finally { Stop-Stage $stage }
+}
+function Canonical-Work($O) {
     if ($null -eq $O) { return 'null' }
     if ($O -is [Collections.IDictionary] -or $O -is [pscustomobject]) {
         [string[]]$keys=@(); if ($O -is [Collections.IDictionary]) { $keys=@($O.get_Keys()) } else { $keys=@($O.PSObject.Properties | ForEach-Object { $_.Name }) }
         [Array]::Sort($keys,[StringComparer]::Ordinal); $parts=@()
-        foreach ($k in $keys) { $parts+=((Json $k)+':'+(Canonical (Get-Field $O $k))) }
+        foreach ($k in $keys) { $parts+=((Json-Work $k)+':'+(Canonical-Work (Get-Field $O $k))) }
         return '{'+($parts -join ',')+'}'
     }
-    if ($O -is [Array]) { $parts=@(); foreach ($v in $O) { $parts+=,(Canonical $v) }; return '['+($parts -join ',')+']' }
-    return Json $O
+    if ($O -is [Array]) { $parts=@(); foreach ($v in $O) { $parts+=,(Canonical-Work $v) }; return '['+($parts -join ',')+']' }
+    return Json-Work $O
 }
 function Get-Sha256([byte[]]$Bytes) { $h=[Security.Cryptography.SHA256]::Create(); try { return ([BitConverter]::ToString($h.ComputeHash($Bytes))).Replace('-','').ToLowerInvariant() } finally { $h.Dispose() } }
 function Hash([string]$Text) { return Get-Sha256 ($script:Utf8.GetBytes($Text)) }
@@ -130,6 +169,10 @@ function Parse-WithoutDates([string]$Text) {
     return Json-TokenValue ([Newtonsoft.Json.JsonConvert]::DeserializeObject($Text,$settings))
 }
 function Parse([string]$Text) {
+    $stage=Start-Stage 'json.parse'
+    try { Parse-Work $Text } catch { Trace-Fault $_ 'json.parse'; throw } finally { Stop-Stage $stage }
+}
+function Parse-Work([string]$Text) {
     if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
         return As-Map (ConvertFrom-Json -InputObject $Text -DateKind String)
     }
@@ -150,6 +193,11 @@ function Source-Time($Value) {
     return $date.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'",[Globalization.CultureInfo]::InvariantCulture)
 }
 function Atomic([string]$Path,[string]$Text) {
+    $label='projection.write'; if ([IO.Path]::GetFileName($Path) -ceq 'state.json') { $label='state.write' }
+    $stage=Start-Stage $label
+    try { Atomic-Work $Path $Text } catch { Trace-Fault $_ $label; throw } finally { Stop-Stage $stage }
+}
+function Atomic-Work([string]$Path,[string]$Text) {
     $tmp=$Path+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'; $data=$script:Utf8.GetBytes($Text)
     try {
         $stream=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
@@ -158,8 +206,13 @@ function Atomic([string]$Path,[string]$Text) {
     } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
 }
 function Save {
+    $stage=Start-Stage 'state.save'
+    try { Save-Work  } catch { Trace-Fault $_ 'state.save'; throw } finally { Stop-Stage $stage }
+}
+function Save-Work {
     $body=Canonical $script:State
-    $digest=Hash $body
+    $hashStage=Start-Stage 'state.hash'
+    try { $digest=Hash $body } finally { Stop-Stage $hashStage }
     if ($digest -ceq $script:SavedStateHash) { return }
     $watch=[Diagnostics.Stopwatch]::StartNew()
     $serialized=Json @{schema='aiconnector.store.v1';sha256=$digest;data_base64=[Convert]::ToBase64String($script:Utf8.GetBytes($body))}
@@ -169,6 +222,10 @@ function Save {
     Trace-Event 'state_saved' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;bytes=$script:Utf8.GetByteCount($serialized)}
 }
 function Open-State {
+    $stage=Start-Stage 'state.open'
+    try { Open-State-Work } catch { Trace-Fault $_ 'state.open'; throw } finally { Stop-Stage $stage }
+}
+function Open-State-Work {
     [IO.Directory]::CreateDirectory($StateDir)|Out-Null
     try { $script:Lock=[IO.File]::Open((Join-Path $StateDir 'state.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) } catch { Fail 'STATE_BUSY' }
     $script:State=$null
@@ -211,6 +268,13 @@ function Assert-Url([string]$Url) {
 }
 function Get-SafeUrl([string]$Url) { try { return ([Uri]$Url).GetLeftPart([UriPartial]::Path) } catch { return '(invalid)' } }
 function Invoke-WireHttp {
+    param([string]$Url, [string]$Method = 'GET', [hashtable]$Headers = @{},
+        [string]$Body = '', [int]$Limit = 2097152, [bool]$Authenticated = $false,
+        [byte[]]$BinaryBody = $null, [string]$MultipartFileName = '', [string]$BinaryContentType = 'application/octet-stream')
+    $stage=Start-Stage 'http'
+    try { Invoke-WireHttp-Work -Url $Url -Method $Method -Headers $Headers -Body $Body -Limit $Limit -Authenticated $Authenticated -BinaryBody $BinaryBody -MultipartFileName $MultipartFileName -BinaryContentType $BinaryContentType } catch { Trace-Fault $_ 'http'; throw } finally { Stop-Stage $stage }
+}
+function Invoke-WireHttp-Work {
     param([string]$Url, [string]$Method = 'GET', [hashtable]$Headers = @{},
         [string]$Body = '', [int]$Limit = 2097152, [bool]$Authenticated = $false,
         [byte[]]$BinaryBody = $null, [string]$MultipartFileName = '', [string]$BinaryContentType = 'application/octet-stream')
@@ -490,6 +554,10 @@ function Issue-Metadata([string]$TaskId) {
     return @{schema='aiconnector.task-issue.v1';namespace=$script:C.namespace;task_id=$TaskId;coordinator='mac-outer';worker='windows-inner'}
 }
 function Read-Routes {
+    $stage=Start-Stage 'relay.routes'
+    try { Read-Routes-Work  } catch { Trace-Fault $_ 'relay.routes'; throw } finally { Stop-Stage $stage }
+}
+function Read-Routes-Work {
     $routes=@{}
     foreach ($issue in (Read-List ($script:RepoPath+'/issues') '&state=all&sort=created&direction=asc')) {
         if (([string]$issue.body).StartsWith('AIConnector node capabilities v1') -and -not (Get-Field $issue 'pull_request') -and @($script:C.authors['windows-inner']) -ccontains [string]$issue.user.login) {
@@ -737,6 +805,10 @@ function Refresh-PollCatalog {
     return $routes
 }
 function Import-IncrementalComments {
+    $stage=Start-Stage 'poll.import'
+    try { Import-IncrementalComments-Work  } catch { Trace-Fault $_ 'poll.import'; throw } finally { Stop-Stage $stage }
+}
+function Import-IncrementalComments-Work {
     $routes=$script:State.routes
     if ((Epoch)-(Get-Field $script:State.sync 'catalog_checked_at' 0) -ge 60) { $routes=Refresh-PollCatalog }
     $byIssue=@{}
@@ -778,6 +850,10 @@ function Import-IncrementalComments {
     $script:State.sync.cursor=$next; $script:State.sync.updated_at=Epoch; Save
 }
 function Audit-OneRoute {
+    $stage=Start-Stage 'poll.audit'
+    try { Audit-OneRoute-Work  } catch { Trace-Fault $_ 'poll.audit'; throw } finally { Stop-Stage $stage }
+}
+function Audit-OneRoute-Work {
     if ((Epoch)-(Get-Field $script:State.sync 'audit_checked_at' 0) -lt 60) { return }
     $routes=@($script:State.routes.Values | Sort-Object task_id)
     if ($routes.Count -eq 0) { return }
@@ -843,6 +919,10 @@ function Revision-Digest($E) {
     return Hash (Canonical $data)
 }
 function Runs {
+    $stage=Start-Stage 'runs.project'
+    try { Runs-Work  } catch { Trace-Fault $_ 'runs.project'; throw } finally { Stop-Stage $stage }
+}
+function Runs-Work {
     $result=@{}
     foreach ($e in $script:State.events.Values) {
         $key=Run-Key $e
@@ -887,6 +967,10 @@ function Write-Bytes([string]$Path,[byte[]]$Data) {
     } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
 }
 function Fetch-Artifacts($Artifacts,[bool]$Refresh=$false) {
+    $stage=Start-Stage 'artifact.verify'
+    try { Fetch-Artifacts-Work $Artifacts $Refresh } catch { Trace-Fault $_ 'artifact.verify'; throw } finally { Stop-Stage $stage }
+}
+function Fetch-Artifacts-Work($Artifacts,[bool]$Refresh=$false) {
     $paths=@()
     foreach ($a in $Artifacts) {
         Artifact-Valid $a
@@ -906,6 +990,10 @@ function Fetch-Artifacts($Artifacts,[bool]$Refresh=$false) {
     return ,$paths
 }
 function Auto-Transitions {
+    $stage=Start-Stage 'transition.prepare'
+    try { Auto-Transitions-Work  } catch { Trace-Fault $_ 'transition.prepare'; throw } finally { Stop-Stage $stage }
+}
+function Auto-Transitions-Work {
     if ($script:State.next_poll -gt (Epoch)) { return }
     $runs=Runs
     foreach ($run in $runs.Values) {
@@ -913,6 +1001,10 @@ function Auto-Transitions {
         if ($Node -eq 'windows-inner' -and $run.phase -eq 'task') { $kind='accepted'; $parent=$run.events.task; $artifacts=$run.task.artifacts }
         if ($Node -eq 'mac-outer' -and $run.phase -eq 'result') { $kind='receipt'; $parent=$run.events.result; $artifacts=$run.result.artifacts }
         if (-not $kind) { continue }
+        # An immutable pending delivery already represents verified inputs. Its
+        # durable outbox survives restarts; Claim still verifies bytes before execution.
+        $existing=@($script:State.outbox.Values | Where-Object { $_.event.kind -ceq $kind -and $_.event.parent -ceq $parent.event_id })
+        if ($existing.Count -gt 0) { continue }
         try {
             if ($kind -eq 'receipt' -and $run.result.outcome -eq 'succeeded') { Need ($run.result.actual_revision -ceq $run.task.code.revision) 'RESULT_REVISION_MISMATCH' }
             $null=In-Scope ('artifact:'+$run.key) { Fetch-Artifacts $artifacts }
@@ -928,15 +1020,16 @@ function Auto-Transitions {
     Save
 }
 function Flush-One([bool]$Reconciled=$false) {
+    $stage=Start-Stage 'outbox.send'
+    try { Flush-One-Work $Reconciled } catch { Trace-Fault $_ 'outbox.send'; throw } finally { Stop-Stage $stage }
+}
+function Flush-One-Work([bool]$Reconciled=$false) {
     if ($script:State.next_poll -gt (Epoch)) { return }
     if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return }
     $runs=Runs; $manifestChecked=$false
     foreach ($id in @($script:State.outbox.Keys | Sort-Object @{Expression={
         $kind=$script:State.outbox[$_].event.kind
-        $item=$script:State.outbox[$_]
-        $priority=1; if ($kind -in @('accepted','started')) { $priority=0 }
-        # Old results/tasks eventually outrank new controls; never starve a delivery.
-        $priority-[Math]::Floor(((Epoch)-(Get-Field $item 'queued_at' (Epoch)))/30)
+        if ($kind -in @('started','result','receipt')) { 0 } else { 1 }
     }},@{Expression={Get-Field $script:State.outbox[$_] 'last_attempt_at' 0}},@{Expression={Get-Field $script:State.outbox[$_] 'queued_at' 0}},@{Expression={$_}})) {
         $item=$script:State.outbox[$id]; $e=$item.event; $key=Run-Key $e
         if ($item.status -notin @('pending','rate_limited','uncertain')) { continue }
@@ -1007,6 +1100,10 @@ function Project-Changed([string]$Path,[string]$Text) {
     Atomic $Path $Text; $script:ProjectionHashes[$Path]=$digest; $script:ProjectionWrites++
 }
 function Snapshot {
+    $stage=Start-Stage 'snapshot.build'
+    try { Snapshot-Work  } catch { Trace-Fault $_ 'snapshot.build'; throw } finally { Stop-Stage $stage }
+}
+function Snapshot-Work {
     $watch=[Diagnostics.Stopwatch]::StartNew(); $script:ProjectionWrites=0
     if ($script:Resident -and $null -ne $script:SnapshotCache -and $script:SnapshotStateHash -ceq $script:SavedStateHash) {
         Trace-Event 'snapshot_cached' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;files_written=0}
@@ -1061,7 +1158,7 @@ function Poll-Once {
                 $null=Read-Capabilities; $script:State.sync.capabilities_checked_at=Epoch; $script:State.sync.Remove('capabilities_dirty'); Save
             }
         }
-        Audit-OneRoute
+        if (-not $script:Resident) { Audit-OneRoute }
     } else { Reconcile-DeliveryComments }
     $script:State.last_poll=Epoch; $script:State.last_error=''; $script:State.next_poll=0L
     Auto-Transitions
@@ -1167,6 +1264,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
     return $manifest
 }
 function Local-Action {
+    if ($Action -eq 'Audit') { Audit-OneRoute; return Snapshot }
     if ($Action -eq 'Flush') { Auto-Transitions; Flush-Batch; return Snapshot }
     if ($Action -eq 'Advertise') { return Advertise-Capabilities }
     if ($Action -eq 'Capabilities') { Assert-Relay; $null=Read-Routes; return @{receiver_capabilities=(Read-Capabilities)} }
@@ -1225,7 +1323,10 @@ function Local-Action {
 }
 function Serve-Requests {
     $script:Resident=$true
+    Start-Profiling
+    try { if ($script:Profiler) { $script:Profiler.Begin('startup','Startup','') } } catch { }
     Open-State
+    try { if ($script:Profiler) { $script:Profiler.End() } } catch { }
     [Console]::WriteLine((Json @{schema='aiconnector.transport.v1';ready=$true}))
     while ($null -ne ($line=[Console]::ReadLine())) {
         $requestId=''; $watch=[Diagnostics.Stopwatch]::StartNew()
@@ -1234,7 +1335,7 @@ function Serve-Requests {
             $request=Parse $line; $requestId=[string]$request.operation_id
             Need ($requestId -cmatch '^[a-zA-Z0-9_-]{1,96}$') 'INVALID_OPERATION_ID'
             $script:OperationId=$requestId
-            Need ($request.action -cin @('Submit','Poll','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
+            Need ($request.action -cin @('Submit','Poll','Audit','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
             $script:Action=[string]$request.action; $script:OperationId=$requestId
             $script:Key=[string]$request.key; $script:File=[string]$request.file; $script:ClaimOwner=[string]$request.claim_owner
             Need ($script:Key.Length -le 300 -and $script:File.Length -le 4096 -and $script:ClaimOwner -cmatch '^(|[a-f0-9]{48})$') 'INVALID_TRANSPORT_ARGUMENT'
@@ -1242,18 +1343,24 @@ function Serve-Requests {
             $credential=Hash $script:Token
             if ($script:MetadataCredential -cne $credential) { $script:MetadataCache.Clear(); $script:MetadataCredential=$credential }
             $script:WireDiagnostic=$null; $script:DeferUploadVerification=$true
+            try { if ($script:Profiler) { $script:Profiler.Begin($OperationId,$Action,$Key) } } catch { }
             Trace-Event 'action_started'
             if ($Action -eq 'Poll') { $value=Poll-Once } else { $value=Local-Action }
-            [Console]::WriteLine((Json @{id=$requestId;ok=$true;value=$value}))
+            $replyStage=Start-Stage 'reply.serialize'
+            try { $reply=Json @{id=$requestId;ok=$true;value=$value} } finally { Stop-Stage $replyStage }
+            $pipeStage=Start-Stage 'reply.pipe'
+            try { [Console]::WriteLine($reply) } finally { Stop-Stage $pipeStage }
         } catch {
             $script:MetadataCache.Clear()
+            Trace-Fault $_ 'action'
             $code=Error-Code $_; $script:State.last_error=$code; Save
             $retry=Get-Field $script:State 'next_poll' 0
             if ($_.Exception.Data.Contains('retry_at')) { $retry=[Math]::Max($retry,[long]$_.Exception.Data['retry_at']) }
             if ($code -eq 'WRITE_COOLDOWN') { $retry=Get-Field $script:State 'post_not_before' 0 }
             [Console]::WriteLine((Json @{id=$requestId;ok=$false;error=@{ok=$false;code=$code;node=$Node;retry_at=$retry;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}}))
-        } finally { Trace-Event 'action_finished' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds}; $script:Token='' }
+        } finally { Trace-Event 'action_finished' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds}; $script:Token=''; try { if ($script:Profiler) { $script:Profiler.End() } } catch { } }
     }
+    try { if ($script:Profiler) { $script:Profiler.Dispose(); $script:Profiler=$null; $script:CpuProcess.Dispose() } } catch { }
 }
 try {
     $script:C=Read-Json $Config

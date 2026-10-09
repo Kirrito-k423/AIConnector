@@ -9,6 +9,7 @@ import {snapshotAgent} from './agent-config.mjs';
 import {WatchClient,validateWatchProfile} from './watch.mjs';
 import {webTools} from './web-tools.mjs';
 import {capabilities,preflight,validateProfile,VERSION} from './capabilities.mjs';
+import {WindowProfiler} from './window-profiler.mjs';
 import {timing,diagnostics} from './telemetry.mjs';
 
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
@@ -33,19 +34,26 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
   if(!fs.existsSync(authFile))atomic(authFile,id());
   const token=fs.readFileSync(authFile,'utf8');
   const connector=givenConnector??new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
-  let snapshot={runs:[],outbox:[]},busy=false,advertising=false,submitting=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0,nextAdvertise=0;
+  let snapshot={runs:[],outbox:[]},busy=false,auditing=false,advertising=false,submitting=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0,nextAdvertise=0,nextAudit=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
   const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
   async function tick() {
-    if(busy||stopping)return;busy=true;activity.busy=true;
+    // Drain eligible outbound controls before adding another discovery scan.
+    // A pending Flush/Claim/Complete is already serialized by the connector.
+    if(busy||stopping||flushing||Date.now()<nextPoll||connector.queue?.some(x=>!x.background&&x.priority<=1)||[...runner.pending.keys()].some(k=>k.startsWith('start:')||k.startsWith('delivery:')))return;busy=true;activity.busy=true;
     try {
       if(Date.now()>=nextPoll) {
-        nextPoll=Date.now()+c.tickSeconds*1000;
+        nextPoll=Infinity;
         try {snapshot=await connector.call('Poll');activity.last_error='';activity.diagnostic=null;}
         catch(e){activity.last_error=cleanError(e);activity.diagnostic=e.diagnostic;try{snapshot=await connector.call('Status');}catch{}}
       }
     }catch(e){activity.last_error=cleanError(e);}
-    finally{busy=false;activity.busy=false;}
+    finally{busy=false;activity.busy=false;nextPoll=Date.now()+c.tickSeconds*1000;}
+  }
+  async function audit(){
+    if(auditing||stopping||Date.now()<nextAudit||busy||flushing||connector.dirty||connector.running||connector.queue?.length)return;
+    nextAudit=Date.now()+60000;auditing=true;
+    try{snapshot=await connector.call('Audit');}catch(e){activity.audit_error=cleanError(e);}finally{auditing=false;}
   }
   async function advertise(){
     if(advertising||stopping||Date.now()<nextAdvertise||c.node!=='windows-inner'||c.connector.layout!=='task-issues-run-releases-v1')return;
@@ -203,14 +211,15 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'127.0.0.1',resolve);});
   atomic(path.join(c.dataDir,'service-info.json'),JSON.stringify({pid:process.pid,url:origin,started_at:now()}));
-  const interval=setInterval(()=>{void submit();void tick();void supervise();void flush();void advertise();},1000);void submit();void tick();void supervise();
+  const profiler=new WindowProfiler(path.join(c.dataDir,'service-windows.jsonl'),'',{source:'service',initialStage:'service.event_loop'});
+  const interval=setInterval(()=>{void submit();void supervise();void flush();void tick();void advertise();void audit();},1000);void submit();void tick();void supervise();
   let closePromise;
   const close=()=>closePromise??=(async()=>{
     stopping=true;clearInterval(interval);await new Promise(resolve=>server.close(resolve));
     // An in-flight tick may enqueue more transport work after its current call.
     // Keep ownership until that entire tick and its subprocesses have drained.
-    while(busy||advertising||submitting||supervising||flushing)await new Promise(resolve=>setTimeout(resolve,25));
-    await runner.idle();await connector.close();unlock();
+    while(busy||auditing||advertising||submitting||supervising||flushing)await new Promise(resolve=>setTimeout(resolve,25));
+    await runner.idle();await connector.close();profiler.close();unlock();
   })();
   return {server,close,status,token,url:origin,config:c};
 }

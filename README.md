@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.6 优化 Pi 启动等待。** 任务发现和领取优先于待上传 ZIP；常驻传输发完一条评论即交还调度权，复用短期已验证元数据。主结果发布后自动上传独立耗时诊断包，保留领取恢复、机器预留、接收校验和 10 秒轮询。内网实际收益需在两端升级后复测。
+**v0.7.7 增加 Windows 十秒计时窗口。** 常驻 PowerShell 和 Pi 分开记录处理阶段、进程 CPU 与排队阻塞操作；恢复结果父事件优先交付，把历史审计移出新任务扫描，减少重复接收准备。保持不可变协议、领取恢复、资源锁和接收端校验；真实内网性能改善仍需升级后测量。
 
-[下载服务候选包 v0.7.6-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.6-rc.1) · [本版优化与验收](docs/TRANSPORT-076.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+[下载服务候选包 v0.7.7-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.7-rc.1) · [本版优化与验收](docs/TRANSPORT-077.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 
@@ -148,3 +148,5 @@ Windows CI 用系统 PowerShell 5.1 检查构建后的 ZIP、中文空格目录�
 发布后额外执行 `tools/validate_release.py v0.1.5`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
 
 接口依据：[GitCode 文件上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-file-upload/)、[GitCode 图片上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-img-upload/)、[GitHub CLI 附件实现](https://github.com/cli/cli/blob/v2.101.0/internal/attachments/client.go)、[GitHub Release 资产接口](https://docs.github.com/en/rest/releases/assets)、[GitHub 限流处理](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)。
+
+0.7.7 的 Windows 十秒时间账本、队列阻塞定位和交付调度见 [TRANSPORT-077](docs/TRANSPORT-077.md)。

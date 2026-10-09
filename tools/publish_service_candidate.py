@@ -43,11 +43,11 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All three Windows service workflow jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.6 prioritizes owned claims and task discovery before queued bulk transfers, yields after one resident comment, and uses a bounded 30-second cache for validated relay metadata. '
-           'Capability advertisement no longer precedes every discovery cycle. New runs automatically upload a separate bounded delivery diagnostics ZIP after result publication. '
-           'A freshly uploaded result ZIP can be announced before sender public redownload; Mac still downloads and verifies the artifact before receipt. Ambiguous uploads and existing assets still require sender content reconciliation. '
-           'Owner-bound Claim recovery, machine reservations, durable write pacing and ten-second polling are preserved. Upgrade both endpoints using the existing config and state. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-076.md\n\n'
+           '0.7.7 adds independent ten-second Windows PowerShell and Pi timing windows with exclusive stage wall time, process CPU samples, actual runtime version and queue blocker IDs. '
+           'Delivery parent events regain priority; completed ZIP uploads precede fresh scans, repeated preparation of queued acceptance is skipped, and historical audits move to an idle background action. '
+           'No active HTTP/SSH is preempted or replayed. Owner-bound recovery, machine reservations, durable write pacing and receiver hash validation are preserved. '
+           'Upgrade both endpoints using existing config and state. No quantified intranet performance improvement is claimed. '
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-077.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

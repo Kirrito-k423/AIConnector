@@ -11,7 +11,9 @@ export class Connector {
   async drain(){
     if(this.running)return;this.running=true;
     try{while(this.queue.length){
-      const rank=x=>x.priority-Math.floor((Date.now()-x.at)/10000);
+      // Discovery ages against controls; maintenance/diagnostic work remains
+      // below foreground work and runs when the queue has no foreground item.
+      const rank=x=>x.background?8:x.priority-Math.floor((Date.now()-x.at)/10000);
       this.queue.sort((a,b)=>rank(a)-rank(b)||a.at-b.at);
       const next=this.queue.shift();try{next.resolve(await next.execute());}catch(e){next.reject(e);}
     }}finally{this.running=false;for(const resolve of this.waiters.splice(0))resolve();}
@@ -19,7 +21,7 @@ export class Connector {
   call(action,{key,file,data,claimOwner}={}) {
     const queued=Date.now(),operation=id();
     key??=data?.task_id&&data?.revision&&data?.run_id?`${data.task_id}/${data.revision}/${data.run_id}`:undefined;
-    timing(this.c.dataDir,'action_queued',{operation_id:operation,action,key,queue_depth:this.queue.length+Number(this.running)});
+    timing(this.c.dataDir,'action_queued',{operation_id:operation,action,key,queue_depth:this.queue.length+Number(this.running),blocker_operation_id:this.activity?.running?this.activity.operation_id:undefined,blocker_action:this.activity?.running?this.activity.action:undefined});
     const execute=async()=>{
       const started=Date.now();this.activity={action,key,operation_id:operation,queued_at:new Date(queued).toISOString(),queue_wait_ms:started-queued,started_at:now(),running:true};
       timing(this.c.dataDir,'action_dispatched',{operation_id:operation,action,key,queue_wait_ms:started-queued});
@@ -43,11 +45,12 @@ export class Connector {
       } finally {if(['Claim','Complete','Submit'].includes(action))this.dirty=true;this.activity={...this.activity,running:false,milliseconds:Date.now()-started};timing(this.c.dataDir,'action_finished',{operation_id:operation,action,key,elapsed_ms:Date.now()-started,total_ms:Date.now()-queued});if(temporary)fs.unlinkSync(temporary);}
     };
     return new Promise((resolve,reject)=>{
-      // Free Pi slots need discovery and owned claims before bulk transfers.
-      // Ten-second aging bounds starvation; an active HTTP call is not replayed
-      // or preempted. Flush yields after one comment in the resident runtime.
-      const priority={Status:0,Complete:0,Claim:0,Flush:1,Submit:2,Poll:3,Upload:4,Advertise:6,UploadDiagnostics:8}[action]??8;
-      this.queue.push({execute,resolve,reject,priority,at:queued});void this.drain();
+      // Claims and completion parents first; a ready ZIP precedes a fresh scan.
+      // Discovery ages within foreground work. Background diagnostics/audit
+      // are best effort. No active HTTP request is preempted or replayed.
+      const priority={Status:0,Complete:0,Claim:0,Flush:0,Upload:1,Submit:2,Poll:3,Advertise:6,Audit:8,UploadDiagnostics:8}[action]??8;
+      const waitTimer=setInterval(()=>timing(this.c.dataDir,'action_wait',{operation_id:operation,action,key,queue_wait_ms:Date.now()-queued,blocker_operation_id:this.activity?.running?this.activity.operation_id:undefined,blocker_action:this.activity?.running?this.activity.action:undefined}),10000);waitTimer.unref();
+      this.queue.push({execute:async()=>{clearInterval(waitTimer);return execute();},resolve,reject,priority,background:['Audit','Advertise','UploadDiagnostics'].includes(action),at:queued});void this.drain();
     });
   }
 }

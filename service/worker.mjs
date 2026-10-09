@@ -12,6 +12,7 @@ import {Maintenance} from './maintenance.mjs';
 import {Inputs} from './inputs.mjs';
 import {Outputs} from './outputs.mjs';
 import {verifyTask} from './verification.mjs';
+import {WindowProfiler} from './window-profiler.mjs';
 import {authoritativeReport} from './reporting.mjs';
 
 // One disposable Pi process per run. Service restarts do not restart this process.
@@ -19,6 +20,7 @@ export async function work(dir,secrets={}) {
   const unlock=lock(path.join(dir,'worker.lock'));
   const spec=read(path.join(dir,'spec.json')); need(spec,'MISSING_WORK_SPEC');
   const statusFile=path.join(dir,'worker.json');
+  const profiler=new WindowProfiler(path.join(dir,'worker-windows.jsonl'),spec.key);
   const status={key:spec.key,pid:process.pid,state:'starting',started_at:now(),heartbeat:now(),events:[]};
   const write=()=>save(statusFile,status);
   const event=(type,extra={})=>{status.events.push({type,at:now(),...extra});status.events=status.events.slice(-100);write();};
@@ -85,7 +87,7 @@ export async function work(dir,secrets={}) {
   }
   const empty={type:'object',properties:{},additionalProperties:false};
   const result=value=>{const text=redact(JSON.stringify(value));return {content:[{type:'text',text:text.length<=20000?text:JSON.stringify({truncated:true,preview:text.slice(0,20000)})}],details:{}};};
-  const verify=async()=>{acceptance=await verifyTask(spec,dir,{execution,maintenance,report,pass:++verifyPass});save(path.join(dir,'acceptance.json'),acceptance);status.acceptance=acceptance;write();return acceptance;};
+  const verify=async()=>{const previous=profiler.stage;profiler.set('agent.verify');try{acceptance=await verifyTask(spec,dir,{execution,maintenance,report,pass:++verifyPass});save(path.join(dir,'acceptance.json'),acceptance);status.acceptance=acceptance;write();return acceptance;}finally{profiler.set(previous);}};
   const completion=async()=>{
     goalReady=false;
     if(!report||failure)return;
@@ -166,7 +168,7 @@ export async function work(dir,secrets={}) {
       if(e.type==='turn_end'&&goalReady&&!failure&&!e.toolResults?.some(r=>r.isError)){
         goalVerified=true;clearTimeout(timer);event('goal_verified',{checks:acceptance.checks.length});void session.abort();
       }
-      if(e.type==='tool_execution_start'||e.type==='tool_execution_end'){event(e.type,{tool:e.toolName});if(e.type==='tool_execution_start'&&++toolSteps>budget.maxActions){failure='ACTION_BUDGET';abort.abort();void session.abort();}}
+      if(e.type==='tool_execution_start'||e.type==='tool_execution_end'){profiler.set(e.type==='tool_execution_start'?'tool.'+e.toolName:'model.wait');event(e.type,{tool:e.toolName});if(e.type==='tool_execution_start'&&++toolSteps>budget.maxActions){failure='ACTION_BUDGET';abort.abort();void session.abort();}}
       if(e.type==='compaction_start'){status.compaction.active=true;event(e.type,{reason:e.reason});}
       if(e.type==='compaction_end'){status.compaction.active=false;if(e.result)status.compaction.count++;addUsage(e.result?.usage);event(e.type,{reason:e.reason,success:Boolean(e.result)&&!e.aborted,tokens_before:e.result?.tokensBefore,will_retry:e.willRetry});}
       if(e.type==='message_end'&&e.message?.role==='assistant') {
@@ -175,6 +177,7 @@ export async function work(dir,secrets={}) {
       }
     });
     timer=setTimeout(()=>{failure='RUN_TIMEOUT';abort.abort();void session.abort();},spec.timeoutSeconds*1000);
+    profiler.set('model.wait');
     status.state='agent';status.agent_started_at=now();status.tools=tools.map(t=>t.name);event('agent_started');
     const grants=maintenance?{files:Object.fromEntries(Object.entries(maintenance.policy.files||{}).map(([id,f])=>[id,{format:f.format,write:f.write===true,pointers:f.pointers||[]}])),commands:Object.keys(maintenance.policy.commands||{}),apis:Object.keys(maintenance.policy.apis||{})}:undefined;
     let prompt=JSON.stringify({task:spec.task,profile:spec.task.environment.target,grants,acceptance_contract:spec.profile.verification||[{id:'cpu-smoke',expected_sum:50005000}],inputs:inputs.list()}),previous='',stalled=0;
@@ -194,6 +197,7 @@ export async function work(dir,secrets={}) {
   } catch(e) {failure=failure||cleanError(e);event('agent_failed',{code:failure});}
   finally {clearTimeout(timer);status.agent_ended_at=now();status.stop_reason=failure||'GOAL_VERIFIED';if(session)session.dispose();}
   try {
+    profiler.set('result.package');
     const packagingStarted=performance.now();status.packaging_started_at=now();
     const resultData={outcome:failure?'blocked':acceptance?.status==='passed'?'succeeded':'blocked',exit_code:failure?-1:execution?.exit_code??0,
       actual_revision:execution?.actual_revision||(maintenance?spec.profile.revision:'not-executed'),summary:'',
@@ -227,7 +231,7 @@ export async function work(dir,secrets={}) {
     status.packaging_ended_at=now();status.packaging_ms=Math.round(performance.now()-packagingStarted);
     status.state='ready';status.ended_at=now();status.error=failure;event('result_ready');
   } catch(e) {status.state='blocked';status.error=cleanError(e);event('packaging_failed');}
-  finally {clearInterval(beat);write();unlock();}
+  finally {profiler.close();clearInterval(beat);write();unlock();}
 }
 
 if(process.argv[1]===new URL(import.meta.url).pathname || process.argv[2]==='--work') {

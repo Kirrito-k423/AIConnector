@@ -21,10 +21,10 @@ test('timing correlates queue wait and request work without exporting bodies or 
     timing(dir,'example',{body:'SECRET_BODY',headers:'SECRET_HEADER',code:'bad message SECRET_TOKEN',key:'bad?token=SECRET_TOKEN'});
     const dump=fs.readFileSync(path.join(dir,'service-timing.jsonl'),'utf8');assert.ok(!dump.includes('SECRET'));
     const result=diagnostics(c,{jobs:{}},{},'sample/1/run-1');
-    assert.equal(result.events.filter(e=>e.kind==='action_queued').length,1);
-    assert.ok(result.events.find(e=>e.kind==='action_dispatched').queue_wait_ms>=15);
-    assert.ok(result.events.find(e=>e.kind==='action_finished').total_ms>=15);
-    assert.equal(new Set(result.events.map(e=>e.operation_id)).size,1);
+    assert.ok(result.events.filter(e=>e.kind==='action_queued').some(e=>e.key==='sample/1/run-1'));
+    assert.ok(result.events.find(e=>e.kind==='action_dispatched'&&e.key==='sample/1/run-1').queue_wait_ms>=15);
+    assert.ok(result.events.find(e=>e.kind==='action_finished'&&e.key==='sample/1/run-1').total_ms>=15);
+    assert.equal(new Set(result.events.map(e=>e.operation_id)).size,2);assert.ok(result.events.find(e=>e.kind==='action_queued'&&e.key)?.blocker_operation_id);
     assert.throws(()=>diagnostics(c,{jobs:{}},{},'../secret'),/INVALID_RUN_ID/);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });

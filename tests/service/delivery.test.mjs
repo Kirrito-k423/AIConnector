@@ -7,7 +7,7 @@ import {Connector} from '../../service/connector.mjs';
 import {Runner} from '../../service/runner.mjs';
 import {save,sha} from '../../service/common.mjs';
 
-test('discovery precedes queued bulk upload without preempting an active request',async()=>{
+test('ready upload precedes a fresh scan without preempting an active request',async()=>{
   let release;const gate=new Promise(r=>release=r),order=[];
   const connector=new Connector({connector:{token_env:'AICONNECTOR_FIXTURE'}},{},async(_exe,args)=>{
     const action=args[args.indexOf('-Action')+1];order.push(action);
@@ -16,19 +16,19 @@ test('discovery precedes queued bulk upload without preempting an active request
   });
   const first=connector.call('Poll');
   const upload=connector.call('Upload'),poll=connector.call('Poll');release();
-  await Promise.all([first,upload,poll]);assert.deepEqual(order,['Poll','Poll','Upload']);
+  await Promise.all([first,upload,poll]);assert.deepEqual(order,['Poll','Upload','Poll']);
 });
 
-test('owned Claim and discovery run before queued ZIP transfers',async()=>{
+test('owned Claim precedes ready upload; scans follow delivery and diagnostics remain last',async()=>{
  let release;const gate=new Promise(r=>release=r),order=[];
  const connector=new Connector({connector:{token_env:'AICONNECTOR_FIXTURE'}},{},async(_exe,args)=>{
    const action=args[args.indexOf('-Action')+1];order.push(action);if(order.length===1)await gate;return {code:0,out:'{"ok":true}\n'};
  });
  const work=[connector.call('Status'),connector.call('Upload'),connector.call('UploadDiagnostics'),connector.call('Claim'),connector.call('Poll')];
- release();await Promise.all(work);assert.deepEqual(order,['Status','Claim','Poll','Upload','UploadDiagnostics']);
+ release();await Promise.all(work);assert.deepEqual(order,['Status','Claim','Upload','Poll','UploadDiagnostics']);
 });
 
-test('queue aging lets an old diagnostics upload pass a fresh control request',async()=>{
+test('old diagnostics cannot overtake fresh control work even after ninety seconds',async()=>{
  let release,at=Date.now();const gate=new Promise(r=>release=r),order=[],clock=Date.now;
  Date.now=()=>at;
  const connector=new Connector({connector:{token_env:'AICONNECTOR_FIXTURE'}},{},async(_exe,args)=>{
@@ -37,7 +37,7 @@ test('queue aging lets an old diagnostics upload pass a fresh control request',a
  try{
    const first=connector.call('Status'),old=connector.call('UploadDiagnostics');at+=90000;
    const claim=connector.call('Claim');release();await Promise.all([first,old,claim]);
-   assert.deepEqual(order,['Status','UploadDiagnostics','Claim']);
+   assert.deepEqual(order,['Status','Claim','UploadDiagnostics']);
  }finally{Date.now=clock;release();}
 });
 

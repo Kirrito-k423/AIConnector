@@ -91,6 +91,12 @@ jobs:
           PYTHONUTF8: '1'
           PWSH: powershell.exe
         run: python -m unittest discover -s tests -p test_resident.py -v
+      - name: Ten-second profiler during a blocked PowerShell 5.1 runspace
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_runtime_profiler.py -v
       - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         shell: pwsh

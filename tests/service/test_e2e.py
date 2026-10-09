@@ -172,6 +172,12 @@ class ServiceTests(unittest.TestCase):
             self.assertTrue(delivery['timings']['claim_queued_at'])
             self.assertTrue(delivery['timings']['result_published_observed_at'])
             self.assertTrue(any(e['kind']=='event_confirmed' and e.get('event_kind')=='result' for e in delivery['events']))
+            self.assertTrue(delivery['runtime']['windows_enabled'])
+            self.assertTrue(delivery['runtime']['powershell_version'])
+            self.assertTrue(delivery['windows'])
+            self.assertTrue(any(w['source']=='worker' for w in delivery['windows']))
+            for w in delivery['windows']:
+                self.assertAlmostEqual(sum(x['wall_ms'] for x in w['segments']),w['elapsed_ms'],delta=.05,msg=json.dumps(w))
             self.assertNotIn('WIN_TOKEN',json.dumps(delivery));self.assertNotIn('LOCAL_FIXTURE_KEY',json.dumps(delivery))
         self.stop('windows-inner');self.launch('windows-inner')
         diagnostics=self.get('windows-inner','/api/diagnostics?key='+self.key)

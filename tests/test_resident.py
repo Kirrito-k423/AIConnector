@@ -193,5 +193,24 @@ class ResidentTests(unittest.TestCase):
             self.assertEqual(r.call('Flush',ok=False)['code'],'RELAY_MANIFEST_MISMATCH')
             self.assertEqual(len(c.ctx['posts']),posts)
 
+    def test_pending_acceptance_is_not_reverified_each_poll_and_controls_precede_new_acceptance(self):
+        c=self.case
+        # First task becomes accepted and locally claimed; its started is pending.
+        c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            r.call('Poll');r.call('Flush');r.call('Claim',key=c.key,owner='a'*48)
+            # New tasks must not jump ahead of the first task's started parent.
+            for n in range(5):
+                c.task['run_id']='later-'+str(n);c.write_inputs();c.submit();c.poll('mac-outer')
+            r.call('Poll');r.call('Poll')
+            events=[json.loads(x) for x in (c.folder/'windows-inner'/'transport-timing.jsonl').read_text(encoding='utf-8-sig').splitlines()]
+            checks=[e for e in events if e['kind']=='acceptance_inputs_verified']
+            self.assertEqual(len(checks),6,checks)
+            r.call('Complete',key=c.key,file=c.resultfile)
+            r.call('Flush')
+            self.assertIn('"kind":"started"',c.ctx['comments'][-1]['body'])
+            r.call('Flush');self.assertIn('"kind":"result"',c.ctx['comments'][-1]['body'])
+            r.call('Audit')
+
 
 if __name__=='__main__': unittest.main()
