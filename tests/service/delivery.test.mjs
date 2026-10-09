@@ -66,6 +66,8 @@ test('diagnostics lost reply freezes the same ZIP across restart and never claim
  const connector={call:async(action,args)=>{assert.equal(action,'UploadDiagnostics');hashes.push(sha(fs.readFileSync(args.file)));if(hashes.length===1)throw new Error('CONNECTOR_CHANNEL_CLOSED');return {name:'diagnostics.zip',sha256:hashes.at(-1)};}};
  try{
    let runner=new Runner(c,connector,ledger,()=>{},{}),snapshot={runs:[{key,phase:'result'}]};
+   await runner.tick(snapshot);await runner.idle();assert.equal(hashes.length,0,'result alone must not trigger diagnostics');
+   snapshot.runs[0].phase='receipt';
    await runner.tick(snapshot);await runner.idle();assert.equal(job.state,'confirmed');assert.equal(job.delivery_diagnostics.state,'retrying');
    assert.ok(job.delivery_diagnostics.retry_at>Date.now()+59000);
    await runner.tick(snapshot);await runner.idle();assert.equal(hashes.length,1);
@@ -74,5 +76,20 @@ test('diagnostics lost reply freezes the same ZIP across restart and never claim
    assert.equal(hashes.length,2);assert.equal(hashes[0],hashes[1]);assert.equal(job.delivery_diagnostics.state,'published');
    await runner.tick(snapshot);await runner.idle();assert.equal(hashes.length,2);
    delete job.diagnostics_enabled;delete job.delivery_diagnostics;await runner.tick(snapshot);await runner.idle();assert.equal(hashes.length,2,'history must not be backfilled');
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('receipt diagnostics defer while another run or foreground control is pending',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC idle diagnostics ')),key='sample/1/run-1';
+ const job={key,dir,state:'confirmed',diagnostics_enabled:true},other={key:'sample/1/run-2',dir:path.join(dir,'other'),state:'waiting'},ledger={jobs:{[key]:job,other}},calls=[];
+ const connector={running:false,queue:[],call:async action=>{calls.push(action);return {name:'fixture'};}};
+ const runner=new Runner({dataDir:dir,stateDir:dir,node:'windows-inner',runner:{enabled:false}},connector,ledger,()=>{},{}),snapshot={runs:[{key,phase:'receipt'}]};
+ try{
+  await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
+  other.state='submitted';await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
+  other.state='confirmed';connector.running=true;await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
+  connector.running=false;connector.dirty=true;await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
+  connector.dirty=false;snapshot.runs.push({key:'sample/1/run-3',phase:'accepted'});await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
+  snapshot.runs.pop();await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,['UploadDiagnostics']);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });

@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {WindowWriter} from './window-writer.mjs';
 
-const fields=new Set(['operation_id','action','key','queue_wait_ms','elapsed_ms','total_ms','queue_depth','code','attempt','retry_at','bytes','blocker_operation_id','blocker_action','stage','cpu_ms','exception_type','native_code','line']);
+const waitWriters=new Map();
+export async function closeWaitTiming(dir){const writer=waitWriters.get(dir);if(writer){await writer.close();waitWriters.delete(dir);}}
+
+const fields=new Set(['operation_id','action','key','queue_wait_ms','elapsed_ms','total_ms','queue_depth','code','attempt','retry_at','bytes','blocker_operation_id','blocker_action','stage','cpu_ms','exception_type','native_code','line','dropped_events']);
 const keyPattern=/^[a-z0-9][a-z0-9_-]{0,63}\/[1-9][0-9]{0,9}\/[a-z0-9][a-z0-9_-]{0,63}$/;
 export function timing(dir,kind,values={}) {
   if(!dir)return;
@@ -12,6 +16,10 @@ export function timing(dir,kind,values={}) {
       if(k==='key'){if(keyPattern.test(v))row[k]=v;}
       else if(typeof v==='number'&&Number.isFinite(v))row[k]=v;
       else if(typeof v==='string'&&/^[a-zA-Z0-9_:.+-]{1,120}$/.test(v))row[k]=v;
+    }
+    if(kind==='action_wait'){
+      let writer=waitWriters.get(dir);if(!writer){writer=new WindowWriter(path.join(dir,'queue-wait-timing.jsonl'),{limit:64});waitWriters.set(dir,writer);}
+      writer.append(row);return;
     }
     fs.mkdirSync(dir,{recursive:true,mode:0o700});const file=path.join(dir,'service-timing.jsonl');
     if(fs.existsSync(file)&&fs.statSync(file).size>=2*1024*1024){fs.rmSync(file+'.1',{force:true});fs.renameSync(file,file+'.1');}
@@ -47,7 +55,7 @@ export function readWindows(file) {
         if(!/^[a-zA-Z0-9_.-]{1,80}$/.test(v.stage)||!Number.isFinite(v.wall_ms)||v.wall_ms<0)return null;
         return {stage:v.stage,parent_stage:/^[a-zA-Z0-9_.-]{1,80}$/.test(v.parent_stage)?v.parent_stage:'',wall_ms:v.wall_ms,operation_id:/^[a-zA-Z0-9_-]{0,96}$/.test(v.operation_id)?v.operation_id:'',action:/^[a-zA-Z0-9_.-]{1,80}$/.test(v.action)?v.action:'',key:keyPattern.test(v.key)?v.key:''};
       }).filter(Boolean);
-      rows.push({schema:r.schema,source:r.source,session:r.session,pid:Number.isInteger(r.pid)?r.pid:null,window:r.window,window_start:r.window_start,window_end:r.window_end,elapsed_ms:r.elapsed_ms,cpu_ms:r.cpu_ms,cpu_sample_max_ms:Number.isFinite(r.cpu_sample_max_ms)&&r.cpu_sample_max_ms>=0?r.cpu_sample_max_ms:null,partial:r.partial===true,segments});
+      rows.push({schema:r.schema,source:r.source,session:r.session,pid:Number.isInteger(r.pid)?r.pid:null,window:r.window,window_start:r.window_start,window_end:r.window_end,elapsed_ms:r.elapsed_ms,cpu_ms:r.cpu_ms,cpu_sample_max_ms:Number.isFinite(r.cpu_sample_max_ms)&&r.cpu_sample_max_ms>=0?r.cpu_sample_max_ms:null,dropped_windows:Number.isInteger(r.dropped_windows)&&r.dropped_windows>=0?r.dropped_windows:0,partial:r.partial===true,segments});
     }catch{}
   }catch{}
   const unique=new Map();
@@ -57,7 +65,7 @@ export function readWindows(file) {
 
 export function diagnostics(c,ledger,snapshot,key='') {
   if(key&&!keyPattern.test(key))throw new Error('INVALID_RUN_ID');
-  const events=[...readTiming(path.join(c.dataDir,'service-timing.jsonl')),...readTiming(path.join(c.stateDir,'transport-timing.jsonl'))];
+  const events=[...readTiming(path.join(c.dataDir,'service-timing.jsonl')),...readTiming(path.join(c.dataDir,'queue-wait-timing.jsonl')),...readTiming(path.join(c.stateDir,'transport-timing.jsonl'))];
   const ids=new Set(events.filter(e=>e.key===key&&e.operation_id).map(e=>e.operation_id));
   for(let previous=-1;previous!==ids.size;){previous=ids.size;for(const e of events)if(ids.has(e.operation_id)&&e.blocker_operation_id)ids.add(e.blocker_operation_id);}
   const selected=events.filter(e=>!key||e.key===key||ids.has(e.operation_id)).sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
@@ -91,7 +99,7 @@ export function deliveryDiagnostics(c,ledger,snapshot,key){
     return /^[a-zA-Z0-9_:/.+-]{1,240}$/.test(item);
   })));
   return {schema:'aiconnector.delivery-diagnostics.v1',key,node:c.node,generated_at:value.generated_at,
-    scope:'Windows local clock; result publication already observed. This frozen sidecar predates its own upload and may predate Mac receipt.',
+    scope:'Windows local clock; Mac receipt already observed. This frozen sidecar predates its own upload. Old frozen sidecars from earlier versions keep their original scope.',
     timings:stamps,delivery_attempts:job?.delivery_attempts||0,claim_attempts:job?.claim_attempts||0,
     events,runtime:value.runtime,windows:value.windows,windows_truncated:value.windows_truncated,window_scope:value.window_scope,truncated:value.truncated,retention:value.retention};
 }

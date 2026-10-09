@@ -231,7 +231,7 @@ export async function work(dir,secrets={}) {
     status.packaging_ended_at=now();status.packaging_ms=Math.round(performance.now()-packagingStarted);
     status.state='ready';status.ended_at=now();status.error=failure;event('result_ready');
   } catch(e) {status.state='blocked';status.error=cleanError(e);event('packaging_failed');}
-  finally {profiler.close();clearInterval(beat);write();unlock();}
+  finally {await profiler.close();clearInterval(beat);write();unlock();}
 }
 
 if(process.argv[1]===new URL(import.meta.url).pathname || process.argv[2]==='--work') {

@@ -52,22 +52,17 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
 function Start-Profiling {
     try {
         if (-not ('AIConnector.RuntimeProfiler' -as [type])) { Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $root 'service/runtime-profiler.cs'))) }
-        $script:CpuProcess=[Diagnostics.Process]::GetCurrentProcess()
         $script:Profiler=New-Object AIConnector.RuntimeProfiler((Join-Path $StateDir 'runtime-windows.jsonl'))
         Trace-Event 'profiler_ready' @{category=('powershell_'+$PSVersionTable.PSVersion.ToString().Replace('.','_'))}
     } catch { Trace-Event 'profiler_unavailable' @{category=(Error-Code $_)} }
 }
 function Start-Stage([string]$Name) {
     if ($null -eq $script:Profiler) { return $null }
-    try { $script:Profiler.Push($Name); return @{name=$Name;watch=[Diagnostics.Stopwatch]::StartNew();cpu=$script:CpuProcess.TotalProcessorTime.TotalMilliseconds} } catch { return $null }
+    try { $script:Profiler.Push($Name); return $true } catch { return $null }
 }
 function Stop-Stage($Stage) {
     if ($null -eq $Stage) { return }
-    try {
-        $script:Profiler.Pop()
-        $elapsed=$Stage.watch.Elapsed.TotalMilliseconds
-        if ($elapsed -ge 100) { Trace-Event 'stage_finished' @{stage=$Stage.name;elapsed_ms=[long]$elapsed;cpu_ms=[long]($script:CpuProcess.TotalProcessorTime.TotalMilliseconds-$Stage.cpu)} }
-    } catch { }
+    try { $script:Profiler.Pop() } catch { }
 }
 function Trace-Fault($Record,[string]$Stage) {
     try {
@@ -1360,7 +1355,7 @@ function Serve-Requests {
             [Console]::WriteLine((Json @{id=$requestId;ok=$false;error=@{ok=$false;code=$code;node=$Node;retry_at=$retry;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}}))
         } finally { Trace-Event 'action_finished' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds}; $script:Token=''; try { if ($script:Profiler) { $script:Profiler.End() } } catch { } }
     }
-    try { if ($script:Profiler) { $script:Profiler.Dispose(); $script:Profiler=$null; $script:CpuProcess.Dispose() } } catch { }
+    try { if ($script:Profiler) { $script:Profiler.Dispose(); $script:Profiler=$null } } catch { }
 }
 try {
     $script:C=Read-Json $Config

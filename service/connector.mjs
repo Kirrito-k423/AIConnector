@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {ROOT, atomic, id, need,now,safeDiagnostic} from './common.mjs';
-import {timing} from './telemetry.mjs';
+import {timing,closeWaitTiming} from './telemetry.mjs';
 import {Transport} from './transport.mjs';
 
 export class Connector {
   constructor(config,secrets={},invoke) {this.c=config;this.secrets=secrets;this.invoke=invoke;this.transport=invoke?null:new Transport(config);this.queue=[];this.running=false;this.waiters=[];}
-  async close(){await this.tail;await this.transport?.close();}
+  async close(){await this.tail;await this.transport?.close();await closeWaitTiming(this.c.dataDir);}
   get tail(){return !this.running&&!this.queue.length?Promise.resolve():new Promise(resolve=>this.waiters.push(resolve));}
   async drain(){
     if(this.running)return;this.running=true;

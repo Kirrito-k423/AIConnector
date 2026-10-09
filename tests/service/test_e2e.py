@@ -171,6 +171,8 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(delivery['key'],self.key)
             self.assertTrue(delivery['timings']['claim_queued_at'])
             self.assertTrue(delivery['timings']['result_published_observed_at'])
+            self.assertTrue(delivery['timings']['receipt_observed_at'])
+            self.assertIn('Mac receipt already observed',delivery['scope'])
             self.assertTrue(any(e['kind']=='event_confirmed' and e.get('event_kind')=='result' for e in delivery['events']))
             self.assertTrue(delivery['runtime']['windows_enabled'])
             self.assertTrue(delivery['runtime']['powershell_version'])

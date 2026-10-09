@@ -19,6 +19,19 @@ namespace AIConnector {
         readonly string session = Guid.NewGuid().ToString("N");
         readonly Stack<string> stages = new Stack<string>();
         readonly Dictionary<string,double> parts = new Dictionary<string,double>();
+        readonly object writeGate = new object();
+        readonly SortedDictionary<long,Window> pending = new SortedDictionary<long,Window>();
+        readonly AutoResetEvent wake = new AutoResetEvent(false);
+        readonly Thread writer;
+        readonly int pid;
+        long dropped;
+        bool stopping;
+        sealed class Window {
+            public long bucket;
+            public double elapsed, cpu, sampleMax;
+            public bool partial;
+            public Dictionary<string,double> parts;
+        }
         Timer timer;
         string operation = "", action = "idle", key = "";
         double last = 0, cpuLast, cpu = 0, sampleMax = 0;
@@ -26,7 +39,9 @@ namespace AIConnector {
         bool disposed;
         public RuntimeProfiler(string output) {
             file = output;
+            pid = process.Id;
             cpuLast = process.TotalProcessorTime.TotalMilliseconds;
+            writer = new Thread(WriteLoop); writer.IsBackground = true; writer.Start();
             timer = new Timer(Sample, null, 1000, 1000);
         }
         static string Safe(string value, string pattern) {
@@ -57,16 +72,45 @@ namespace AIConnector {
         static string N(double v) { return v.ToString("0.###",CultureInfo.InvariantCulture); }
         static string Time(DateTime v) { return v.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'",CultureInfo.InvariantCulture); }
         void Emit(double elapsed, bool partial) {
+            // Snapshot only while holding the accounting lock. Disk access and
+            // JSON formatting run on one persistent writer, never this lock.
+            var row = new Window { bucket=bucket, elapsed=elapsed, cpu=cpu,
+                sampleMax=sampleMax, partial=partial, parts=new Dictionary<string,double>(parts) };
+            lock(writeGate) {
+                if(!pending.ContainsKey(row.bucket) && pending.Count>=16) {
+                    var oldest=pending.Keys.GetEnumerator();oldest.MoveNext();long first=oldest.Current;oldest.Dispose();
+                    pending.Remove(first);Interlocked.Increment(ref dropped);
+                }
+                // Newer partial/full samples supersede the same queued window.
+                pending[row.bucket]=row;
+            }
+            wake.Set();
+        }
+        void WriteLoop() {
+            while(true) {
+                Window row=null;
+                lock(writeGate) {
+                    if(pending.Count>0) {
+                        var oldest=pending.GetEnumerator();oldest.MoveNext();var entry=oldest.Current;oldest.Dispose();
+                        row=entry.Value;pending.Remove(entry.Key);
+                    } else if(stopping) return;
+                }
+                if(row==null) { wake.WaitOne(1000);continue; }
+                Write(row);
+            }
+        }
+        void Write(Window row) {
             try {
                 var text = new StringBuilder();
                 text.Append("{\"schema\":\"aiconnector.runtime-window.v1\",\"source\":\"connector\",\"session\":\"").Append(session);
-                text.Append("\",\"pid\":").Append(process.Id).Append(",\"window\":").Append(bucket);
-                text.Append(",\"window_start\":\"").Append(Time(origin.AddMilliseconds(bucket*10000.0)));
-                text.Append("\",\"window_end\":\"").Append(Time(origin.AddMilliseconds(bucket*10000.0+elapsed)));
-                text.Append("\",\"elapsed_ms\":").Append(N(elapsed)).Append(",\"cpu_ms\":").Append(N(cpu));
-                text.Append(",\"cpu_sample_max_ms\":").Append(N(sampleMax)).Append(",\"partial\":").Append(partial?"true":"false");
+                text.Append("\",\"pid\":").Append(pid).Append(",\"window\":").Append(row.bucket);
+                text.Append(",\"window_start\":\"").Append(Time(origin.AddMilliseconds(row.bucket*10000.0)));
+                text.Append("\",\"window_end\":\"").Append(Time(origin.AddMilliseconds(row.bucket*10000.0+row.elapsed)));
+                text.Append("\",\"elapsed_ms\":").Append(N(row.elapsed)).Append(",\"cpu_ms\":").Append(N(row.cpu));
+                text.Append(",\"cpu_sample_max_ms\":").Append(N(row.sampleMax)).Append(",\"partial\":").Append(row.partial?"true":"false");
+                text.Append(",\"dropped_windows\":").Append(Interlocked.Read(ref dropped));
                 text.Append(",\"segments\":["); bool first=true;
-                foreach(var item in parts) {
+                foreach(var item in row.parts) {
                     string[] fields=item.Key.Split('\t');
                     if(!first)text.Append(',');first=false;
                     text.Append("{\"operation_id\":\"").Append(fields[0]).Append("\",\"action\":\"").Append(fields[1]);
@@ -78,7 +122,7 @@ namespace AIConnector {
                     if(File.Exists(file+".1"))File.Delete(file+".1"); File.Move(file,file+".1");
                 }
                 File.AppendAllText(file,text.ToString(),new UTF8Encoding(false));
-            } catch { } // Observability never grants, retries or invalidates work.
+            } catch { Interlocked.Increment(ref dropped); } // No execution decision depends on logs.
         }
         void Sample(object state) { lock(gate) { if(!disposed)try { Account(); } catch { } } }
         public void Begin(string op, string kind, string run) { lock(gate) {
@@ -89,10 +133,15 @@ namespace AIConnector {
         public void Push(string stage) { lock(gate) { Account(); stages.Push(Safe(stage,@"^[a-zA-Z0-9_.-]{1,80}$")); } }
         public void Pop() { lock(gate) { Account(); if(stages.Count>0)stages.Pop(); } }
         public void End() { lock(gate) { Account(); double elapsed=last-bucket*10000.0; if(elapsed>0)Emit(elapsed,true); operation="";action="idle";key="";stages.Clear(); } }
-        public void Dispose() { lock(gate) {
-            if(disposed)return;
-            try { Account(); double elapsed=last-bucket*10000.0; if(elapsed>0)Emit(elapsed,true); } catch { }
-            disposed=true; timer.Dispose(); process.Dispose();
-        } }
+        public void Dispose() {
+            lock(gate) {
+                if(disposed)return;
+                try { Account(); double elapsed=last-bucket*10000.0; if(elapsed>0)Emit(elapsed,true); } catch { }
+                disposed=true; timer.Dispose(); process.Dispose();
+            }
+            lock(writeGate) { stopping=true; } wake.Set();
+            // Only process shutdown drains; normal actions never wait on IO.
+            if(writer.Join(1000))wake.Dispose();
+        }
     }
 }

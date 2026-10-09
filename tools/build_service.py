@@ -13,7 +13,7 @@ import zipfile
 ROOT=Path(__file__).resolve().parents[1]
 FILES=['Connector.ps1','connector.config.json','package.json','package-lock.json','CONTEXT.md',
        'Open-Windows-Dashboard.cmd','Install-Windows-Service.cmd','Prepare-Windows-Service.cmd',
-       'Open-Mac-Dashboard.command','Install-Mac-Service.command','Upgrade-Windows.cmd','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/EXECUTION-ACCEPTANCE.md','docs/SERVER-SETUP.md','docs/PROTOCOL.md','docs/RELAY.md','docs/ISSUE-7-8-FIX.md','docs/ISSUE-9-FIX.md','docs/ISSUE-11-FIX.md','docs/PARALLEL-OPERATIONS.md','docs/TRANSPORT-PERFORMANCE.md','docs/TRANSPORT-075.md','docs/TRANSPORT-076.md','docs/TRANSPORT-077.md','tools/report_windows.py']
+       'Open-Mac-Dashboard.command','Install-Mac-Service.command','Upgrade-Windows.cmd','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/EXECUTION-ACCEPTANCE.md','docs/SERVER-SETUP.md','docs/PROTOCOL.md','docs/RELAY.md','docs/ISSUE-7-8-FIX.md','docs/ISSUE-9-FIX.md','docs/ISSUE-11-FIX.md','docs/PARALLEL-OPERATIONS.md','docs/TRANSPORT-PERFORMANCE.md','docs/TRANSPORT-075.md','docs/TRANSPORT-076.md','docs/TRANSPORT-077.md','docs/TRANSPORT-078.md','tools/report_windows.py']
 
 def build(output,node,pwsh=None):
     system='windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux'

@@ -219,7 +219,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
     // An in-flight tick may enqueue more transport work after its current call.
     // Keep ownership until that entire tick and its subprocesses have drained.
     while(busy||auditing||advertising||submitting||supervising||flushing)await new Promise(resolve=>setTimeout(resolve,25));
-    await runner.idle();await connector.close();profiler.close();unlock();
+    await runner.idle();await connector.close();await profiler.close();unlock();
   })();
   return {server,close,status,token,url:origin,config:c};
 }

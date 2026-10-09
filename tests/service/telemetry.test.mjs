@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {timing,diagnostics,deliveryDiagnostics,readTiming} from '../../service/telemetry.mjs';
+import {timing,diagnostics,deliveryDiagnostics,readTiming,closeWaitTiming} from '../../service/telemetry.mjs';
 import {Connector} from '../../service/connector.mjs';
 
 test('timing correlates queue wait and request work without exporting bodies or headers',async()=>{
@@ -27,6 +27,19 @@ test('timing correlates queue wait and request work without exporting bodies or 
     assert.equal(new Set(result.events.map(e=>e.operation_id)).size,2);assert.ok(result.events.find(e=>e.kind==='action_queued'&&e.key)?.blocker_operation_id);
     assert.throws(()=>diagnostics(c,{jobs:{}},{},'../secret'),/INVALID_RUN_ID/);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('periodic queue waits use the async local writer and stay correlated in diagnostics',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC async waits '));
+ try{
+  timing(dir,'action_wait',{operation_id:'claim',key:'sample/1/run-1',blocker_operation_id:'poll',queue_wait_ms:10000});
+  timing(dir,'action_wait',{operation_id:'claim',key:'sample/1/run-1',blocker_operation_id:'poll',queue_wait_ms:20000});
+  await closeWaitTiming(dir);
+  const rows=readTiming(path.join(dir,'queue-wait-timing.jsonl'));assert.equal(rows.length,2);
+  assert.equal(rows[1].queue_wait_ms,20000);
+  const d=diagnostics({dataDir:dir,stateDir:dir,node:'windows-inner'},{jobs:{}},{},'sample/1/run-1');
+  assert.equal(d.events.length,2);assert.ok(d.events.every(e=>e.blocker_operation_id==='poll'));
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 
 test('public delivery sidecar exports only bounded correlation fields and times',()=>{

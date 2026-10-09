@@ -72,12 +72,16 @@ export class Runner {
   }
   exportDiagnostics(job,snapshot){
     // Only runs admitted by this version opt in. Never backfill history or
-    // modify the immutable result ZIP; this low-priority sidecar follows result.
+    // modify the immutable result ZIP. Receipt closes the cross-endpoint E2E;
+    // diagnostics cannot compete with its own result/receipt handoff.
     const row=(snapshot.runs||[]).find(r=>r.key===job.key);
-    if(!job.diagnostics_enabled||!['result','receipt'].includes(row?.phase)||row.error||job.delivery_diagnostics?.artifact||this.pending.has('diagnostics:'+job.key)||Date.now()<(job.delivery_diagnostics?.retry_at||0))return;
+    if(!job.diagnostics_enabled||row?.phase!=='receipt'||row.error||job.delivery_diagnostics?.artifact||this.pending.has('diagnostics:'+job.key)||Date.now()<(job.delivery_diagnostics?.retry_at||0))return;
+    if((snapshot.runs||[]).some(r=>r.phase==='accepted'&&!r.error&&!this.jobs[r.key]))return;
+    if(this.connector.running||this.connector.dirty||this.connector.queue?.length||[...this.pending.keys()].some(k=>k.startsWith('start:')||k.startsWith('delivery:'))||Object.values(this.jobs).some(j=>['waiting','reserving','claiming','launching','running','delivering','submitted'].includes(j.state)))return;
     if([...this.pending.keys()].some(k=>k.startsWith('diagnostics:')))return;
     this.schedule('diagnostics:'+job.key,async()=>{
       job.timings??={};job.timings.result_published_observed_at??=now();
+      job.timings.receipt_observed_at??=now();
       const file=path.join(job.dir,'delivery-diagnostics.zip');
       job.delivery_diagnostics??={};job.delivery_diagnostics.state='uploading';this.persist();
       try{
@@ -150,8 +154,9 @@ export class Runner {
     if(finished&&job.resources&&!['released','waiting'].includes(job.resources.state)&&Date.now()>=(job.resource_check_at||0)){
       job.resource_check_at=Date.now()+5000;this.schedule('release:'+job.key,()=>this.resources.release(job));
     }
-    if(['confirmed','blocked'].includes(job.state))return;
     const row=(snapshot.runs||[]).find(x=>x.key===job.key);
+    if(['result','receipt'].includes(row?.phase)&&!job.timings?.result_published_observed_at){job.timings??={};job.timings.result_published_observed_at=now();this.persist();}
+    if(['confirmed','blocked'].includes(job.state))return;
     if(row?.phase==='conflict'){job.state='blocked';job.error='RUN_CONFLICT';this.persist();return;}
     if(row?.phase==='receipt'){job.state='confirmed';job.confirmed_at=now();job.timings??={};job.timings.receipt_observed_at=job.confirmed_at;job.error='';timing(this.c.dataDir,'receipt_observed',{key:job.key});this.persist();return;}
     const worker=read(path.join(job.dir,'worker.json'));

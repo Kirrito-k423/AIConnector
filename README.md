@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.7 增加 Windows 十秒计时窗口。** 常驻 PowerShell 和 Pi 分开记录处理阶段、进程 CPU 与排队阻塞操作；恢复结果父事件优先交付，把历史审计移出新任务扫描，减少重复接收准备。保持不可变协议、领取恢复、资源锁和接收端校验；真实内网性能改善仍需升级后测量。
+**v0.7.8 将十秒计时改为本地后台写入。** 窗口写盘不持有阶段锁，诊断等 Mac receipt 和当前任务队列空闲后回传；保留阶段、进程 CPU 与排队阻塞证据。保持不可变协议、领取恢复、资源锁和接收端校验；真实内网性能改善仍需升级后测量。
 
-[下载服务候选包 v0.7.7-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.7-rc.1) · [本版优化与验收](docs/TRANSPORT-077.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+[下载服务候选包 v0.7.8-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.8-rc.1) · [本版优化与验收](docs/TRANSPORT-078.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 

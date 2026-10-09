@@ -15,14 +15,14 @@ def report(source,output):
     windows=data.get('windows',[])
     output.parent.mkdir(parents=True,exist_ok=True)
     with output.open('w',encoding='utf-8-sig',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=['source','pid','window_start','window_end','elapsed_ms','cpu_ms','cpu_sample_max_ms','partial','accounted_ms','unaccounted_ms','stages','operations'])
+        writer=csv.DictWriter(f,fieldnames=['source','pid','window_start','window_end','elapsed_ms','cpu_ms','cpu_sample_max_ms','dropped_windows','partial','accounted_ms','unaccounted_ms','stages','operations'])
         writer.writeheader()
         for w in windows:
             accounted=sum(s['wall_ms'] for s in w['segments']);phases={}
             for s in w['segments']:
                 name=(s.get('parent_stage','')+' / ' if s.get('parent_stage') else '')+s['stage']
                 phases[name]=phases.get(name,0)+s['wall_ms']
-            writer.writerow({**{n:w.get(n) for n in ['source','pid','window_start','window_end','elapsed_ms','cpu_ms','cpu_sample_max_ms','partial']},
+            writer.writerow({**{n:w.get(n) for n in ['source','pid','window_start','window_end','elapsed_ms','cpu_ms','cpu_sample_max_ms','dropped_windows','partial']},
                 'accounted_ms':round(accounted,3),'unaccounted_ms':round(w['elapsed_ms']-accounted,3),
                 'stages':'; '.join(f'{k}: {v:.3f} ms' for k,v in sorted(phases.items(),key=lambda x:-x[1])),
                 'operations':'; '.join(sorted({s.get('action','')+':'+s.get('operation_id','') for s in w['segments']}))})

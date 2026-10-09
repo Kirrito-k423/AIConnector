@@ -16,7 +16,7 @@ permissions:
 jobs:
   publish-candidate:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_tag != '' && inputs.release_tag == ''
-    needs: [windows-service, windows-maintenance-recovery, windows-runtime-diagnostic]
+    needs: [windows-service, windows-maintenance-recovery, windows-runtime-diagnostic, windows-profiler-overhead]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,6 +31,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_TAG: ${{ inputs.publish_tag }}
         run: python3 tools/publish_service_candidate.py "$CANDIDATE_TAG" dist/service
+  windows-profiler-overhead:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Paired profiler overhead and slow disk isolation on PowerShell 5.1
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: |
+          New-Item -ItemType Directory -Force reports/profiler | Out-Null
+          git show 36fe6eeb65ccaf2bca95bdc153803d339e1a389e:service/runtime-profiler.cs | Set-Content -Encoding utf8 reports/profiler/baseline.cs
+          python tools/benchmark_profiler.py --baseline reports/profiler/baseline.cs --output reports/profiler/windows.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: profiler-overhead-windows
+          path: reports/profiler/windows.json
   windows-runtime-diagnostic:
     if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     runs-on: windows-latest
