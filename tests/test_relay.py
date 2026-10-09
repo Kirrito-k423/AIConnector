@@ -249,6 +249,37 @@ class RelayTests(unittest.TestCase):
         self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
         self.assertEqual(len(self.ctx['posts']), 7)
 
+    def test_receipt_compacts_confirmed_bookkeeping_and_preserves_deduplication_and_claims(self):
+        self.complete_flow()
+        self.poll('windows-inner'); self.poll('mac-outer')
+        for node in ['windows-inner','mac-outer']:
+            state=self.read_state(node)
+            self.assertEqual(state['outbox'], {})
+            self.assertEqual(len(state['events']),5)
+            self.assertEqual(len(state['comments']),5)
+        owner=self.read_state('windows-inner')['claims'][self.key]
+        posts=len(self.ctx['posts'])
+        self.submit()
+        self.run_cli('windows-inner','Complete','-Key',self.key,'-File',self.resultfile)
+        self.poll('windows-inner'); self.poll('mac-outer')
+        self.assertEqual(len(self.ctx['posts']),posts)
+        self.assertEqual(self.read_state('windows-inner')['claims'][self.key],owner)
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
+
+    def test_upgrade_compacts_only_confirmed_closed_rows_and_preserves_unresolved_delivery(self):
+        self.complete_flow(); self.poll('windows-inner')
+        state=self.read_state('windows-inner')
+        event=next(e for e in state['events'].values() if e['kind']=='result')
+        state['outbox'][event['event_id']]={'event':event,'body':'old duplicated body','status':'confirmed','attempts':1,'http':201}
+        for status in ['uncertain','rejected','pending']:
+            state['outbox'][status]={'event':event,'body':'keep '+status,'status':status,'attempts':1,'http':0}
+        legacy.ConnectorTests.write_state(self,'windows-inner',state)
+        snapshot=self.run_cli('windows-inner','Status')
+        state=self.read_state('windows-inner')
+        self.assertNotIn(event['event_id'],state['outbox'])
+        self.assertEqual(set(state['outbox']),{'uncertain','rejected','pending'})
+        self.assertEqual(snapshot['runs'][0]['phase'],'receipt')
+
     def test_wrong_repository_manifest_prevents_any_write(self):
         self.ctx['descriptor']['repository'] = 'wrong/repo'
         self.submit()

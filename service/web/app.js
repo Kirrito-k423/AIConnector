@@ -77,7 +77,7 @@ function renderDetail(r){
     detailKey='';detailSignature='empty:'+filter;return;
   }
   const w=r.job?.worker;
-  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.job?.timings,r.activity_at,matches(r,filter),filter,
+  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.job?.timings,r.job?.delivery_diagnostics,r.activity_at,matches(r,filter),filter,
     w&&[w.state,w.context,w.compaction,w.server_task,w.events,w.agent_started_at,w.agent_ended_at,w.execution_started_at,w.execution_ended_at,w.execution_time_source]]);
   if(detailKey===r.key&&detailSignature===signature)return;
   const same=detailKey===r.key,top=same?detail.scrollTop:0;
@@ -118,6 +118,11 @@ function renderDetail(r){
   const diagnose=el('button','导出本次交付诊断');diagnose.type='button';
   diagnose.onclick=async()=>{try{const data=await api('/api/diagnostics?key='+encodeURIComponent(r.key));const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download='aiconnector-diagnostics-'+r.key.replaceAll('/','-')+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){notice(e.message,true);}};
   milestones.append(diagnose);
+  if(r.job?.delivery_diagnostics){
+    const d=r.job.delivery_diagnostics,names={queued:'等待发送',uploading:'正在上传',retrying:'等待重试',published:'已回传',expired:'已停止自动重试'};
+    milestones.append(el('p','诊断回传：'+(names[d.state]||d.state)+' · 尝试 '+(d.attempts||0)+' 次'+(d.error?' · '+d.error:'')+(d.retry_at&&d.state==='retrying'?' · 下次 '+date(d.retry_at):''),d.state==='expired'?'error':'meta'));
+    if(d.artifact)link(milestones,'下载诊断 ZIP ↗',d.artifact.url);
+  }
   detail.append(milestones);
   if(r.job?.wait_reason)detail.append(el('p','等待原因：'+r.job.wait_reason+(r.job.wait_owner?'；当前占用者：'+r.job.wait_owner:''),'selection-note'));
   if(r.job?.resources)detail.append(disclosure('resources','机器占用 · '+r.job.resources.state,el('pre',JSON.stringify(r.job.resources,null,2))));

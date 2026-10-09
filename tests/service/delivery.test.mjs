@@ -79,17 +79,14 @@ test('diagnostics lost reply freezes the same ZIP across restart and never claim
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 
-test('receipt diagnostics defer while another run or foreground control is pending',async()=>{
+test('receipt diagnostics are eligible independently of other runs and foreground controls',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC idle diagnostics ')),key='sample/1/run-1';
  const job={key,dir,state:'confirmed',diagnostics_enabled:true},other={key:'sample/1/run-2',dir:path.join(dir,'other'),state:'waiting'},ledger={jobs:{[key]:job,other}},calls=[];
  const connector={running:false,queue:[],call:async action=>{calls.push(action);return {name:'fixture'};}};
  const runner=new Runner({dataDir:dir,stateDir:dir,node:'windows-inner',runner:{enabled:false}},connector,ledger,()=>{},{}),snapshot={runs:[{key,phase:'receipt'}]};
  try{
-  await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
-  other.state='submitted';await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
-  other.state='confirmed';connector.running=true;await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
-  connector.running=false;connector.dirty=true;await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
-  connector.dirty=false;snapshot.runs.push({key:'sample/1/run-3',phase:'accepted'});await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,[]);
-  snapshot.runs.pop();await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,['UploadDiagnostics']);
+  connector.running=true;connector.dirty=true;snapshot.runs.push({key:'sample/1/run-3',phase:'accepted'});
+  await runner.tick(snapshot);await runner.idle();assert.deepEqual(calls,['UploadDiagnostics']);
+  other.state='submitted';await runner.tick(snapshot);await runner.idle();assert.equal(calls.length,1);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });

@@ -71,25 +71,34 @@ export class Runner {
     timing(this.c.dataDir,'scheduler_wait',{key:job.key,code:reason});this.persist();
   }
   exportDiagnostics(job,snapshot){
-    // Only runs admitted by this version opt in. Never backfill history or
-    // modify the immutable result ZIP. Receipt closes the cross-endpoint E2E;
-    // diagnostics cannot compete with its own result/receipt handoff.
+    // Preserve prior opt-ins across upgrades. Receipt, not global idleness,
+    // closes this run's handoff. The transport still serializes all writes.
     const row=(snapshot.runs||[]).find(r=>r.key===job.key);
-    if(!job.diagnostics_enabled||row?.phase!=='receipt'||row.error||job.delivery_diagnostics?.artifact||this.pending.has('diagnostics:'+job.key)||Date.now()<(job.delivery_diagnostics?.retry_at||0))return;
-    if((snapshot.runs||[]).some(r=>r.phase==='accepted'&&!r.error&&!this.jobs[r.key]))return;
-    if(this.connector.running||this.connector.dirty||this.connector.queue?.length||[...this.pending.keys()].some(k=>k.startsWith('start:')||k.startsWith('delivery:'))||Object.values(this.jobs).some(j=>['waiting','reserving','claiming','launching','running','delivering','submitted'].includes(j.state)))return;
+    if(!job.diagnostics_enabled||row?.phase!=='receipt'||row.error||job.delivery_diagnostics?.artifact||job.delivery_diagnostics?.state==='expired'||this.pending.has('diagnostics:'+job.key)||this.pending.has('start:'+job.key)||this.pending.has('delivery:'+job.key))return;
+    const d=job.delivery_diagnostics??={};
+    if(!d.deadline_at){d.eligible_at=now();d.deadline_at=Date.now()+86400000;d.attempts??=0;d.state='queued';this.persist();}
+    if(Date.now()>=d.deadline_at||(d.attempts||0)>=12){
+      d.state='expired';d.error=Date.now()>=d.deadline_at?'DIAGNOSTICS_DEADLINE_EXCEEDED':'DIAGNOSTICS_RETRY_EXHAUSTED';d.expired_at=now();
+      timing(this.c.dataDir,'diagnostics_expired',{key:job.key,attempt:d.attempts||0,code:d.error});this.persist();return;
+    }
+    if(Date.now()<(d.retry_at||0))return;
     if([...this.pending.keys()].some(k=>k.startsWith('diagnostics:')))return;
     this.schedule('diagnostics:'+job.key,async()=>{
       job.timings??={};job.timings.result_published_observed_at??=now();
       job.timings.receipt_observed_at??=now();
       const file=path.join(job.dir,'delivery-diagnostics.zip');
-      job.delivery_diagnostics??={};job.delivery_diagnostics.state='uploading';this.persist();
+      d.state='queued';d.attempts++;d.last_attempt_at=now();this.persist();
       try{
         // Freeze bytes before upload, so lost replies/restarts reconcile one SHA.
         if(!fs.existsSync(file))atomic(file,zipSync({'delivery-diagnostics.json':strToU8(JSON.stringify(deliveryDiagnostics(this.c,this.ledger,snapshot,job.key),null,2))}));
-        job.delivery_diagnostics.artifact=await this.connector.call('UploadDiagnostics',{key:job.key,file});job.delivery_diagnostics.state='published';job.delivery_diagnostics.published_at=now();delete job.delivery_diagnostics.error;this.persist();
+        d.artifact=await this.connector.call('UploadDiagnostics',{key:job.key,file,expiresAt:d.deadline_at});d.state='published';d.published_at=now();delete d.error;delete d.retry_at;this.persist();
       }
-      catch(e){job.delivery_diagnostics.state='retrying';job.delivery_diagnostics.error=cleanError(e);job.delivery_diagnostics.retry_at=Math.max(Date.now()+60000,e.retryAt||0);this.persist();}
+      catch(e){
+        d.error=cleanError(e);d.last_error=d.error;d.state=Date.now()>=d.deadline_at||d.attempts>=12?'expired':'retrying';
+        if(d.state==='expired'){d.expired_at=now();if(d.attempts>=12&&Date.now()<d.deadline_at)d.error='DIAGNOSTICS_RETRY_EXHAUSTED';timing(this.c.dataDir,'diagnostics_expired',{key:job.key,attempt:d.attempts,code:d.error});}
+        else d.retry_at=Math.min(d.deadline_at,Math.max(Date.now()+60000,e.retryAt||0));
+        this.persist();
+      }
     });
   }
   async launch(job,row) {

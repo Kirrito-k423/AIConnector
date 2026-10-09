@@ -61,6 +61,20 @@ test('task diagnostics downloads JSON and milestones show delivery segments',asy
   assert.ok(requests.some(r=>r.method==='GET'&&r.url===url));
 });
 
+test('diagnostic retry/expiry status refreshes without changing the completed task',async t=>{
+  const data=fixture(),key='b-receipt/1/run';
+  data.jobs=[{key,state:'confirmed',delivery_diagnostics:{state:'queued',attempts:1}}];
+  const {page,poll}=await dashboard(t,data);
+  await page.locator('[data-filter="confirmed"]').click();
+  assert.match(await page.locator('.milestones').textContent(),/诊断回传：等待发送 · 尝试 1 次/);
+  data.jobs[0].delivery_diagnostics={state:'expired',attempts:12,error:'DIAGNOSTICS_RETRY_EXHAUSTED'};
+  await poll();
+  assert.match(await page.locator('.milestones').textContent(),/已停止自动重试.*DIAGNOSTICS_RETRY_EXHAUSTED/);
+  assert.equal(await page.locator('.detail-heading .pill').textContent(),'已回执');
+  data.jobs[0].delivery_diagnostics={state:'published',attempts:2,artifact:{url:'https://github.com/example/relay/releases/download/test/diagnostics.zip'}};
+  await poll();assert.equal(await page.getByRole('link',{name:'下载诊断 ZIP ↗'}).getAttribute('href'),data.jobs[0].delivery_diagnostics.artifact.url);
+});
+
 test('default active filter, recent event sorting, compact 20% sidebar and milestones above content',async t=>{
   const {page}=await dashboard(t);
   assert.equal(await page.locator('[data-filter="active"]').getAttribute('aria-pressed'),'true');

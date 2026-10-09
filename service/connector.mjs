@@ -18,7 +18,8 @@ export class Connector {
       const next=this.queue.shift();try{next.resolve(await next.execute());}catch(e){next.reject(e);}
     }}finally{this.running=false;for(const resolve of this.waiters.splice(0))resolve();}
   }
-  call(action,{key,file,data,claimOwner}={}) {
+  call(action,{key,file,data,claimOwner,expiresAt}={}) {
+    need(expiresAt===undefined||action==='UploadDiagnostics'&&Number.isFinite(expiresAt)&&expiresAt>0&&expiresAt-Date.now()<=2147483647,'INVALID_ACTION_DEADLINE');
     const queued=Date.now(),operation=id();
     key??=data?.task_id&&data?.revision&&data?.run_id?`${data.task_id}/${data.revision}/${data.run_id}`:undefined;
     timing(this.c.dataDir,'action_queued',{operation_id:operation,action,key,queue_depth:this.queue.length+Number(this.running),blocker_operation_id:this.activity?.running?this.activity.operation_id:undefined,blocker_action:this.activity?.running?this.activity.action:undefined});
@@ -50,7 +51,18 @@ export class Connector {
       // are best effort. No active HTTP request is preempted or replayed.
       const priority={Status:0,Complete:0,Claim:0,Flush:0,Upload:1,Submit:2,Poll:3,Advertise:6,Audit:8,UploadDiagnostics:8}[action]??8;
       const waitTimer=setInterval(()=>timing(this.c.dataDir,'action_wait',{operation_id:operation,action,key,queue_wait_ms:Date.now()-queued,blocker_operation_id:this.activity?.running?this.activity.operation_id:undefined,blocker_action:this.activity?.running?this.activity.action:undefined}),10000);waitTimer.unref();
-      this.queue.push({execute:async()=>{clearInterval(waitTimer);return execute();},resolve,reject,priority,background:['Audit','Advertise','UploadDiagnostics'].includes(action),at:queued});void this.drain();
+      let expiryTimer;
+      const item={execute:async()=>{clearInterval(waitTimer);clearTimeout(expiryTimer);need(!expiresAt||Date.now()<expiresAt,'DIAGNOSTICS_DEADLINE_EXCEEDED');return execute();},resolve,reject,priority,background:['Audit','Advertise','UploadDiagnostics'].includes(action),at:queued};
+      this.queue.push(item);
+      // Expire only queued diagnostics. Never abort an active/ambiguous upload
+      // or cancel ownership, execution, or foreground delivery operations.
+      if(expiresAt){expiryTimer=setTimeout(()=>{
+        const index=this.queue.indexOf(item);if(index<0)return;
+        this.queue.splice(index,1);clearInterval(waitTimer);
+        timing(this.c.dataDir,'action_expired',{operation_id:operation,action,key,code:'DIAGNOSTICS_DEADLINE_EXCEEDED'});
+        reject(new Error('DIAGNOSTICS_DEADLINE_EXCEEDED'));
+      },Math.min(2147483647,Math.max(0,expiresAt-Date.now())));expiryTimer.unref();}
+      void this.drain();
     });
   }
 }

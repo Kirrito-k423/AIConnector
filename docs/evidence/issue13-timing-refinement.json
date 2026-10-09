@@ -1,0 +1,238 @@
+{
+  "as_of": "2026-10-09T14:19:10.649187+00:00",
+  "original_five": {
+    "n": 5,
+    "mean_total_s": 615.0,
+    "means_s": {
+      "publish_to_discovery_s": 386.0903682231903,
+      "discovery_to_ack_queue_s": 53.45679788589477,
+      "ack_queue_to_flush_dispatch_s": 145.3238338947296,
+      "flush_dispatch_to_public_ack_s": 30.128999996185303
+    },
+    "rows": [
+      {
+        "key": "machine-audit-5361cb16bcfd/8/run-20261009-v078-parallel-01",
+        "segments": {
+          "publish_to_discovery_s": 46.51510310173035,
+          "discovery_to_ack_queue_s": 55.22498679161072,
+          "ack_queue_to_flush_dispatch_s": 410.5949101448059,
+          "flush_dispatch_to_public_ack_s": 37.66499996185303
+        },
+        "zip_sha256": "68dd51bb27e9ebc6d3b6f7d69604495ffec76a663a745163ab7338c0e8258565",
+        "proof": {
+          "published_task_at": "2026-10-09T09:06:41+00:00",
+          "observed_at": "2026-10-09T09:07:27.5151039+00:00",
+          "accepted_queued_at": "2026-10-09T09:08:22.7400901+00:00",
+          "flush_dispatched_at": "2026-10-09T09:15:13.335Z",
+          "flush_operation_id": "b201ee2217f15e48b32b783076c2faf0bf87815614d027c6",
+          "accepted_public_at": "2026-10-09T09:15:51+00:00"
+        }
+      },
+      {
+        "key": "machine-audit-5f000759762e/8/run-20261009-v078-parallel-01",
+        "segments": {
+          "publish_to_discovery_s": 26.58804488182068,
+          "discovery_to_ack_queue_s": 65.48685503005981,
+          "ack_queue_to_flush_dispatch_s": 170.8221001625061,
+          "flush_dispatch_to_public_ack_s": 28.102999925613403
+        },
+        "zip_sha256": "5c439b28734a991e22255c6979d369f8ef71ab7b091bff41138be6a18b95e7f3",
+        "proof": {
+          "published_task_at": "2026-10-09T09:07:01+00:00",
+          "observed_at": "2026-10-09T09:07:27.5880458+00:00",
+          "accepted_queued_at": "2026-10-09T09:08:33.0749006+00:00",
+          "flush_dispatched_at": "2026-10-09T09:11:23.897Z",
+          "flush_operation_id": "f109d10cf82f92e24aa652a8b5cf62b3741abffa34d0f24d",
+          "accepted_public_at": "2026-10-09T09:11:52+00:00"
+        }
+      },
+      {
+        "key": "machine-audit-a2de7e7aa060/8/run-20261009-v078-parallel-01",
+        "segments": {
+          "publish_to_discovery_s": 9.605195045471191,
+          "discovery_to_ack_queue_s": 44.71288990974426,
+          "ack_queue_to_flush_dispatch_s": 33.46991515159607,
+          "flush_dispatch_to_public_ack_s": 27.211999893188477
+        },
+        "zip_sha256": "85d96db1ab184e2178d0bb7cb8cee36a3718fddbc3b84392262a4c9712b6600b",
+        "proof": {
+          "published_task_at": "2026-10-09T09:07:18+00:00",
+          "observed_at": "2026-10-09T09:07:27.6051951+00:00",
+          "accepted_queued_at": "2026-10-09T09:08:12.3180852+00:00",
+          "flush_dispatched_at": "2026-10-09T09:08:45.788Z",
+          "flush_operation_id": "424ba0bd6e3bd4ba08fbf2c690399a268d3f29b75afc953b",
+          "accepted_public_at": "2026-10-09T09:09:13+00:00"
+        }
+      },
+      {
+        "key": "machine-audit-026c5fa5d34d/8/run-20261009-v078-parallel-01",
+        "segments": {
+          "publish_to_discovery_s": 932.8637499809265,
+          "discovery_to_ack_queue_s": 45.71994090080261,
+          "ack_queue_to_flush_dispatch_s": 33.83530902862549,
+          "flush_dispatch_to_public_ack_s": 28.581000089645386
+        },
+        "zip_sha256": "8731442f782240e83533bc5367ae43fa2bb4d2450e405a93c3f3ebf4187b3087",
+        "proof": {
+          "published_task_at": "2026-10-09T09:07:55+00:00",
+          "observed_at": "2026-10-09T09:23:27.8637504+00:00",
+          "accepted_queued_at": "2026-10-09T09:24:13.5836912+00:00",
+          "flush_dispatched_at": "2026-10-09T09:24:47.419Z",
+          "flush_operation_id": "8e06f3a4b826c167205e5e51d5371dd94b8537df7cc5ee34",
+          "accepted_public_at": "2026-10-09T09:25:16+00:00"
+        }
+      },
+      {
+        "key": "machine-audit-a2de7e7aa060/8/run-20261009-v078-lock-02",
+        "segments": {
+          "publish_to_discovery_s": 914.8797481060028,
+          "discovery_to_ack_queue_s": 56.13931679725647,
+          "ack_queue_to_flush_dispatch_s": 77.8969349861145,
+          "flush_dispatch_to_public_ack_s": 29.08400011062622
+        },
+        "zip_sha256": "f31ca6fb979c344dbe3ef8c0fd46477630ad1db75b8dee673a566f972a5110b0",
+        "proof": {
+          "published_task_at": "2026-10-09T09:08:13+00:00",
+          "observed_at": "2026-10-09T09:23:27.8797484+00:00",
+          "accepted_queued_at": "2026-10-09T09:24:24.0190657+00:00",
+          "flush_dispatched_at": "2026-10-09T09:25:41.916Z",
+          "flush_operation_id": "06afaddfe5728b52c53271ff52c106b3871932f33ef8e7c6",
+          "accepted_public_at": "2026-10-09T09:26:11+00:00"
+        }
+      }
+    ]
+  },
+  "all_six_public": {
+    "n": 6,
+    "mean_s": 736.3333333333334,
+    "rows": [
+      {
+        "key": "machine-audit-5361cb16bcfd/8/run-20261009-v078-parallel-01",
+        "publish_to_ack_s": 550.0
+      },
+      {
+        "key": "machine-audit-5f000759762e/8/run-20261009-v078-parallel-01",
+        "publish_to_ack_s": 291.0
+      },
+      {
+        "key": "machine-audit-a2de7e7aa060/8/run-20261009-v078-parallel-01",
+        "publish_to_ack_s": 115.0
+      },
+      {
+        "key": "machine-audit-d27acab66349/8/run-20261009-v078-parallel-01",
+        "publish_to_ack_s": 1343.0
+      },
+      {
+        "key": "machine-audit-026c5fa5d34d/8/run-20261009-v078-parallel-01",
+        "publish_to_ack_s": 1041.0
+      },
+      {
+        "key": "machine-audit-a2de7e7aa060/8/run-20261009-v078-lock-02",
+        "publish_to_ack_s": 1078.0
+      }
+    ]
+  },
+  "sidecars": [
+    {
+      "key": "machine-audit-5361cb16bcfd/8/run-20261009-v078-parallel-01",
+      "sha256": "68dd51bb27e9ebc6d3b6f7d69604495ffec76a663a745163ab7338c0e8258565",
+      "events_truncated": false,
+      "windows_truncated": true
+    },
+    {
+      "key": "machine-audit-5f000759762e/8/run-20261009-v078-parallel-01",
+      "sha256": "5c439b28734a991e22255c6979d369f8ef71ab7b091bff41138be6a18b95e7f3",
+      "events_truncated": false,
+      "windows_truncated": true
+    },
+    {
+      "key": "machine-audit-a2de7e7aa060/8/run-20261009-v078-parallel-01",
+      "sha256": "85d96db1ab184e2178d0bb7cb8cee36a3718fddbc3b84392262a4c9712b6600b",
+      "events_truncated": false,
+      "windows_truncated": true
+    },
+    {
+      "key": "machine-audit-d27acab66349/8/run-20261009-v078-parallel-01",
+      "sha256": "ede2e270d1189565370bfdbff4240621c3b8495fae891ce7b4c5c15b7678252d",
+      "events_truncated": true,
+      "windows_truncated": true
+    },
+    {
+      "key": "machine-audit-026c5fa5d34d/8/run-20261009-v078-parallel-01",
+      "sha256": "8731442f782240e83533bc5367ae43fa2bb4d2450e405a93c3f3ebf4187b3087",
+      "events_truncated": false,
+      "windows_truncated": true
+    },
+    {
+      "key": "machine-audit-a2de7e7aa060/8/run-20261009-v078-lock-02",
+      "sha256": "f31ca6fb979c344dbe3ef8c0fd46477630ad1db75b8dee673a566f972a5110b0",
+      "events_truncated": false,
+      "windows_truncated": true
+    }
+  ],
+  "late_task": {
+    "key": "machine-audit-d27acab66349/8/run-20261009-v078-parallel-01",
+    "admission_to_claim_queue_s": 12343.633000135422,
+    "scheduler_wait_counts": {
+      "RESOURCE_BUSY": 921
+    },
+    "events_truncated": true
+  },
+  "late_connector_coverage": {
+    "first_retained_window": "2026-10-09T10:59:51.046Z",
+    "complete_window_wall_s": 7330.0,
+    "cpu_s": 6242.611796,
+    "stages_s": {
+      "canonical": 5904.754551999997,
+      "json.parse": 767.2503460000007,
+      "http": 275.46246499999995,
+      "idle": 216.04130100000003,
+      "snapshot.build": 52.964890000000025,
+      "runs.project": 25.952149000000006,
+      "json.serialize": 25.509758999999978,
+      "control.other": 17.067178999999996,
+      "state.hash": 10.082270999999999,
+      "poll.audit": 9.28764,
+      "state.write": 8.942254,
+      "state.save": 6.227534000000004,
+      "reply.pipe": 3.3598249999999994,
+      "relay.routes": 3.0135859999999997,
+      "projection.write": 2.7011869999999996,
+      "poll.import": 1.0907510000000002,
+      "outbox.send": 0.19646700000000003,
+      "transition.prepare": 0.05012999999999999,
+      "reply.serialize": 0.04558800000000003,
+      "artifact.verify": 0.00013700000000000002
+    },
+    "stage_percent": {
+      "canonical": 80.55599661664388,
+      "json.parse": 10.467262564802192,
+      "http": 3.7580145293315135,
+      "idle": 2.9473574488403824,
+      "snapshot.build": 0.7225769440654847,
+      "runs.project": 0.35405387448840386,
+      "json.serialize": 0.34801854024556583,
+      "control.other": 0.23284009549795356,
+      "state.hash": 0.13754803547066846,
+      "poll.audit": 0.12670723055934516,
+      "state.write": 0.12199527967257845,
+      "state.save": 0.08495953615279678,
+      "reply.pipe": 0.04583663028649385,
+      "relay.routes": 0.04111304229195088,
+      "projection.write": 0.03685111869031377,
+      "poll.import": 0.014880641200545705,
+      "outbox.send": 0.0026803137789904504,
+      "transition.prepare": 0.0006839017735334242,
+      "reply.serialize": 0.0006219372442019105,
+      "artifact.verify": 1.8690313778990452e-06
+    }
+  },
+  "limits": [
+    "Original five cohort is kept at exactly 615s, not replaced with six-run averages.",
+    "All six now completed; the late task has truncated accepted/discovery events and is not given invented internal stages.",
+    "Public/Windows edge intervals have unmeasured clock skew; queue and preparation intervals are same-host.",
+    "The retained connector 10-second windows start after the 09:06–09:26 original admission period. Late CPU/stage proportions cannot explain that 615-second interval.",
+    "Per-run waiting means cannot be added as process CPU; shared windows are deduplicated by session/window.",
+    "RESOURCE_BUSY proves recorded resource gating, not which server process owned the lock or why it was not released."
+  ]
+}

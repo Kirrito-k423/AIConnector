@@ -5,7 +5,7 @@ import {WindowWriter} from './window-writer.mjs';
 const waitWriters=new Map();
 export async function closeWaitTiming(dir){const writer=waitWriters.get(dir);if(writer){await writer.close();waitWriters.delete(dir);}}
 
-const fields=new Set(['operation_id','action','key','queue_wait_ms','elapsed_ms','total_ms','queue_depth','code','attempt','retry_at','bytes','blocker_operation_id','blocker_action','stage','cpu_ms','exception_type','native_code','line','dropped_events']);
+const fields=new Set(['operation_id','action','key','queue_wait_ms','elapsed_ms','total_ms','queue_depth','code','attempt','retry_at','bytes','blocker_operation_id','blocker_action','stage','cpu_ms','exception_type','native_code','line','dropped_events','entries_removed']);
 const keyPattern=/^[a-z0-9][a-z0-9_-]{0,63}\/[1-9][0-9]{0,9}\/[a-z0-9][a-z0-9_-]{0,63}$/;
 export function timing(dir,kind,values={}) {
   if(!dir)return;

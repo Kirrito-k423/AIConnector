@@ -38,7 +38,7 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
         $row=@{schema='aiconnector.timing.v1';at=[DateTimeOffset]::UtcNow.ToString('o');source='connector';operation_id=$OperationId;action=$Action;kind=$Kind}
         if ($script:IoScope -cmatch '^[a-zA-Z0-9_:/-]{1,240}$') { $row.scope=$script:IoScope }
         if ($Key -cmatch '^[a-z0-9_-]+/[1-9][0-9]*/[a-z0-9_-]+$') { $row.key=$Key }
-        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent','stage','cpu_ms','exception_type','native_code','line')) {
+        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent','entries_removed','stage','cpu_ms','exception_type','native_code','line')) {
             if ($Values.ContainsKey($name)) { $row[$name]=$Values[$name] }
         }
         $trace=Join-Path $StateDir 'transport-timing.jsonl'
@@ -239,6 +239,7 @@ function Open-State-Work {
         Save
     }
     foreach ($field in @('routes','provisions','scopes','sync')) { if (-not $script:State.ContainsKey($field)) { $script:State[$field]=@{} } }
+    if ((Compact-ConfirmedOutbox) -gt 0) { Save }
 }
 function In-Scope([string]$Scope,[scriptblock]$Work) {
     $previous=$script:IoScope; $script:IoScope=$Scope
@@ -722,6 +723,9 @@ function Event-Body($E) {
     Need ($script:Utf8.GetByteCount($body) -le 32768) 'COMMENT_TOO_LARGE'; return $body
 }
 function Queue($E) {
+    # The durable event ledger owns deduplication even after a closed run's
+    # redundant delivery bookkeeping has been compacted.
+    if ($script:State.events.ContainsKey($E.event_id)) { return }
     $body=Event-Body $E
     if ($script:State.outbox.ContainsKey($E.event_id)) { return }
     $script:State.outbox[$E.event_id]=@{event=$E;body=$body;status='pending';attempts=0;http=0;queued_at=(Epoch)}
@@ -785,7 +789,23 @@ function Import-Comments($Comments) {
             $item.status='confirmed'
         }
     }
+    $null=Compact-ConfirmedOutbox
     Save
+}
+function Compact-ConfirmedOutbox {
+    $ids=@($script:State.outbox.Keys | Where-Object { $script:State.outbox[$_].status -ceq 'confirmed' -and $script:State.events.ContainsKey($_) })
+    if ($ids.Count -eq 0) { return 0 }
+    $runs=Runs; $removed=0
+    foreach ($id in $ids) {
+        $item=$script:State.outbox[$id]; $key=Run-Key $item.event; $run=Get-Field $runs $key
+        # Preserve pending, uncertain, rejected, conflicted and unclosed runs.
+        # Events/comments/claims remain the receipt and ownership evidence.
+        if (-not $run -or $run.phase -cne 'receipt' -or $run.error) { continue }
+        if ((Canonical $item.event) -cne (Canonical $script:State.events[$id])) { continue }
+        $script:State.outbox.Remove($id); $removed++
+    }
+    if ($removed -gt 0) { Trace-Event 'outbox_compacted' @{entries_removed=$removed} }
+    return $removed
 }
 function Read-TaskComments($Route) {
     $all=@()

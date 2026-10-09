@@ -43,11 +43,11 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All four required Windows service workflow jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.8 isolates ten-second telemetry writes from the PowerShell accounting lock and Node event loop using bounded local background writers. Diagnostics upload waits for Mac receipt and an idle foreground task queue; raw timing samples never create periodic network writes. '
-           'Delivery parent events regain priority; completed ZIP uploads precede fresh scans, repeated preparation of queued acceptance is skipped, and historical audits move to an idle background action. '
+           '0.7.9 fixes Issue #13: diagnostics become eligible after their own receipt, without waiting for all jobs, dirty state or background retries to become idle. A single low-priority diagnostics request has a persisted 12-attempt / 24-hour budget; only queued diagnostics expire, active requests are not aborted. '
+           'Verified closed-run confirmed outbox bookkeeping is compacted while event/comment and claim ledgers retain deduplication and ownership evidence. Pending, uncertain, rejected and conflicted entries remain. Ten-second samples remain local and never create periodic network writes. '
            'No active HTTP/SSH is preempted or replayed. Owner-bound recovery, machine reservations, durable write pacing and receiver hash validation are preserved. '
            'Upgrade both endpoints using existing config and state. No quantified intranet performance improvement is claimed. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-078.md\n\n'
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-079.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()
