@@ -1012,7 +1012,7 @@ function Auto-Transitions {
 }
 function Auto-Transitions-Work {
     if ($script:State.next_poll -gt (Epoch)) { return }
-    $runs=Runs
+    $runs=Runs; $saveErrors=$false
     foreach ($run in $runs.Values) {
         $kind=''; $parent=$null; $artifacts=@()
         if ($Node -eq 'windows-inner' -and $run.phase -eq 'task') { $kind='accepted'; $parent=$run.events.task; $artifacts=$run.task.artifacts }
@@ -1031,10 +1031,13 @@ function Auto-Transitions-Work {
         } catch {
             $code=[string]$_.Exception.Data['connector_code']; if (-not $code) { $code='ARTIFACT_NOT_VERIFIED' }
             $script:State.artifact_errors[$run.key]=$code
+            $saveErrors=$true
             if ($script:State.next_poll -gt (Epoch)) { throw }
         }
     }
-    Save
+    # Queue durably saves successful transitions. A no-op pass needs no
+    # extra full-ledger serialization; Snapshot saves any new run conflicts.
+    if ($saveErrors) { Save }
 }
 function Flush-One([bool]$Reconciled=$false) {
     $stage=Start-Stage 'outbox.send'
