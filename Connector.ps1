@@ -205,7 +205,9 @@ function Save {
     try { Save-Work  } catch { Trace-Fault $_ 'state.save'; throw } finally { Stop-Stage $stage }
 }
 function Save-Work {
-    $body=Canonical $script:State
+    # The local store hashes its exact bytes, not a protocol canonical form.
+    # Serialize the whole ledger once; event identities still use Canonical.
+    $body=Json $script:State
     $hashStage=Start-Stage 'state.hash'
     try { $digest=Hash $body } finally { Stop-Stage $hashStage }
     if ($digest -ceq $script:SavedStateHash) { return }
@@ -1120,6 +1122,8 @@ function Snapshot {
 }
 function Snapshot-Work {
     $watch=[Diagnostics.Stopwatch]::StartNew(); $script:ProjectionWrites=0
+    # Include unsaved in-memory changes before comparing the cached projection.
+    Save
     if ($script:Resident -and $null -ne $script:SnapshotCache -and $script:SnapshotStateHash -ceq $script:SavedStateHash) {
         Trace-Event 'snapshot_cached' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;files_written=0}
         return $script:SnapshotCache
@@ -1160,6 +1164,7 @@ function Snapshot-Work {
     $pending=@($outbox | Where-Object { $_.status -ne 'confirmed' })
     $lines+=@('','未确认消息：'+$pending.Count,'最后通道异常：'+$script:State.last_error,'','回执只确认结果和产物完整收到；实验结论由 AI 或人评估。')
     Project-Changed (Join-Path $StateDir 'status.md') ($lines -join "`n")
+    # Runs can discover a conflict while constructing this projection.
     Save; $script:SnapshotCache=$snapshot; $script:SnapshotStateHash=$script:SavedStateHash
     Trace-Event 'snapshot_built' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds;files_written=$script:ProjectionWrites}; return $snapshot
 }

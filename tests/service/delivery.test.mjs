@@ -14,9 +14,9 @@ test('ready upload precedes a fresh scan without preempting an active request',a
     if(order.length===1)await gate;
     return {code:0,out:'{"ok":true}\n'};
   });
-  const first=connector.call('Poll');
+  const first=connector.call('Status');
   const upload=connector.call('Upload'),poll=connector.call('Poll');release();
-  await Promise.all([first,upload,poll]);assert.deepEqual(order,['Poll','Upload','Poll']);
+  await Promise.all([first,upload,poll]);assert.deepEqual(order,['Status','Upload','Poll']);
 });
 
 test('owned Claim precedes ready upload; scans follow delivery and diagnostics remain last',async()=>{

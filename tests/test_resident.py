@@ -1,5 +1,8 @@
 """Real resident PS transport: process reuse, persistence, ZIP barriers, no WAN writes."""
 import contextlib
+import copy
+import base64
+import hashlib
 import json
 import os
 import queue
@@ -14,9 +17,12 @@ import test_relay as relay
 
 
 class Resident:
-    def __init__(self, case, node):
+    def __init__(self, case, node, script=None, timeout=30):
         self.node = node
-        self.process = subprocess.Popen(case.command(node, 'Serve'), stdin=subprocess.PIPE,
+        self.timeout = timeout
+        command = case.command(node, 'Serve')
+        if script: command[command.index('-File')+1] = str(script)
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         text=True, encoding='utf-8', env=dict(os.environ))
         self.lines = queue.Queue()
@@ -36,7 +42,7 @@ class Resident:
         self.process.stdin.write(json.dumps(dict(action=action, operation_id=op, key=key,
             file=str(file), claim_owner=owner, token=token or ('MAC_TOKEN' if self.node=='mac-outer' else 'WIN_TOKEN')))+'\n')
         self.process.stdin.flush()
-        reply = self.lines.get(timeout=30)
+        reply = self.lines.get(timeout=self.timeout)
         assert reply and reply['id'] == op, reply
         assert reply['ok'] is ok, reply
         return reply['value'] if ok else reply['error']
@@ -78,6 +84,36 @@ class ResidentTests(unittest.TestCase):
             self.assertEqual(r.call('Watch',ok=False)['code'],'INVALID_TRANSPORT_ACTION')
             self.assertEqual(r.call('Status')['runs'][0]['phase'],'accepted')
         self.assertEqual(c.run_cli('windows-inner','Status')['runs'][0]['phase'],'accepted')
+
+    def test_local_store_fast_serialization_preserves_event_hashes_types_and_restart(self):
+        c=self.case;c.ready();state=c.read_state('windows-inner')
+        state['fixture_values']={'unicode':'中文🙂\\"\n','timestamp':'2026-10-10T00:00:00Z',
+                                 'empty':[], 'one':[{'ok':True}], 'null':None,
+                                 'integer':9223372036854775807,'fraction':1.25}
+        relay.legacy.ConnectorTests.write_state(c,'windows-inner',state)
+        events=state['events'];claims=state['claims'];comments=len(c.ctx['comments'])
+        with self.runtime('windows-inner') as r:
+            first=r.call('Status');r.call('Flush');r.call('Status')
+        envelope=json.loads((c.folder/'windows-inner'/'state.json').read_text(encoding='utf-8-sig'))
+        raw=base64.b64decode(envelope['data_base64'])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),envelope['sha256'])
+        restored=json.loads(raw)
+        self.assertEqual(restored['fixture_values'],state['fixture_values'])
+        self.assertEqual(restored['events'],events);self.assertEqual(restored['claims'],claims)
+        self.assertEqual(len(c.ctx['comments']),comments)
+        with self.runtime('windows-inner') as r:self.assertEqual(r.call('Status'),first)
+
+    def test_conflict_discovered_during_snapshot_is_durable_before_reply(self):
+        c=self.case;c.ready();state=c.read_state('windows-inner')
+        duplicate=copy.deepcopy(next(e for e in state['events'].values() if e['kind']=='accepted'))
+        duplicate.pop('event_id');duplicate['parent']='f'*64
+        duplicate['event_id']=hashlib.sha256(json.dumps(duplicate,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        state['events'][duplicate['event_id']]=duplicate
+        relay.legacy.ConnectorTests.write_state(c,'windows-inner',state)
+        r=Resident(c,'windows-inner')
+        try:self.assertEqual(r.call('Status')['runs'][0]['phase'],'conflict')
+        finally:r.close(kill=True)
+        self.assertEqual(c.read_state('windows-inner')['conflicts'][c.key],'CONFLICTING_EVENT')
 
     def test_owned_claim_survives_resident_crash_without_new_identity(self):
         c=self.case;c.ready();owner='a'*48

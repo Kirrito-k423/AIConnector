@@ -41,13 +41,13 @@ def main():
         if ref['type']=='tag':ref=json.loads(gh('api',f'repos/{repo}/git/tags/'+ref['sha']))['object']
         if ref['type']!='commit' or ref['sha']!=commit:raise ValueError('tag belongs to another source revision')
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
-           f'All four required Windows service workflow jobs passed before publication.\n\n'
+           f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.9 fixes Issue #13: diagnostics become eligible after their own receipt, without waiting for all jobs, dirty state or background retries to become idle. A single low-priority diagnostics request has a persisted 12-attempt / 24-hour budget; only queued diagnostics expire, active requests are not aborted. '
-           'Verified closed-run confirmed outbox bookkeeping is compacted while event/comment and claim ledgers retain deduplication and ownership evidence. Pending, uncertain, rejected and conflicted entries remain. Ten-second samples remain local and never create periodic network writes. '
+           '0.7.10 allows overdue Poll to enter the serial queue during other runs\' start/delivery and active Flush. Repeated Poll requests share one queued or executing request. At a request boundary, a Poll waiting ten seconds or bypassed by four foreground dispatches gets a turn; active requests are never interrupted. '
+           'Local state persistence serializes the ledger once instead of recursively canonicalizing every field. Exact-byte SHA-256, atomic durable writes and unchanged projections are preserved; protocol/event/artifact hashes are unchanged. Per-receipt diagnostics, persisted retry budgets and safe closed outbox compaction remain in place. Ten-second samples remain local and never create periodic network writes. '
            'No active HTTP/SSH is preempted or replayed. Owner-bound recovery, machine reservations, durable write pacing and receiver hash validation are preserved. '
            'Upgrade both endpoints using existing config and state. No quantified intranet performance improvement is claimed. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSPORT-079.md\n\n'
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/POLL-AND-FLUSH-0710.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

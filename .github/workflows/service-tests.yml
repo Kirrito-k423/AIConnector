@@ -16,7 +16,7 @@ permissions:
 jobs:
   publish-candidate:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_tag != '' && inputs.release_tag == ''
-    needs: [windows-service, windows-maintenance-recovery, windows-runtime-diagnostic, windows-profiler-overhead]
+    needs: [windows-service, windows-maintenance-recovery, windows-runtime-diagnostic, windows-profiler-overhead, windows-flush-performance]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,6 +31,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_TAG: ${{ inputs.publish_tag }}
         run: python3 tools/publish_service_candidate.py "$CANDIDATE_TAG" dist/service
+  windows-flush-performance:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Paired resident Flush on PowerShell 5.1
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: |
+          New-Item -ItemType Directory -Force reports/flush | Out-Null
+          git show beedc7f55b44030320bb45452fcfb7645f6f0b8f:Connector.ps1 | Set-Content -Encoding utf8 reports/flush/baseline.ps1
+          python tools/benchmark_flush.py --baseline reports/flush/baseline.ps1 --output reports/flush/windows.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flush-performance-windows
+          path: reports/flush/windows.json
   windows-profiler-overhead:
     if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     runs-on: windows-latest

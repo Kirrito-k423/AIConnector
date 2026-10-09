@@ -1,0 +1,134 @@
+{
+  "scope": "Paired warmed resident no-op Flush, identical synthetic closed ledgers, unchanged output/files and zero network requests; not intranet/A5 E2E",
+  "windows": false,
+  "host": "macOS-15.7.4-arm64-arm-64bit-Mach-O",
+  "arch": "arm64",
+  "powershell": "7.6.6",
+  "baseline_sha256": "fd89908fcaf9bddba17a19266d493a9d6e82ce510cff07dd6f27de08195ab2ae",
+  "candidate_sha256": "f7002751e382ac1b868976a16217ddb9faca91c1cc40bec1cb39b2f5421394f4",
+  "repeats": 3,
+  "samples": [
+    {
+      "runs": 1,
+      "events": 5,
+      "repeat": 0,
+      "variant": "baseline",
+      "wall_ms": 33.59145764261484,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 1,
+      "events": 5,
+      "repeat": 0,
+      "variant": "candidate",
+      "wall_ms": 22.92483299970627,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 1,
+      "events": 5,
+      "repeat": 1,
+      "variant": "candidate",
+      "wall_ms": 22.376875393092632,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 1,
+      "events": 5,
+      "repeat": 1,
+      "variant": "baseline",
+      "wall_ms": 34.40520819276571,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 1,
+      "events": 5,
+      "repeat": 2,
+      "variant": "baseline",
+      "wall_ms": 34.12570804357529,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 1,
+      "events": 5,
+      "repeat": 2,
+      "variant": "candidate",
+      "wall_ms": 22.144916001707315,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 40,
+      "events": 200,
+      "repeat": 0,
+      "variant": "baseline",
+      "wall_ms": 940.2277921326458,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 40,
+      "events": 200,
+      "repeat": 0,
+      "variant": "candidate",
+      "wall_ms": 382.83345894888043,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 40,
+      "events": 200,
+      "repeat": 1,
+      "variant": "candidate",
+      "wall_ms": 345.5451247282326,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 40,
+      "events": 200,
+      "repeat": 1,
+      "variant": "baseline",
+      "wall_ms": 834.148250054568,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 40,
+      "events": 200,
+      "repeat": 2,
+      "variant": "baseline",
+      "wall_ms": 891.1494999192655,
+      "changed_files": 0,
+      "network_requests": 0
+    },
+    {
+      "runs": 40,
+      "events": 200,
+      "repeat": 2,
+      "variant": "candidate",
+      "wall_ms": 371.20333313941956,
+      "changed_files": 0,
+      "network_requests": 0
+    }
+  ],
+  "summary": [
+    {
+      "runs": 1,
+      "baseline": 34.12570804357529,
+      "candidate": 22.376875393092632,
+      "reduction_percent": 34.42809929534799
+    },
+    {
+      "runs": 40,
+      "baseline": 891.1494999192655,
+      "candidate": 371.20333313941956,
+      "reduction_percent": 58.345560068984035
+    }
+  ]
+}

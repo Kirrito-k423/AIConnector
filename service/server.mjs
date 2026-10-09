@@ -38,9 +38,9 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
   const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
   async function tick() {
-    // Drain eligible outbound controls before adding another discovery scan.
-    // A pending Flush/Claim/Complete is already serialized by the connector.
-    if(busy||stopping||flushing||Date.now()<nextPoll||connector.queue?.some(x=>!x.background&&x.priority<=1)||[...runner.pending.keys()].some(k=>k.startsWith('start:')||k.startsWith('delivery:')))return;busy=true;activity.busy=true;
+    // busy covers both queued and executing discovery. Other runs must not
+    // prevent an overdue Poll from entering the serial transport queue.
+    if(busy||stopping||Date.now()<nextPoll)return;busy=true;activity.busy=true;
     try {
       if(Date.now()>=nextPoll) {
         nextPoll=Infinity;
