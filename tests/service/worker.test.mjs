@@ -34,10 +34,13 @@ test('model timing separates provider setup, headers, first output and stream co
 });
 test('invalid model credential yields a blocked delivery without experiment',async()=>{const r=await exercise({fail:true});assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('total Pi deadline retains a trace of the request with no first output',async()=>{
- const r=await exercise({delay:1800},s=>s.timeoutSeconds=1);
+ const r=await exercise({hold:true},s=>s.timeoutSeconds=1);
  assert.equal(r.result.agent.stop_reason,'RUN_TIMEOUT');assert.equal(r.execution,undefined);
  const timing=JSON.parse(strFromU8(r.zip['model-timing.json']));assert.equal(timing.runner_stop_reason,'RUN_TIMEOUT');assert.ok(timing.requests.length>0);
- assert.ok(timing.requests.every(r=>r.state==='ended'&&r.first_output_at===null&&r.duration_ms>=900));
+ // Total budget includes preparation before a stream call; aborted bookkeeping
+ // calls can be much shorter than that budget. The API sends no response.
+ assert.ok(r.result.agent.duration_ms>=900,JSON.stringify(r.result.agent));
+ assert.ok(timing.requests.every(r=>r.state==='ended'&&r.first_output_at===null&&r.duration_ms>=0),JSON.stringify(timing));
 });
 test('revision mismatch never executes',async()=>{const r=await exercise({},s=>s.task.code.revision='wrong');assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('prior durable execution intent is never replayed',async()=>{const r=await exercise({},(s,dir)=>save(path.join(dir,'execution-intent.json'),{key:s.key}));assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});

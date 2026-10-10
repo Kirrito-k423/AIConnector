@@ -1,9 +1,10 @@
 import http from 'node:http';
-export async function modelFixture({delay=0,fail=false,repeat=false,handler}={}) {
+export async function modelFixture({delay=0,fail=false,repeat=false,hold=false,handler}={}) {
   let requests=0;const calls=[];
   const server=http.createServer(async(req,res)=>{
     let body='';for await(const b of req)body+=b;
     const data=JSON.parse(body);requests++;calls.push(data);
+    if(hold){await new Promise(r=>req.socket.once('close',r));return;}
     if(fail){res.writeHead(401,{'Content-Type':'application/json'});res.end(JSON.stringify({error:{message:'fixture API rejected',type:'authentication_error'}}));return;}
     if(delay)await new Promise(r=>setTimeout(r,delay));
     const results=data.messages.filter(m=>m.role==='tool');
