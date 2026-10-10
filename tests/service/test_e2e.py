@@ -1,0 +1,386 @@
+"""Actual Node daemons, PS transport, Pi SDK and CPU process, with controlled relay/model APIs."""
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+from urllib.parse import urlparse
+import zipfile
+import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import test_relay as relay
+from test_probe import ROOT, PWSH
+
+NODE=os.environ.get('AIC_NODE') or shutil.which('node')
+SERVICE_ROOT=Path(os.environ.get('AIC_SERVICE_ROOT',ROOT))
+def port():
+    with socket.socket() as s: s.bind(('127.0.0.1',0));return s.getsockname()[1]
+
+class API(relay.RelayAPI):
+    def do_GET(self):
+        if self.ctx.get('offline'): return self.reply({},503)
+        super().do_GET()
+    def do_POST(self):
+        if self.ctx.get('offline'):
+            self.rfile.read(int(self.headers.get('Content-Length','0')))
+            return self.reply({},429,{'Retry-After':'2'})
+        super().do_POST()
+
+class Model(BaseHTTPRequestHandler):
+    def log_message(self,*_): pass
+    def do_POST(self):
+        data=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        self.server.calls.append(data)
+        if self.server.pause: self.server.release.wait(40)
+        results=[m for m in data['messages'] if m['role']=='tool']
+        tool='run_experiment' if not results else 'submit_summary' if len(results)==1 else None
+        args=dict(summary='实际 CPU sum=50005000。Pi 使用本地受控模型 API；未使用真实商业模型或 NPU。',metrics=dict(sum=50005000,fixture_model=True,npu=False,measurement_at='2026-09-27T11:25:50.600Z')) if tool=='submit_summary' else {}
+        if getattr(self.server,'handler',None):tool,args=self.server.handler(data,len(self.server.calls))
+        base=dict(id='fixture',object='chat.completion.chunk',created=1,model=data['model'])
+        self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
+        def send(delta,finish=None):
+            self.wfile.write(('data: '+json.dumps(dict(base,choices=[dict(index=0,delta=delta,finish_reason=finish)]))+'\n\n').encode())
+        try:
+            send(dict(role='assistant'))
+            if tool:
+                send(dict(tool_calls=[dict(index=0,id='call-'+str(len(results)),type='function',function=dict(name=tool,arguments=json.dumps(args)))]));send({},'tool_calls')
+            else:send(dict(content='完成'));send({},'stop')
+            self.wfile.write(b'data: [DONE]\n\n');self.wfile.flush()
+        except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass
+
+@unittest.skipUnless(PWSH and NODE,'requires PowerShell and Node')
+class ServiceTests(unittest.TestCase):
+    def setUp(self):
+        relay.RelayTests.setUp(self)
+        self.server.RequestHandlerClass=API
+        self.model=ThreadingHTTPServer(('127.0.0.1',0),Model);self.model.daemon_threads=True
+        self.model.calls=[];self.model.pause=False;self.model.release=threading.Event()
+        self.mt=threading.Thread(target=self.model.serve_forever,daemon=True);self.mt.start()
+        self.configs={};self.processes={};self.logs={};self.tokens={}
+        for node in ['mac-outer','windows-inner']:
+            c=dict(schema='aiconnector.service.v1',node=node,port=port(),connectorConfig=str(self.config_path),dataDir=str(self.folder/('service-'+node)),powershell=PWSH,proxy='direct',httpTimeoutSeconds=2,
+              runner=dict(enabled=node=='windows-inner',timeoutSeconds=60,maxTurns=6,model=dict(api='openai-completions',baseUrl=f'http://127.0.0.1:{self.model.server_port}/v1',id='fixture',compat=dict(supportsDeveloperRole=False)),profiles={'local-smoke':dict(kind='builtin-smoke',repository='aiconnector-builtin',entry='smoke',outputs=['metrics.json'])}))
+            path=self.folder/(node+'.local.json');path.write_text(json.dumps(c));self.configs[node]=(path,c)
+        self.task.update(task_id='pi-smoke',requirements=dict(mode='smoke',checks=['cpu-smoke']),code=dict(repository='aiconnector-builtin',revision='builtin-smoke-v1'),environment=dict(target='local-smoke'),invocation=dict(entry='smoke',arguments=[]))
+        self.key='pi-smoke/1/run-001'
+    write_config=relay.RelayTests.write_config
+    write_inputs=relay.RelayTests.write_inputs
+
+    def tearDown(self):
+        self.model.release.set()
+        for n in self.processes:self.stop(n,graceful=True)
+        for log in self.logs.values():log.close()
+        self.model.shutdown();self.model.server_close();self.mt.join()
+        relay.RelayTests.tearDown(self)
+
+    def launch(self,node):
+        path,c=self.configs[node]
+        self.logs[node]=open(self.folder/(node+'.log'),'ab')
+        self.processes[node]=subprocess.Popen([NODE,str(SERVICE_ROOT/'service/cli.mjs'),'start','--config',str(path)],stdout=self.logs[node],stderr=subprocess.STDOUT,env=dict(os.environ,AICONNECTOR_GITHUB_TOKEN='MAC_TOKEN' if node=='mac-outer' else 'WIN_TOKEN',AICONNECTOR_AI_API_KEY='LOCAL_FIXTURE_KEY'))
+        auth=Path(c['dataDir'])/'dashboard.token'
+        self.until(lambda:auth.exists(),10);self.tokens[node]=auth.read_text()
+        self.until(lambda:self.get(node),20)
+    def stop(self,node,graceful=False):
+        p=self.processes[node]
+        if p.poll() is None:
+            if graceful and node in self.tokens and self.get(node):
+                # Fault injection above deliberately kills only the supervisor.
+                # Cleanup must drain its PowerShell transport before removing
+                # temporary files, especially with Windows file sharing locks.
+                self.get(node,'/api/shutdown',{});p.wait(45)
+            else:p.kill();p.wait(15)
+        if node in self.logs:self.logs[node].close()
+    def get(self,node,path='/api/status',data=None,token=None,headers=None):
+        c=self.configs[node][1]
+        request=urllib.request.Request(f'http://127.0.0.1:{c["port"]}{path}',data=json.dumps(data).encode() if data is not None else None,headers=dict(Authorization='Bearer '+(token or self.tokens[node]),**({'Content-Type':'application/json'} if data is not None else {}),**(headers or {})))
+        try:
+            # These requests target the fixture's loopback daemon, including
+            # intentionally invalid Host headers. Never send them through the
+            # public-download proxy and mistake its response for our server's.
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as r:return json.load(r)
+        except TimeoutError:
+            # urllib may raise a bare socket timeout while reading headers or
+            # the body. Read observations remain pending within until()'s
+            # original deadline; never retry an ambiguous mutation here.
+            if data is not None:raise
+            return None
+        except (ConnectionError,urllib.error.URLError) as e:
+            if isinstance(e,urllib.error.HTTPError):
+                e.msg=e.read().decode();e.close();raise
+            return None
+    def until(self,fn,seconds=100):
+        end=time.monotonic()+seconds
+        while time.monotonic()<end:
+            value=fn()
+            if value:return value
+            time.sleep(.3)
+        logs={n:(self.folder/(n+'.log')).read_text(errors='replace')[-3000:] for n in self.logs}
+        states={n:self.get(n) for n,p in self.processes.items() if p.poll() is None}
+        self.fail('Timeout: '+json.dumps(dict(logs=logs,states=states,api_gets=self.ctx['gets'][-20:],api_posts=self.ctx['posts'][-20:]),ensure_ascii=False))
+    def phase(self,node,phase):
+        s=self.get(node)
+        return s and next((r for r in s['channel']['runs'] if r['key']==self.key and r['phase']==phase),None)
+    def job(self,state=None):
+        s=self.get('windows-inner');return s and next((j for j in s['jobs'] if j['key']==self.key and (state is None or j['state']==state)),None)
+    def publish(self):
+        self.until(lambda:self.get('mac-outer')['capabilities']['receiver'])
+        data={'task':self.task}
+        z=io.BytesIO()
+        with zipfile.ZipFile(z,'w')as archive:archive.writestr('input.txt','public synthetic input')
+        data['zipBase64']=base64.b64encode(z.getvalue()).decode()
+        r=self.get('mac-outer','/api/tasks',data);self.assertEqual(r['key'],self.key)
+        return data
+    def test_full_loop_input_zip_dashboard_and_restart_after_receipt(self):
+        self.launch('mac-outer');self.launch('windows-inner');data=self.publish()
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['task']['title'],self.task['title'])
+        self.assertIn('GOAL_VERIFIED',row['result']['summary'])
+        self.assertIn('实际 CPU',row['result']['model_report']['summary'])
+        self.assertFalse(row['result']['model_report']['verified'])
+        self.assertEqual(row['result']['metrics']['measurement_at'],'2026-09-27T11:25:50.600Z')
+        self.assertEqual(row['result']['outcome'],'succeeded');self.assertTrue(row['result']['execution']['started_at'])
+        self.assertEqual(len(row['timeline']),5);self.assertEqual(len(self.model.calls),2)
+        assets=self.ctx['assets'];self.assertGreaterEqual(len(assets),2)
+        result=next(b for p,b in assets.items() if '/result--' in p)
+        self.assertLess(len(result),5242880)
+        with zipfile.ZipFile(io.BytesIO(result))as z:
+            self.assertEqual(json.loads(z.read('metrics.json'))['sum'],50005000)
+            worker_timing=json.loads(z.read('worker-timing.json'))
+            self.assertEqual(worker_timing['key'],self.key)
+            self.assertTrue(worker_timing['agent_started_at']);self.assertTrue(worker_timing['packaging_started_at'])
+            embedded=json.loads(z.read('result.json'))
+            for key in ('summary','metrics','agent','model_report'):
+                self.assertEqual(embedded[key],row['result'][key],key)
+        self.until(lambda:self.job('confirmed'))
+        exported=self.until(lambda:(self.job() or {}).get('delivery_diagnostics',{}).get('artifact'))
+        self.assertTrue(exported['name'].startswith('diagnostics--windows-inner--'))
+        diagnostic_bytes=self.ctx['assets'][urlparse(exported['url']).path]
+        with zipfile.ZipFile(io.BytesIO(diagnostic_bytes))as z:
+            delivery=json.loads(z.read('delivery-diagnostics.json'))
+            self.assertEqual(delivery['key'],self.key)
+            self.assertTrue(delivery['timings']['claim_queued_at'])
+            self.assertTrue(delivery['timings']['result_published_observed_at'])
+            self.assertTrue(delivery['timings']['receipt_observed_at'])
+            self.assertIn('Mac receipt already observed',delivery['scope'])
+            self.assertTrue(any(e['kind']=='event_confirmed' and e.get('event_kind')=='result' for e in delivery['events']))
+            self.assertTrue(delivery['runtime']['windows_enabled'])
+            self.assertTrue(delivery['runtime']['powershell_version'])
+            self.assertTrue(delivery['windows'])
+            self.assertTrue(any(w['source']=='worker' for w in delivery['windows']))
+            for w in delivery['windows']:
+                self.assertAlmostEqual(sum(x['wall_ms'] for x in w['segments']),w['elapsed_ms'],delta=.05,msg=json.dumps(w))
+            self.assertNotIn('WIN_TOKEN',json.dumps(delivery));self.assertNotIn('LOCAL_FIXTURE_KEY',json.dumps(delivery))
+        self.stop('windows-inner');self.launch('windows-inner')
+        diagnostics=self.get('windows-inner','/api/diagnostics?key='+self.key)
+        self.assertEqual(diagnostics['schema'],'aiconnector.diagnostics.v1')
+        self.assertTrue(any(e['kind']=='http_finished' for e in diagnostics['events']))
+        self.assertTrue(any(e['kind']=='action_dispatched' and 'queue_wait_ms' in e for e in diagnostics['events']))
+        self.assertTrue(diagnostics['jobs'][0]['timings']['upload_confirmed_at'])
+        self.assertGreaterEqual(diagnostics['jobs'][0]['timings']['packaging_ms'],0)
+        self.assertTrue(diagnostics['jobs'][0]['timings']['agent_ended_at'])
+        self.assertNotIn('WIN_TOKEN',json.dumps(diagnostics));self.assertNotIn('LOCAL_FIXTURE_KEY',json.dumps(diagnostics))
+        self.get('mac-outer','/api/tasks',data);time.sleep(3)
+        self.assertEqual(len(self.model.calls),2);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
+        self.assertTrue(all(self.phase('mac-outer','receipt')['timeline'][i]['published_at'].endswith('Z') for i in range(5)))
+    def test_service_restart_during_pi_and_transport_outage_resumes_delivery(self):
+        self.model.pause=True
+        self.launch('mac-outer');self.launch('windows-inner');self.publish()
+        self.until(lambda:len(self.model.calls)>0)
+        self.ctx['offline']=True
+        self.stop('windows-inner');self.launch('windows-inner')
+        self.model.pause=False;self.model.release.set()
+        self.until(lambda:(self.job() or {}).get('worker',{}).get('state')=='ready')
+        self.assertEqual(len(self.model.calls),2)
+        self.ctx['offline']=False
+        self.until(lambda:self.phase('mac-outer','receipt'),130)
+        self.assertEqual(len(self.model.calls),2);self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
+
+    def test_lost_claim_reply_reconciles_without_launch_and_next_task_completes(self):
+        self.lost_claim_reply_recovery(owned=False)
+
+    def test_issue11_owned_lost_claim_reply_restarts_original_run_exactly_once(self):
+        self.lost_claim_reply_recovery(owned=True)
+
+    def lost_claim_reply_recovery(self, owned):
+        # Claim really commits through PowerShell; emulate losing its response
+        # before Runner has recorded permission or created a worker spec.
+        self.write_inputs()
+        def connector(node, action, *args):
+            c=self.configs[node][1]
+            p=subprocess.run([PWSH,'-NoLogo','-NoProfile','-File',str(SERVICE_ROOT/'Connector.ps1'),'-Node',node,'-Action',action,
+                '-Config',str(self.config_path),'-StateDir',str(Path(c['dataDir'])/'connector'),'-Proxy','direct',*map(str,args)],
+                capture_output=True,text=True,encoding='utf-8',env=dict(os.environ,AICONNECTOR_GITHUB_TOKEN='MAC_TOKEN' if node=='mac-outer' else 'WIN_TOKEN'),timeout=30)
+            self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+            return json.loads(next(x for x in reversed(p.stdout.splitlines()) if x.startswith('{')))
+        connector('mac-outer','Submit','-File',self.taskfile)
+        for _ in range(4):
+            connector('mac-outer','Poll');connector('windows-inner','Poll')
+        script="""import path from 'node:path';import {loadConfig,save,sha,now} from './service/common.mjs';
+const c=loadConfig(process.argv[1]),key=process.argv[2],owner=process.argv[3];save(path.join(c.dataDir,'service.json'),{binding:sha(JSON.stringify({node:c.node,connector:c.connector})),jobs:{[key]:{key,dir:path.join(c.dataDir,'jobs',sha(key)),state:'claiming',claim_owner:owner||undefined,claim_attempts:1,created_at:now()}},submissions:{},created_at:now()});"""
+        # The owner is durable before Claim. Discard its returned permission as
+        # if the supervisor died, then restart a fresh supervisor from disk.
+        owner='a'*48 if owned else ''
+        subprocess.run([NODE,'--input-type=module','-e',script,str(self.configs['windows-inner'][0]),self.key,owner],cwd=SERVICE_ROOT,check=True)
+        claim=connector('windows-inner','Claim','-Key',self.key,*(['-ClaimOwner',owner] if owned else []))
+        self.assertTrue(claim['execute'])
+        connector('windows-inner','Poll')
+        self.launch('mac-outer');self.launch('windows-inner')
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['result']['outcome'],'succeeded' if owned else 'blocked')
+        if not owned:self.assertFalse(row['result']['execution']['executed'])
+        self.assertEqual(len(self.model.calls),2 if owned else 0)
+        if owned:
+            job=self.until(lambda:self.job('confirmed'))
+            self.assertEqual(job['recovery']['kind'],'claim-retry-before-launch')
+            self.stop('windows-inner',graceful=True)
+            state=json.loads((Path(self.configs['windows-inner'][1]['dataDir'])/'service.json').read_text(encoding='utf-8'))
+            persisted=json.loads(state['data'])['jobs'][self.key]
+            self.assertEqual(persisted['claim_owner'],owner);self.assertEqual(persisted['claim_attempts'],2)
+            self.assertEqual(persisted['claim_event_id'],claim['claim_event_id'])
+            self.launch('windows-inner')
+            self.assertEqual(len(self.model.calls),2)
+            self.assertEqual(len([c for c in self.ctx['comments'] if not c['body'].startswith('AIConnector capabilities v1')]),5)
+        # publish() adds an input ZIP, so this changes the task contract as well
+        # as its run ID and must use a new immutable revision.
+        self.key='pi-smoke/2/run-002';self.task.update(run_id='run-002',revision=2);self.publish()
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['result']['outcome'],'succeeded');self.assertEqual(len(self.model.calls),4 if owned else 2)
+
+    def test_issue9_lost_deliveries_recover_across_restart_without_reexecuting_pi(self):
+        self.ctx['drop_delivery_once']={'started':1,'result-asset':1,'result':1}
+        self.launch('mac-outer');self.launch('windows-inner');self.publish()
+        def uncertain_upload():
+            # Observe through the service, not a competing reader of the
+            # PowerShell atomic store (which has Windows sharing semantics).
+            state=self.get('windows-inner')
+            return state and any(row['status']=='uncertain' for row in state['channel'].get('uploads',{}).values())
+        self.until(uncertain_upload,150)
+        self.assertEqual(len(self.model.calls),2)
+        self.stop('windows-inner',graceful=True);self.launch('windows-inner')
+        row=self.until(lambda:self.phase('mac-outer','receipt'),240)
+        self.until(lambda:self.job('confirmed'),100)
+        self.assertEqual(row['result']['outcome'],'succeeded')
+        self.assertCountEqual(self.ctx['dropped_deliveries'],['started','result-asset','result'])
+        self.assertTrue(all(v==0 for v in self.ctx['drop_delivery_once'].values()))
+        self.assertEqual(len(self.model.calls),2,'delivery retries must not relaunch Pi')
+        self.assertEqual(len([p for p in self.ctx['assets'] if '/result--' in p]),1)
+        self.assertEqual(len([c for c in self.ctx['comments'] if c['body'].startswith('AIConnector task v1')]),5)
+
+    def test_maintenance_preflight_continuation_independent_checks_and_receipt(self):
+        target=self.folder/'repair-target.json';target.write_text('{"port":1,"preserved":true}')
+        original=target.read_bytes();expected=hashlib.sha256(original).hexdigest()
+        path,c=self.configs['windows-inner']
+        c['runner']['maxTurns']=16
+        c['runner']['profiles']['repair']=dict(kind='maintenance',entry='maintain',repository='maintenance-fixture',revision='maintenance-v1',maintenance=dict(enabled=True,files={'config':dict(path=str(target.resolve()),format='json',write=True,pointers=['/port'])},commands={'validate':dict(argv=[NODE,'-e',"process.exit(JSON.parse(require('fs').readFileSync(process.argv[1])).port===8766?0:1)",str(target)],readOnly=True)}),verification=[dict(id='port',kind='local-json',file='config',pointer='/port',equals=8766),dict(id='validate',kind='command',command='validate',equals=0)])
+        # Canonical paths avoid the macOS /var -> /private/var alias, and on
+        # Windows still exercise paths with spaces and non-ASCII test parents.
+        path.write_text(json.dumps(c))
+        self.task.update(task_id='repair',title='受控维护闭环',objective='修复测试配置并验证；不运行 NPU',requirements=dict(mode='maintenance',tools=['patch_local_json'],checks=['port','validate']),code=dict(repository='maintenance-fixture',revision='maintenance-v1'),environment=dict(target='auto'),invocation=dict(entry='auto',arguments=[]))
+        self.key='repair/1/run-001'
+        steps=[('read_local_file',dict(file='config')),('submit_summary',dict(summary='尚未修复',metrics=dict(repair_completed=False))),(None,{}),('patch_local_json',dict(action_id='repair-port',file='config',expected_sha256=expected,changes=[dict(pointer='/port',value=8766)])),('submit_summary',dict(summary='已备份并修复，等待独立校验',metrics=dict(repair_completed=True))),(None,{})]
+        self.model.handler=lambda data,n:steps[min(n-1,len(steps)-1)]
+        self.launch('mac-outer');self.launch('windows-inner');self.publish()
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['task']['environment']['target'],'repair');self.assertEqual(row['result']['outcome'],'succeeded',row['result'])
+        self.assertEqual(row['result']['acceptance']['status'],'passed');self.assertEqual(row['result']['agent']['continuations'],1)
+        self.assertNotIn('run_experiment',row['result']['agent']['tools']);self.assertIsNone(row['result']['execution']['started_at'])
+        jobdir=Path(c['dataDir'])/'jobs'/hashlib.sha256(self.key.encode()).hexdigest()
+        self.assertEqual((jobdir/'backups/repair-port.bin').read_bytes(),original);self.assertTrue(json.loads(target.read_text())['preserved'])
+        result=next(b for p,b in self.ctx['assets'].items() if '/result--' in p)
+        with zipfile.ZipFile(io.BytesIO(result))as z:
+            self.assertTrue(json.loads(z.read('acceptance.json'))['checks'][1]['ok'])
+            self.assertEqual(json.loads(z.read('actions.json'))[0]['state'],'done')
+            self.assertFalse(any(str(target).encode() in z.read(name) for name in z.namelist()))
+    def test_worker_crash_keeps_unknown_and_does_not_reexecute(self):
+        self.model.pause=True
+        self.launch('mac-outer');self.launch('windows-inner');self.publish()
+        self.until(lambda:len(self.model.calls)>0)
+        job=self.until(lambda:self.job() if (self.job()or{}).get('worker')else None)
+        pid=job['worker']['pid'];os.kill(pid,9)
+        self.model.pause=False;self.model.release.set()
+        self.until(lambda:self.job('unknown'))
+        self.stop('windows-inner');self.launch('windows-inner');time.sleep(3)
+        self.assertEqual(len(self.model.calls),1);self.assertEqual(self.job()['state'],'unknown')
+        with self.assertRaises(urllib.error.HTTPError):self.get('windows-inner','/api/resolve-unknown',dict(key=self.key,remoteChecked=False))
+        self.get('windows-inner','/api/resolve-unknown',dict(key=self.key,remoteChecked=True))
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['result']['outcome'],'blocked');self.assertEqual(len(self.model.calls),1)
+    def test_http_authorization_origin_host_and_profile_refusal(self):
+        self.launch('mac-outer');self.launch('windows-inner')
+        for kwargs in [dict(token='bad'),dict(headers={'Origin':'https://malicious.invalid'}),dict(headers={'Host':'malicious.invalid'})]:
+            with self.assertRaises(urllib.error.HTTPError)as error:self.get('mac-outer',**kwargs)
+            self.assertEqual(error.exception.code,403)
+            error.exception.close()
+        self.task['environment']['target']='unapproved'
+        with self.assertRaises(urllib.error.HTTPError) as error:self.publish()
+        self.assertIn('RECEIVER_PROFILE_NOT_FOUND_OR_AMBIGUOUS',error.exception.msg)
+        self.assertEqual(len(self.model.calls),0);self.assertEqual(self.get('windows-inner')['jobs'],[])
+
+    @unittest.skipUnless(os.name=='nt' or sys.platform=='darwin','native user service')
+    def test_native_login_service_restarts_after_process_failure(self):
+        node='windows-inner' if os.name=='nt' else 'mac-outer';path,c=self.configs[node]
+        # This test creates only a temporary, uniquely named per-user service.
+        def cli(action):
+            return subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),action,'--config',str(path)],capture_output=True,encoding='utf-8',timeout=30)
+        info=Path(c['dataDir'])/'service-info.json'
+        try:
+            r=cli('install');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+            self.until(lambda:info.exists(),35)
+            first=json.loads(info.read_text())['pid'];self.tokens[node]=(Path(c['dataDir'])/'dashboard.token').read_text()
+            self.until(lambda:self.get(node),20)
+            os.kill(first,9)
+            try:self.until(lambda:json.loads(info.read_text())['pid']!=first,140)
+            except AssertionError as e:
+                details={}
+                log=Path(c['dataDir'])/'service.log'
+                if log.exists():details['service_log']=log.read_text(errors='replace')[-3000:]
+                if os.name=='nt':
+                    name='AIConnector-'+hashlib.sha256(c['dataDir'].encode()).hexdigest()[:12]
+                    details['task']=subprocess.run(['powershell.exe','-NoProfile','-Command',f"$env:PSModulePath=$PSHOME+'\\Modules'; Get-ScheduledTaskInfo -TaskName '{name}' | ConvertTo-Json"],capture_output=True,text=True,timeout=20).stdout
+                raise AssertionError(str(e)+' NATIVE_DIAGNOSTICS: '+json.dumps(details))
+            self.until(lambda:self.get(node),20)
+            restarted=json.loads(info.read_text())['pid']
+            r=cli('stop');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+            self.until(lambda:json.loads(info.read_text())['pid']!=restarted,140)
+            self.until(lambda:self.get(node),20)
+            target=self.folder/'upgrade-check.json';target.write_text('{"preserved":true}')
+            policy=self.folder/'upgrade-policy.local.json';policy.write_text(json.dumps(dict(profileId='upgrade-check',profile=dict(kind='maintenance',entry='maintain',repository='maintenance-fixture',revision='maintenance-v1',maintenance=dict(enabled=True,files={'config':dict(path=str(target.resolve()),format='json',write=False)}),verification=[dict(id='preserved',kind='local-json',file='config',pointer='/preserved',equals=True)]))))
+            before=json.loads(path.read_text())
+            r=subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),'upgrade','--config',str(path),'--maintenance',str(policy),'--apply'],capture_output=True,encoding='utf-8',timeout=60)
+            self.assertEqual(r.returncode,0,r.stdout+r.stderr);self.until(lambda:self.get(node),20)
+            after=json.loads(path.read_text());self.assertEqual(after['dataDir'],before['dataDir']);self.assertEqual(after['runner']['model'],before['runner']['model'])
+            self.assertEqual(after['pollSeconds'],10)
+            self.assertEqual(self.get(node)['service']['poll_seconds'],10)
+            self.assertIn('upgrade-check',self.get(node)['service']['runner']['profiles'])
+            self.assertTrue(list(self.folder.glob(node+'.local.json.pre-*.local.json')))
+        finally:
+            cli('uninstall')
+            if info.exists():cli('stop')
+
+    @unittest.skipUnless(os.name=='nt' and 'AIC_SERVICE_ROOT' in os.environ,'real Windows package launcher')
+    def test_windows_cmd_starts_bundled_runtime_without_node_on_path(self):
+        node='windows-inner';path,c=self.configs[node];info=Path(c['dataDir'])/'service-info.json'
+        env=dict(os.environ,AICONNECTOR_NO_PAUSE='1')
+        # The actual .cmd must choose its bundled node.exe.
+        for key in list(env):
+            if key.lower()=='path':del env[key]
+        env['PATH']=os.environ['SystemRoot']+'\\System32;'+os.environ['SystemRoot']+'\\System32\\WindowsPowerShell\\v1.0'
+        try:
+            p=subprocess.run(['cmd.exe','/d','/c','Open-Windows-Dashboard.cmd','--no-browser','--config',str(path)],cwd=SERVICE_ROOT,env=env,capture_output=True,encoding='utf-8',timeout=30)
+            self.assertEqual(p.returncode,0,p.stdout+p.stderr);self.until(lambda:info.exists(),15)
+            self.tokens[node]=(Path(c['dataDir'])/'dashboard.token').read_text();self.until(lambda:self.get(node),15)
+        finally:
+            if info.exists():subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),'stop','--config',str(path)],capture_output=True,timeout=30)
+
+if __name__=='__main__':unittest.main()

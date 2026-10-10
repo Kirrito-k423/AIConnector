@@ -1,0 +1,177 @@
+name: Service and portable package acceptance
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional public candidate tag to download and verify
+        required: false
+        type: string
+      publish_tag:
+        description: Optional candidate tag to publish only after all Windows package checks pass
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  publish-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_tag != '' && inputs.release_tag == ''
+    needs: [windows-service, windows-maintenance-recovery, windows-runtime-diagnostic, windows-profiler-overhead, windows-flush-performance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-service-windows-x64
+          path: dist/service
+      - name: Publish the exact tested Windows package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.publish_tag }}
+        run: python3 tools/publish_service_candidate.py "$CANDIDATE_TAG" dist/service
+  windows-flush-performance:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Paired resident Flush on PowerShell 5.1
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: |
+          New-Item -ItemType Directory -Force reports/flush | Out-Null
+          git show beedc7f55b44030320bb45452fcfb7645f6f0b8f:Connector.ps1 | Set-Content -Encoding utf8 reports/flush/baseline.ps1
+          python tools/benchmark_flush.py --baseline reports/flush/baseline.ps1 --output reports/flush/windows.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flush-performance-windows
+          path: reports/flush/windows.json
+  windows-profiler-overhead:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Paired profiler overhead and slow disk isolation on PowerShell 5.1
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: |
+          New-Item -ItemType Directory -Force reports/profiler | Out-Null
+          git show 36fe6eeb65ccaf2bca95bdc153803d339e1a389e:service/runtime-profiler.cs | Set-Content -Encoding utf8 reports/profiler/baseline.cs
+          python tools/benchmark_profiler.py --baseline reports/profiler/baseline.cs --output reports/profiler/windows.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: profiler-overhead-windows
+          path: reports/profiler/windows.json
+  windows-runtime-diagnostic:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - run: node tools/diagnose_windows_runtime.mjs
+  windows-maintenance-recovery:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - run: python tools/build_service.py
+      - name: Repeated maintenance continuation and receipt in the actual Windows package
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip --maintenance-repeats 6
+  windows-service:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        with:
+          node-version: '24.14.0'
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+      - run: npm test
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+      - name: Build offline Windows delivery
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        run: python tools/build_service.py
+      - name: Relay delivery isolation and incremental readback on PowerShell 5.1
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_relay.py -v
+      - name: Claim ownership and competing callers on PowerShell 5.1
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_connector.py -k claim -v
+      - name: Resident transport, exclusive ownership and deferred ZIP verification on PowerShell 5.1
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_resident.py -v
+      - name: Ten-second profiler during a blocked PowerShell 5.1 runspace
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_runtime_profiler.py -v
+      - name: Fresh extraction, real Pi, PowerShell 5.1, process restart and network faults
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip
+      - name: Browser regression against the delivered Windows dashboard
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        shell: pwsh
+        run: |
+          $browserHarness = Join-Path $env:RUNNER_TEMP 'aic-dashboard-browser'
+          npm install --prefix $browserHarness --no-audit --no-fund --ignore-scripts --package-lock=false playwright@1.62.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$browserHarness/node_modules/.bin/playwright.cmd" install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dashboardExtract = Join-Path $env:RUNNER_TEMP 'aic-dashboard-package'
+          Expand-Archive dist/service/AIConnector-Service-windows-x64.zip $dashboardExtract
+          $env:AIC_PLAYWRIGHT_MODULE = "$browserHarness/node_modules/playwright/index.mjs"
+          $env:AIC_WEB_ROOT = "$dashboardExtract/AIConnector-Service/service/web"
+          & "$dashboardExtract/AIConnector-Service/runtime/node.exe" --test tests/web/dashboard.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Repeated parallel workers from the delivered Windows package
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+        run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip --parallel-repeats 32
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        with:
+          name: tested-service-windows-x64
+          path: dist/service/*
+      - name: Public release download and fresh installation acceptance
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python tools/validate_service_release.py $env:RELEASE_TAG

@@ -3,9 +3,11 @@ import base64
 import copy
 import json
 import re
+import socket
 import time
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 import test_connector as legacy
@@ -18,12 +20,26 @@ class RelayAPI(TaskAPI):
         u = urlparse(self.path)
         self.ctx['gets'].append(u.path)
         page = int(parse_qs(u.query).get('page', ['1'])[0])
+        self.ctx.setdefault('get_queries', []).append(self.path)
+        if u.path in self.ctx.get('fail_paths', {}):
+            return self.reply({}, self.ctx['fail_paths'][u.path])
         if '/contents/.aiconnector/relay.json' in u.path:
             return self.reply(dict(encoding='base64', content=base64.b64encode(json.dumps(self.ctx['descriptor']).encode()).decode()))
         if u.path == '/repos/test/tasks/issues':
             if self.ctx.get('issue_page_failure') == page:
                 return self.reply({}, 503)
             return self.reply(self.ctx['issues'][(page-1)*100:page*100])
+        if u.path == '/repos/test/tasks/issues/comments':
+            if self.ctx['fail_page'] == page: return self.reply({}, 503)
+            rows = self.ctx['comments']
+            since = parse_qs(u.query).get('since', [''])[0]
+            if since:
+                rows = [c for c in rows if c.get('updated_at', c.get('created_at', '9999')) > since]
+            return self.reply([{**c, 'issue_url':self.ctx['base']+f'/repos/test/tasks/issues/{c["issue_number"]}'} for c in rows[(page-1)*100:page*100]])
+        single = re.fullmatch(r'/repos/test/tasks/issues/comments/(\d+)', u.path)
+        if single:
+            row = next((c for c in self.ctx['comments'] if c['id'] == int(single[1])), None)
+            return self.reply({**row, 'issue_url':self.ctx['base']+f'/repos/test/tasks/issues/{row["issue_number"]}'} if row else {}, 200 if row else 404)
         match = re.fullmatch(r'/repos/test/tasks/issues/(\d+)/comments', u.path)
         if match:
             if self.ctx['fail_page'] == page:
@@ -59,6 +75,18 @@ class RelayAPI(TaskAPI):
         if mode == 'rate': return self.reply({}, 429, {'Retry-After': '2'})
         if mode == 'reject': return self.reply({}, 403)
         data = json.loads(raw) if kind != 'asset' else None
+        fault = ''
+        if kind == 'asset' and parse_qs(u.query)['name'][0].startswith('result--'): fault = 'result-asset'
+        if kind == 'comment' and data['body'].startswith('AIConnector task v1'):
+            fault = json.loads(re.search(r'```json\n(.*?)\n```', data['body'], re.S).group(1))['kind']
+        drops = self.ctx.get('drop_delivery_once', {})
+        if drops.get(fault, 0):
+            drops[fault] -= 1
+            self.ctx.setdefault('dropped_deliveries', []).append(fault)
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+            return
         if kind == 'issue':
             number = len(self.ctx['issues']) + 1
             row = dict(data, number=number, user=dict(login=login), state='open',
@@ -117,11 +145,43 @@ class RelayTests(unittest.TestCase):
         with zipfile.ZipFile(path, 'w') as z: z.writestr('sample.txt', 'synthetic only')
         return path
 
+    def test_capability_advertisement_is_distinct_from_tasks_and_lost_response_is_not_reposted(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.6.0',digest='a'*64,generated_at=datetime.now(timezone.utc).isoformat(),enabled=True,model_configured=True,profiles=[])
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.ctx['provision_mode']['comment']='after'
+        r=self.run_cli('windows-inner','Advertise','-File',file);self.assertTrue(r['confirmed'])
+        self.run_cli('windows-inner','Advertise','-File',file)
+        self.assertEqual(len(self.ctx['comments']),1);self.assertEqual(len(self.ctx['issues']),1)
+        s=self.poll('mac-outer');self.assertEqual(s['runs'],[]);self.assertEqual(s['receiver_capabilities']['data']['version'],'0.6.0')
+        self.ctx['comments'][0]['body']+=' changed'
+        self.expire_poll_maintenance('mac-outer')
+        r=self.run_cli('mac-outer','Poll',ok=False);self.assertEqual(r.get('error',r.get('code')),'CAPABILITIES_COMMENT_MISSING')
+
+    def test_capability_ambiguous_write_is_blocked_and_rate_limit_recovers_without_duplicate(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.6.0',digest='b'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.ctx['provision_mode']['issue']='rate'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed']);self.assertEqual(self.ctx['issues'],[])
+        self.ctx['provision_mode']={};self.clear_cooldown('windows-inner')
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        data['digest']='c'*64;file.write_text(json.dumps(data));self.ctx['provision_mode']['comment']='before'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        posts=len(self.ctx['posts']);r=self.run_cli('windows-inner','Advertise','-File',file,ok=False)
+        self.assertEqual(r.get('error',r.get('code')),'PROVISION_UNCERTAIN_OR_REJECTED');self.assertEqual(len(self.ctx['posts']),posts)
+
     def clear_cooldown(self, node):
         state = self.read_state(node); state['next_poll'] = 0; state['post_not_before'] = 0
+        state['scopes'] = {}
         raw = json.dumps(state, separators=(',', ':')).encode()
         (self.folder/node/'state.json').write_text(json.dumps(dict(
             schema='aiconnector.store.v1', sha256=sha(raw), data_base64=base64.b64encode(raw).decode())))
+
+    def expire_poll_maintenance(self, node, **fields):
+        state=self.read_state(node)
+        state['sync'].update(fields or dict(catalog_checked_at=0,audit_checked_at=0,capabilities_checked_at=0))
+        raw=json.dumps(state,separators=(',', ':')).encode()
+        (self.folder/node/'state.json').write_text(json.dumps(dict(
+            schema='aiconnector.store.v1',sha256=sha(raw),data_base64=base64.b64encode(raw).decode())))
 
     def test_handoff_creates_one_issue_one_release_and_persists_timeline(self):
         self.complete_flow()
@@ -168,6 +228,7 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(self.poll('windows-inner')['runs'], [])
         self.assertEqual(len(self.ctx['comments']), 1)
         self.ctx['issues'][0]['user']['login'] = 'outsider'
+        self.expire_poll_maintenance('windows-inner')
         self.assertEqual(self.run_cli('windows-inner','Poll',ok=False)['code'], 'TASK_ISSUE_MISSING_OR_CHANGED')
 
     def test_modified_or_duplicate_issue_stops_before_acceptance(self):
@@ -178,6 +239,7 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(self.read_state('windows-inner')['events'], {})
         self.ctx['issues'].pop(); self.clear_cooldown('windows-inner'); self.poll('windows-inner')
         self.ctx['issues'][0]['body'] = self.ctx['issues'][0]['body'].replace('初始目标', '改写目标')
+        self.expire_poll_maintenance('windows-inner')
         self.assertEqual(self.run_cli('windows-inner','Poll',ok=False)['code'], 'TASK_ISSUE_CHANGED')
 
     def test_issue_closed_and_title_changed_do_not_cancel_or_rerun(self):
@@ -186,6 +248,37 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(self.poll('windows-inner')['runs'][0]['phase'], 'receipt')
         self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
         self.assertEqual(len(self.ctx['posts']), 7)
+
+    def test_receipt_compacts_confirmed_bookkeeping_and_preserves_deduplication_and_claims(self):
+        self.complete_flow()
+        self.poll('windows-inner'); self.poll('mac-outer')
+        for node in ['windows-inner','mac-outer']:
+            state=self.read_state(node)
+            self.assertEqual(state['outbox'], {})
+            self.assertEqual(len(state['events']),5)
+            self.assertEqual(len(state['comments']),5)
+        owner=self.read_state('windows-inner')['claims'][self.key]
+        posts=len(self.ctx['posts'])
+        self.submit()
+        self.run_cli('windows-inner','Complete','-Key',self.key,'-File',self.resultfile)
+        self.poll('windows-inner'); self.poll('mac-outer')
+        self.assertEqual(len(self.ctx['posts']),posts)
+        self.assertEqual(self.read_state('windows-inner')['claims'][self.key],owner)
+        self.assertFalse(self.run_cli('windows-inner','Claim','-Key',self.key)['execute'])
+
+    def test_upgrade_compacts_only_confirmed_closed_rows_and_preserves_unresolved_delivery(self):
+        self.complete_flow(); self.poll('windows-inner')
+        state=self.read_state('windows-inner')
+        event=next(e for e in state['events'].values() if e['kind']=='result')
+        state['outbox'][event['event_id']]={'event':event,'body':'old duplicated body','status':'confirmed','attempts':1,'http':201}
+        for status in ['uncertain','rejected','pending']:
+            state['outbox'][status]={'event':event,'body':'keep '+status,'status':status,'attempts':1,'http':0}
+        legacy.ConnectorTests.write_state(self,'windows-inner',state)
+        snapshot=self.run_cli('windows-inner','Status')
+        state=self.read_state('windows-inner')
+        self.assertNotIn(event['event_id'],state['outbox'])
+        self.assertEqual(set(state['outbox']),{'uncertain','rejected','pending'})
+        self.assertEqual(snapshot['runs'][0]['phase'],'receipt')
 
     def test_wrong_repository_manifest_prevents_any_write(self):
         self.ctx['descriptor']['repository'] = 'wrong/repo'
@@ -282,6 +375,7 @@ class RelayTests(unittest.TestCase):
         self.ctx['issue_page_failure'] = 2
         self.run_cli('windows-inner','Poll',ok=False)
         self.assertEqual(self.read_state('windows-inner')['events'], {})
+        self.expire_poll_maintenance('mac-outer')
         self.run_cli('mac-outer','Poll',ok=False)
         self.assertEqual(self.ctx['posts'].count('/repos/test/tasks/issues'), 1)
 
@@ -299,6 +393,101 @@ class RelayTests(unittest.TestCase):
         self.ctx['comments'][0]['created_at']='2026-09-26T10:00:01+08:00'
         row=self.poll('windows-inner')['runs'][0]['timeline'][0]
         self.assertEqual(row['published_at'],'2026-09-26T02:00:01.000Z')
+
+    def seed_history(self, count):
+        for i in range(count):
+            meta=dict(schema='aiconnector.task-issue.v1',namespace=self.config['namespace'],task_id=f'history-{i}',coordinator='mac-outer',worker='windows-inner')
+            number=len(self.ctx['issues'])+1
+            self.ctx['issues'].append(dict(number=number,body='AIConnector task issue v1\n\n```json\n'+json.dumps(meta)+'\n```',user=dict(login='mac-user'),html_url=f'https://github.com/test/tasks/issues/{number}',created_at='2026-09-26T01:00:00Z'))
+
+    def test_one_delivery_does_not_read_unrelated_issue_comments(self):
+        self.seed_history(16);self.submit();self.ctx['gets'].clear()
+        self.run_cli('mac-outer','Flush')
+        self.assertLessEqual(len(self.ctx['gets']),6,self.ctx['gets'])
+        self.assertFalse(any(re.fullmatch(r'/repos/test/tasks/issues/\d+/comments',p) for p in self.ctx['gets']))
+        self.assertEqual(self.read_state('mac-outer')['outbox'][next(iter(self.read_state('mac-outer')['outbox']))]['status'],'confirmed')
+
+    def test_poll_is_incremental_and_audits_only_one_route(self):
+        self.ready();self.seed_history(16);self.poll('windows-inner');self.ctx['gets'].clear();self.ctx['get_queries'].clear()
+        self.poll('windows-inner')
+        self.assertLessEqual(len(self.ctx['gets']),6,self.ctx['gets'])
+        self.assertTrue(any('/issues/comments?' in p and 'since=' in p for p in self.ctx['get_queries']))
+
+    def test_unrelated_history_failure_does_not_cool_down_zip_upload(self):
+        self.ready();self.run_cli('windows-inner','Claim','-Key',self.key);self.seed_history(1)
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/2/comments':503}
+        self.expire_poll_maintenance('windows-inner',catalog_checked_at=0,audit_checked_at=0,audit_index=0)
+        self.poll('windows-inner');self.expire_poll_maintenance('windows-inner',audit_checked_at=0);self.poll('windows-inner')
+        state=self.read_state('windows-inner');self.assertEqual(state['next_poll'],0)
+        self.assertTrue(any(v.get('error')=='HTTP_ERROR_503' for v in state['scopes'].values()))
+        asset=self.run_cli('windows-inner','Upload','-Key',self.key,'-File',self.zip_path())
+        self.assertGreater(asset['bytes'],0)
+
+    def test_incremental_page_failure_preserves_cursor_and_imports_nothing(self):
+        self.ready();before=self.read_state('windows-inner')
+        self.ctx['comments'] += [dict(id=1000+i,issue_number=1,body='human note',user=dict(login='outsider'),updated_at='2026-09-26T03:00:00Z') for i in range(100)]
+        self.ctx['fail_page']=2
+        self.run_cli('windows-inner','Poll',ok=False)
+        after=self.read_state('windows-inner')
+        self.assertEqual(before['sync']['cursor'],after['sync']['cursor'])
+        self.assertEqual(before['events'],after['events'])
+
+    def test_deleted_old_comment_is_detected_by_bounded_audit(self):
+        self.complete_flow();self.ctx['comments'].pop(0)
+        self.expire_poll_maintenance('windows-inner')
+        snapshot=self.poll('windows-inner')
+        self.assertEqual(snapshot['runs'][0]['phase'],'conflict')
+
+    def test_fast_poll_reuses_catalog_but_discovers_new_task_in_the_same_cycle(self):
+        self.ready();self.ctx['gets'].clear()
+        self.poll('windows-inner')
+        self.assertEqual(self.ctx['gets'],['/repos/test/tasks/issues/comments'])
+        self.task['task_id']='new-fast-task';self.write_inputs();self.submit();self.poll('mac-outer')
+        self.ctx['gets'].clear()
+        snapshot=self.poll('windows-inner')
+        self.assertTrue(any(r['key'].startswith('new-fast-task/') for r in snapshot['runs']))
+        self.assertIn('/repos/test/tasks/issues',self.ctx['gets'])
+
+    def test_ten_second_override_preserves_existing_state_and_rate_limit(self):
+        self.ready();before=self.read_state('windows-inner')
+        snapshot=self.run_cli('windows-inner','Poll','-PollSeconds','10')
+        self.assertEqual(snapshot['runs'][0]['key'],self.key)
+        self.assertEqual(self.read_state('windows-inner')['binding'],before['binding'])
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/comments':429}
+        self.run_cli('windows-inner','Poll','-PollSeconds','10',ok=False)
+        count=len(self.ctx['gets']);snapshot=self.run_cli('windows-inner','Poll','-PollSeconds','10')
+        self.assertGreater(snapshot['next_poll'],time.time())
+        self.assertEqual(len(self.ctx['gets']),count)
+
+    def test_first_capability_issue_is_discovered_before_catalog_refresh_deadline(self):
+        self.assertIsNone(self.poll('mac-outer')['receiver_capabilities'])
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.3',digest='c'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        self.assertEqual(self.poll('mac-outer')['receiver_capabilities']['data']['version'],'0.7.3')
+
+    def test_public_channel_accepts_ten_seconds_but_rejects_nine(self):
+        # Status does not make HTTP requests: validate the real public boundary.
+        self.config['api_base']='https://api.github.com'
+        self.config['artifact_prefixes']=['https://github.com/test/tasks/releases/download/']
+        self.write_config()
+        self.assertEqual(self.run_cli('mac-outer','Status','-PollSeconds','10')['node'],'mac-outer')
+        self.assertEqual(self.run_cli('mac-outer','Status','-PollSeconds','9',ok=False)['code'],'POLL_INTERVAL_TOO_SHORT')
+
+    def test_transport_timing_records_independent_confirmation_without_credentials(self):
+        self.submit();self.poll('mac-outer')
+        raw=(self.folder/'mac-outer/transport-timing.jsonl').read_text()
+        self.assertNotIn('MAC_TOKEN',raw);self.assertNotIn('Authorization',raw);self.assertNotIn(self.task['objective'],raw)
+        rows=[json.loads(line) for line in raw.splitlines()]
+        self.assertTrue(any(r['kind']=='event_queued' and r['key']==self.key for r in rows))
+        self.assertTrue(any(r['kind']=='event_confirmed' and r['key']==self.key for r in rows))
+        self.assertTrue(any(r['kind']=='http_finished' and r['endpoint']=='comment' and r['elapsed_ms']>=0 for r in rows))
+
+    def test_single_comment_429_remains_a_global_rate_limit(self):
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/comments/1':429}
+        self.submit();self.run_cli('mac-outer','Flush',ok=False)
+        state=self.read_state('mac-outer');self.assertGreater(state['next_poll'],time.time())
+        self.assertEqual(self.run_cli('mac-outer','Upload','-Key',self.key,'-File',self.zip_path(),ok=False)['code'],'CHANNEL_COOLDOWN')
 
 
 if __name__ == '__main__': unittest.main(verbosity=2)

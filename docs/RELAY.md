@@ -124,7 +124,7 @@ Connector-Windows.cmd -PromptToken -Action Upload -Key datacopy-a3/1/run-001 -Fi
 
 ## 持久化与恢复
 
-创建 Issue、创建 Release、发评论、上传文件都先保存待写记录。写入结果不明时，先通过独立 GET 查证；未找到也不自动重发。明确限流持久化冷却，明确拒绝可修复权限后调用 RetryRejected。对象创建和其他写入共享写入间隔，首次任务可能跨几次轮询完成登记。
+创建 Issue、创建 Release、发评论、上传文件都先保存待写记录。写入结果不明时，先通过独立 GET 查证。0.7.1 起，不可变协议评论与 SHA-256 命名 ZIP 在两次间隔完整读取仍缺失且退避结束后，重传原内容；迟到评论按 `event_id` 去重，ZIP 不覆盖同名内容。创建 Issue / Release 和能力公告仍保持原 provisions 策略，不能套用不可变任务事件的重传规则。明确限流持久化冷却，明确拒绝可修复权限后调用 RetryRejected。对象创建和其他写入共享写入间隔，首次任务可能跨几次轮询完成登记。
 
 RetryRejected 的 Key 是 status.json 中 provisions 的原始键，例如 `issue:datacopy-a3`、`release:datacopy-a3/1/run-001`。ZIP 对应 `upload:<运行键>:<SHA256>`；评论仍使用 event_id。它们都只接受 rejected，拒绝强行重试 uncertain。
 
