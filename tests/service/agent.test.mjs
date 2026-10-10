@@ -103,6 +103,7 @@ test('real Pi loads frozen context, compacts automatically and restores durable 
     assert.ok(result.agent.usage.totalTokens>=summaries*120,'compaction usage must be included');
     assert.match(JSON.stringify(model.calls[0]),/GLOBAL_LOCAL_CONTEXT/);assert.match(JSON.stringify(model.calls[0]),/FROZEN_FILE_CONTEXT/);assert.doesNotMatch(JSON.stringify(model.calls),/SHOULD_NOT_BE_LOADED/);
     const zip=unzipSync(fs.readFileSync(path.join(dir,'result.zip')));assert.ok(zip['metrics.json']);assert.ok(!Object.values(zip).some(v=>Buffer.from(v).includes('GLOBAL_LOCAL_CONTEXT')));
+    const timing=JSON.parse(Buffer.from(zip['model-timing.json']));assert.ok(timing.requests.some(r=>r.kind==='compaction'&&r.sdk_usage?.totalTokens>=120),'compaction stream result is observed without consuming it');
   }finally{await model.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 

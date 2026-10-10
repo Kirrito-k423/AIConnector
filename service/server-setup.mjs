@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {sha,atomic,need,loadConfig,json} from './common.mjs';
 import {validateRegistry} from './server-registry.mjs';
+import {profileDefinitions} from './profile-data.mjs';
 import {WatchClient} from './watch.mjs';
 import {snapshotAgent} from './agent-config.mjs';
 
@@ -40,6 +41,7 @@ export function serverReadiness(c){
   return {registry_valid:valid,reloaded:current,experiment_entry_configured:current&&Object.values(disk.profiles).some(p=>p.mode==='experiment'),
     probe_profiles:Object.entries(c.runner.profiles).filter(([,p])=>p.kind==='simplehtmlwatch'&&p.mode==='probe').map(([id])=>id),
     experiment_profiles:Object.entries(c.runner.profiles).filter(([,p])=>p.kind==='simplehtmlwatch'&&p.mode!=='probe').map(([id])=>id),
+    loaded_profiles:profileDefinitions(Object.fromEntries(Object.entries(c.runner.profiles).filter(([,p])=>p.kind==='simplehtmlwatch'))),
     hardware_execution_verified:false,scope:'入口配置与热加载检查；SSH、芯片型号和实验结果须逐次执行验证'};
 }
 function maintenanceProfile(c,file){

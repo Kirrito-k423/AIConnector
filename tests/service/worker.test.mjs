@@ -24,7 +24,21 @@ test('real pinned Pi calls a real CPU experiment and returns verified ZIP',async
  const r=await exercise();assert.equal(r.worker.state,'ready');assert.equal(r.result.outcome,'succeeded');assert.equal(r.result.actual_revision,'builtin-smoke-v1');assert.equal(r.requests,2);
  assert.equal(JSON.parse(strFromU8(r.zip['metrics.json'])).sum,50005000);assert.equal(r.execution.exit_code,0);assert.match(strFromU8(r.zip['stdout.txt']),/50005000/);
 });
+test('model timing separates provider setup, headers, first output and stream completion without storing content',async()=>{
+ const r=await exercise({delay:90,handler:(_d,n)=>({tool:n===1?'run_experiment':'submit_summary',args:n===1?{}:{summary:'timing fixture',metrics:{}},firstOutputDelay:120,endDelay:100})});
+ assert.equal(r.result.outcome,'succeeded');
+ const timing=JSON.parse(strFromU8(r.zip['model-timing.json']));assert.equal(r.requests,2);assert.equal(timing.dropped_events,0);
+ const dispatched=timing.requests.filter(r=>r.request_ready_at!==null);assert.equal(dispatched.length,2,JSON.stringify(timing));
+ for(const row of dispatched){assert.equal(row.state,'ended');assert.ok(row.headers_ms-row.ready_ms>=75,JSON.stringify(row));assert.ok(row.first_output_ms-row.headers_ms>=100,JSON.stringify(row));assert.ok(row.output_stream_ms>=80);assert.ok(row.duration_ms>=row.first_output_ms);assert.equal(row.sdk_usage,null);}
+ assert.doesNotMatch(JSON.stringify(timing),/LOCAL_FIXTURE_KEY|timing fixture|127\.0\.0\.1/);
+});
 test('invalid model credential yields a blocked delivery without experiment',async()=>{const r=await exercise({fail:true});assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
+test('total Pi deadline retains a trace of the request with no first output',async()=>{
+ const r=await exercise({delay:1800},s=>s.timeoutSeconds=1);
+ assert.equal(r.result.agent.stop_reason,'RUN_TIMEOUT');assert.equal(r.execution,undefined);
+ const timing=JSON.parse(strFromU8(r.zip['model-timing.json']));assert.equal(timing.runner_stop_reason,'RUN_TIMEOUT');assert.ok(timing.requests.length>0);
+ assert.ok(timing.requests.every(r=>r.state==='ended'&&r.first_output_at===null&&r.duration_ms>=900));
+});
 test('revision mismatch never executes',async()=>{const r=await exercise({},s=>s.task.code.revision='wrong');assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('prior durable execution intent is never replayed',async()=>{const r=await exercise({},(s,dir)=>save(path.join(dir,'execution-intent.json'),{key:s.key}));assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('model repeats run_experiment but actual experiment executes once',async()=>{const r=await exercise({repeat:true});assert.equal(r.result.outcome,'succeeded');assert.equal(r.worker.events.filter(e=>e.type==='execution_started').length,1);assert.equal(r.requests,3);});

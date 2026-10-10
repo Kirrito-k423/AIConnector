@@ -3,6 +3,7 @@ import path from 'node:path';
 import {ROOT,sha,now,need} from './common.mjs';
 import {validateMaintenance} from './maintenance.mjs';
 import {validateWatchProfile} from './watch.mjs';
+import {canConfigureProfiles} from './profile-data.mjs';
 
 export const VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'))).version;
 export const modeOf=p=>p.kind==='builtin-smoke'?'smoke':p.kind==='maintenance'?'maintenance':p.mode||'experiment';
@@ -10,6 +11,7 @@ export function toolsFor(p,agent={}) {
   const names=['submit_summary','get_run_state','verify_task','list_inputs','read_input','list_outputs','read_output'];
   if(p.kind==='maintenance')names.push('read_local_file','write_local_file','patch_local_json','restore_local_file','run_maintenance_command','call_local_api');
   else names.push('run_experiment');
+  if(canConfigureProfiles(p))names.push('configure_server_profiles');
   if(agent.simpleHtmlWatch?.enabled)names.push('server_status');
   if(p.kind==='simplehtmlwatch'&&agent.simpleHtmlWatch?.enabled)names.push('submit_server_task','server_task_status','server_task_logs','collect_server_result');
   if(agent.web?.enabled){names.push('web_fetch');if(agent.web.searchUrl)names.push('web_search');}
@@ -25,17 +27,22 @@ export function checkRequirements(task,p,agent={}) {
   need(required.every(x=>available.includes(x)),'CAPABILITY_TOOL_MISSING');
   const checks=task.requirements.checks||[];
   need(Array.isArray(checks)&&checks.every(x=>typeof x==='string'),'INVALID_REQUIRED_CHECKS');
-  const ids=p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id);
+  const ids=checksFor(p);
   need(ids.length>0,'ACCEPTANCE_CHECKS_NOT_CONFIGURED');
   need(checks.every(x=>ids.includes(x)),'CAPABILITY_CHECK_MISSING');
   for(const s of agent.skills||[])need((s.requiredTools||[]).every(t=>available.includes(t)),'SKILL_TOOL_MISSING');
   return available;
 }
+export function checksFor(p){return [...(p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id)),...(canConfigureProfiles(p)?['server-profiles-loaded']:[])];}
 export function validateRequirements(task){
   const r=task?.requirements;
   need(r&&['smoke','probe','maintenance','experiment'].includes(r.mode),'TASK_REQUIREMENTS_REQUIRED');
   need(Array.isArray(r.tools||[])&&(r.tools||[]).length<=32&&(r.tools||[]).every(t=>typeof t==='string'&&t.length<=64),'INVALID_REQUIRED_TOOLS');
   need(Array.isArray(r.checks)&&r.checks.length>0&&r.checks.length<=16&&r.checks.every(t=>typeof t==='string'&&t.length<=40),'INVALID_REQUIRED_CHECKS');
+  if(r.server_profiles!==undefined){
+    need(r.mode==='maintenance'&&r.checks.includes('server-profiles-loaded')&&Array.isArray(r.server_profiles)&&r.server_profiles.length>0&&r.server_profiles.length<=24,'INVALID_REQUIRED_PROFILES');
+    const ids=new Set();for(const p of r.server_profiles){need(p&&/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(p.id)&&!ids.has(p.id)&&/^[\w.-]{1,128}$/.test(p.revision)&&(!p.definition_sha256||/^[a-f0-9]{64}$/.test(p.definition_sha256)),'INVALID_REQUIRED_PROFILES');ids.add(p.id);}
+  }
 }
 export function validateProfile(p){
   need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');
@@ -55,7 +62,7 @@ export function validateProfile(p){
 export function capabilities(c,secrets={},snapshot) {
   const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);if(p.kind==='simplehtmlwatch')need(c.runner.agent.simpleHtmlWatch?.enabled,'WATCH_NOT_ENABLED');for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
     return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,
-    tools:toolsFor(p,c.runner.agent),checks:p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id),
+    tools:toolsFor(p,c.runner.agent),checks:checksFor(p),
     ...(p.revision?{revision:p.revision}:{}),
     ...(p.kind==='builtin-smoke'?{revision:'builtin-smoke-v1'}:{}),
     arguments_allowed:p.allowTaskArguments===true};});

@@ -5,7 +5,7 @@ import {need,sha,save,read,atomic,now} from './common.mjs';
 
 export class Inputs {
   constructor(dir,artifacts=[]) {
-    this.dir=dir;this.file=path.join(dir,'input-state.json');this.state=read(this.file,{files:[],archives:[]});
+    this.dir=dir;this.artifacts=artifacts;this.file=path.join(dir,'input-state.json');this.state=read(this.file,{files:[],archives:[]});
     if(this.state.complete)return;
     const files=[],archives=[];let count=0,total=0;
     for(const a of artifacts) {
@@ -35,6 +35,18 @@ export class Inputs {
     this.state={complete:true,files,archives};this.persist();
   }
   persist(){save(this.file,this.state);}
+  verifiedBytes(id,expected,maxBytes=65536){
+    need(/^[a-f0-9]{32}$/.test(id),'INVALID_INPUT_ID');
+    const item=this.state.files.find(f=>f.id===id);need(item&&item.staged,'INPUT_NOT_FOUND');
+    need(item.id===sha(item.archive_sha256+'/'+item.name).slice(0,32)&&this.state.archives.some(a=>a.sha256===item.archive_sha256&&a.staged)&&this.artifacts.some(a=>a.sha256===item.archive_sha256),'INPUT_BINDING_MISMATCH');
+    need(item.sha256===expected,'INPUT_HASH_MISMATCH');
+    const file=path.join(fs.realpathSync(this.dir),'input-files',id),stat=fs.lstatSync(file);
+    const norm=p=>process.platform==='win32'?p.toLowerCase():p;
+    need(stat.isFile()&&!stat.isSymbolicLink()&&norm(fs.realpathSync(file))===norm(file),'INPUT_LINK_FORBIDDEN');
+    need(stat.size===item.bytes&&stat.size<=maxBytes,'PROFILE_INPUT_TOO_LARGE');
+    const bytes=fs.readFileSync(file);need(bytes.length===item.bytes&&sha(bytes)===expected,'INPUT_HASH_MISMATCH');
+    item.read_by_agent=true;item.read_at=now();this.persist();return bytes;
+  }
   list(offset=0,limit=32){
     need(Number.isInteger(offset)&&offset>=0&&Number.isInteger(limit)&&limit>=1&&limit<=32,'INVALID_INPUT_PAGE');
     const files=this.state.files.slice(offset,offset+limit);for(const f of files)f.exposed_to_model=true;this.persist();

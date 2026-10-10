@@ -43,11 +43,10 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.10 allows overdue Poll to enter the serial queue during other runs\' start/delivery and active Flush. Repeated Poll requests share one queued or executing request. At a request boundary, a Poll waiting ten seconds or bypassed by four foreground dispatches gets a turn; active requests are never interrupted. '
-           'Local state persistence serializes the ledger once instead of recursively canonicalizing every field. Exact-byte SHA-256, atomic durable writes and unchanged projections are preserved; protocol/event/artifact hashes are unchanged. Per-receipt diagnostics, persisted retry budgets and safe closed outbox compaction remain in place. Ten-second samples remain local and never create periodic network writes. '
-           'No active HTTP/SSH is preempted or replayed. Owner-bound recovery, machine reservations, durable write pacing and receiver hash validation are preserved. '
-           'Upgrade both endpoints using existing config and state. No quantified intranet performance improvement is claimed. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/POLL-AND-FLUSH-0710.md\n\n'
+           '0.7.11 adds configure_server_profiles: merge one verified staged profile map, CAS-write with backups, reload and verify exact loaded IDs/revisions/definition hashes. The model sends IDs and hashes instead of regenerating all existing profiles. Completed writes resume with their original action IDs; unknown effects are never replayed. Existing machine grants and reservations remain in force. '
+           'Each SDK model call records request readiness, response headers, first output and completion in the result ZIP. Diagnostics are bounded, asynchronous and contain no prompts or credentials; no per-token writes or periodic network uploads. Explicit timeout settings are preserved. '
+           'The real pinned Pi fixture closes a scoped configuration task in three model requests; this is not a claim about intranet latency or A5 hardware. '
+           f'Details and one-shot Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/PROFILE-AND-MODEL-0711.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

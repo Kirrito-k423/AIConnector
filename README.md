@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.10 让到期 Poll 独立排队，并降低 Flush 本地处理成本。** 新任务发现不再等待其他任务启动、交付和前台队列清空；重复 Poll 合并，排队满 10 秒或被越过 4 次后在请求边界执行。本地账本改为一次整体 JSON 序列化，保留原子落盘、SHA 校验、协议哈希和机器锁。真实内网性能改善仍需升级后测量。
+**v0.7.11 将入口配置合并、加载和指定版本验收交给程序完成，并细分模型请求计时。** Pi 传附件 ID 和哈希，无需重新生成整份入口配置；完成的写入可接续加载，未知操作不重放。模型请求的准备、响应头、首个输出与结束记录在结果 ZIP 中。保留 0.7.10 的公平 Poll、机器锁和持久化恢复机制。内网性能改善须升级后实测。
 
-[下载服务候选包 v0.7.10-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.10-rc.1) · [本版修复与验收](docs/POLL-AND-FLUSH-0710.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+[下载服务候选包 v0.7.11-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.11-rc.1) · [本版修复与验收](docs/PROFILE-AND-MODEL-0711.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 
