@@ -205,7 +205,7 @@ export async function work(dir,secrets={}) {
       prompt=JSON.stringify({instruction:'用户目标尚未通过验收。检查下列证据，在授权范围内修复并重新验证；不要重跑未知任务或无关自检。若无可用修复能力，请说明具体阻塞。',acceptance,summary_required:!report});
     }
   } catch(e) {failure=failure||cleanError(e);event('agent_failed',{code:failure});}
-  finally {clearTimeout(timer);status.agent_ended_at=now();status.stop_reason=failure||'GOAL_VERIFIED';if(session)session.dispose();await modelTiming.close(status.stop_reason);}
+  finally {clearTimeout(timer);status.agent_ended_at=now();status.stop_reason=failure||'GOAL_VERIFIED';if(session)session.dispose();modelTiming.stop(status.stop_reason);}
   try {
     profiler.set('result.package');
     const packagingStarted=performance.now();status.packaging_started_at=now();
@@ -243,7 +243,7 @@ export async function work(dir,secrets={}) {
     status.packaging_ended_at=now();status.packaging_ms=Math.round(performance.now()-packagingStarted);
     status.state='ready';status.ended_at=now();status.error=failure;event('result_ready');
   } catch(e) {status.state='blocked';status.error=cleanError(e);event('packaging_failed');}
-  finally {await profiler.close();clearInterval(beat);write();unlock();}
+  finally {await profiler.close();await modelTiming.close(status.stop_reason);clearInterval(beat);write();unlock();}
 }
 
 if(process.argv[1]===new URL(import.meta.url).pathname || process.argv[2]==='--work') {

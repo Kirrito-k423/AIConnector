@@ -36,6 +36,7 @@ export class ModelTiming {
   }
   emit(row,event){this.writer.append({schema:'aiconnector.model-request-event.v1',key:this.key,event,...row});}
   finish(row,start,reason){if(row.state!=='active')return;row.state='ended';row.ended_at=this.wall();row.duration_ms=this.clock()-start;row.output_stream_ms=row.first_output_ms===null?null:row.duration_ms-row.first_output_ms;row.stop_reason=reason;this.active.delete(row.request);this.emit(row,'end');}
-  snapshot(){return {schema:'aiconnector.model-timing.v1',key:this.key,runner_stop_reason:this.stopReason||null,requests_started:this.started,dropped_requests:this.dropped,dropped_events:this.writer.dropped,scope:'SDK call through provider request-ready, response-header and first nonempty text/thinking/tool delta to completion. Aborted SDK calls can stop before request readiness. Not DNS, TCP or server compute profiling; SDK zero usage means unmeasured.',requests:this.rows};}
-  async close(reason){this.stopReason=reason;for(const {row,start}of this.active.values())this.finish(row,start,reason||'runner_stopped');await this.writer.close();}
+  snapshot(){return {schema:'aiconnector.model-timing.v1',key:this.key,runner_stop_reason:this.stopReason||null,requests_started:this.started,dropped_requests:this.dropped,dropped_events:this.writer.dropped,local_log_pending_events:this.writer.rows?.length||0,local_log_draining:Boolean(this.writer.draining),scope:'SDK call through provider request-ready, response-header and first nonempty text/thinking/tool delta to completion. Aborted SDK calls can stop before request readiness. Not DNS, TCP or server compute profiling; SDK zero usage means unmeasured. ZIP requests come from memory; local log flushing is independent of result readiness.',requests:this.rows};}
+  stop(reason){this.stopReason=reason;for(const {row,start}of this.active.values())this.finish(row,start,reason||'runner_stopped');}
+  async close(reason){this.stop(reason);await this.writer.close();}
 }
