@@ -20,6 +20,7 @@ def validate(tag, folder, version):
         manifest=json.loads(z.read('AIConnector-Service/package-manifest.json'))
         if manifest['version']!=version or manifest['platform']!='windows' or manifest['arch']!='x64':
             raise ValueError('package identity mismatch')
+        if 'watch-companion/version.json' not in manifest['sha256']:raise ValueError('offline group controller missing')
         for name, expected in manifest['sha256'].items():
             if hashlib.sha256(z.read('AIConnector-Service/'+name)).hexdigest()!=expected:
                 raise ValueError('package member checksum mismatch')
@@ -43,10 +44,10 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.11 adds configure_server_profiles: merge one verified staged profile map, CAS-write with backups, reload and verify exact loaded IDs/revisions/definition hashes. The model sends IDs and hashes instead of regenerating all existing profiles. Completed writes resume with their original action IDs; unknown effects are never replayed. Existing machine grants and reservations remain in force. '
-           'Each SDK model call records request readiness, response headers, first output and completion in the result ZIP. Diagnostics are bounded, asynchronous and contain no prompts or credentials; no per-token writes or periodic network uploads. Explicit timeout settings are preserved. '
-           'The real pinned Pi fixture closes a scoped configuration task in three model requests; this is not a claim about intranet latency or A5 hardware. '
-           f'Details and one-shot Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/PROFILE-AND-MODEL-0711.md\n\n'
+           '0.7.12 checks semantic progress at every Pi tool turn, reserves a fixed whole machine group atomically, and adds direct execution for locally configured fixed tasks with zero model calls. '
+           'The package includes the pinned offline simpleHtmlWatch group-controller update. Upgrade the original Windows instance with its original data directory; configuration and unknown task/reservation state remain authoritative. '
+           'All group rank exit records are required before AIConnector releases a group. Lost responses and uncertain launch intents are queried by original ID, never replayed. '
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/EXECUTION-0712.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

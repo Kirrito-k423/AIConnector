@@ -34,6 +34,21 @@ export function validateWatchProfile(p) {
   need(!(p.machineId&&p.group),'INVALID_WATCH_SELECTOR');
   need((p.machineId&&typeof p.machineId==='string')||(p.group&&typeof p.group==='string')||p.allowAnyMachine===true,'WATCH_SELECTOR_REQUIRED');
   need(!p.allowTaskArguments,'WATCH_TASK_ARGUMENTS_DISABLED');
+  if(p.machineIds!==undefined){
+    need(Array.isArray(p.machineIds)&&p.machineIds.length>=2&&p.machineIds.length<=12&&new Set(p.machineIds).size===p.machineIds.length&&p.machineIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&p.machineIds.includes(p.machineId)&&!p.group&&!p.allowAnyMachine,'INVALID_WATCH_MACHINE_GROUP');
+    need(typeof p.groupCompletionOutput==='string'&&p.outputs?.includes(p.groupCompletionOutput)&&Number.isInteger(p.groupRanksPerMachine)&&p.groupRanksPerMachine>=1&&p.groupRanksPerMachine<=128,'GROUP_COMPLETION_CONTRACT_REQUIRED');
+  }
+}
+export function watchPlan(profile,task,key){
+  validateWatchProfile(profile);const expected=task.code.revision;need(/^[\w.-]{1,128}$/.test(expected),'INVALID_ACTUAL_REVISION');
+  const context=profile.machineIds?`export AICONNECTOR_RUN_KEY=${quote(key)}\nexport AICONNECTOR_GROUP_MACHINE_IDS=${quote(JSON.stringify(profile.machineIds))}\nexport AICONNECTOR_GROUP_RANKS_PER_MACHINE=${profile.groupRanksPerMachine}\n`:'';
+  const shell=`set -eu\n${context}aic_revision="$( ${profile.revisionCommand}\n)"\nprintf '%s\\n' "$aic_revision" > "$SHW_RESULTS_DIR/aiconnector-revision.txt"\nif [ "$aic_revision" != ${quote(expected)} ]; then printf 'CODE_REVISION_MISMATCH\\n' >&2; exit 86; fi\n${profile.shell}`.trim();
+  need(Buffer.byteLength(shell)<=4096,'WATCH_COMMAND_TOO_LARGE');
+  return {id:'aic-'+sha(key).slice(0,48),shell,...(profile.machineId?{machineId:profile.machineId}:profile.group?{group:profile.group}:{})};
+}
+export function checkGroupReservation(r,remote){
+  need(r&&!r.releasedAt&&r.machineId===remote.machineId&&JSON.stringify(r.machineIds)===JSON.stringify(remote.machineIds)&&r.taskId===remote.taskId&&r.planSha256===remote.planSha256&&r.generation===1&&typeof r.grantId==='string'&&r.grantId.length>0&&Array.isArray(r.allocations)&&r.allocations.length===remote.machineIds.length&&r.allocations.every((a,i)=>a.machineId===remote.machineIds[i]&&a.resourceKey)&&new Set(r.allocations.map(a=>a.resourceKey)).size===remote.machineIds.length,'GROUP_RESERVATION_OWNERSHIP_INVALID');
+  if(remote.grantId)need(r.grantId===remote.grantId&&r.generation===remote.generation,'GROUP_GRANT_CHANGED');
 }
 
 export class WatchClient {
@@ -64,18 +79,18 @@ export class WatchExecution {
     const record=this.record;need(record&&record.id===job.id,'WATCH_TASK_ID_MISMATCH');
     need(job.shell===record.request.shell&&(job.machineId||'')===(record.request.machineId||'')&&(job.group||'')===(record.request.group||''),'WATCH_TASK_CONTENT_MISMATCH');
     need((job.reservationId||'')===(record.request.reservationId||''),'WATCH_RESERVATION_MISMATCH');
+    need((job.reservationGrantId||'')===(record.request.reservationGrantId||'')&&(job.reservationGeneration||0)===(record.request.reservationGeneration||0),'WATCH_GROUP_GRANT_MISMATCH');
     record.job=publicJob(job);record.observed_at=now();save(this.file,record);this.event('server_task_observed',{id:job.id,status:job.status,machine:job.selectedMachineId});return record.job;
   }
   async submit() {
     const existing=this.record;if(existing)return this.status();
     const p=this.spec.profile;validateWatchProfile(p);
-    const expected=this.spec.task.code.revision;need(/^[\w.-]{1,128}$/.test(expected),'INVALID_ACTUAL_REVISION');
-    const shell=`set -eu\naic_revision="$( ${p.revisionCommand}\n)"\nprintf '%s\\n' "$aic_revision" > "$SHW_RESULTS_DIR/aiconnector-revision.txt"\nif [ "$aic_revision" != ${quote(expected)} ]; then printf 'CODE_REVISION_MISMATCH\\n' >&2; exit 86; fi\n${p.shell}`;
-    need(Buffer.byteLength(shell)<=4096,'WATCH_COMMAND_TOO_LARGE');
-    const request={id:'aic-'+sha(this.spec.key).slice(0,48),shell,...(p.machineId?{machineId:p.machineId}:p.group?{group:p.group}:{}),...(this.spec.reservation?{reservationId:this.spec.reservation.id}:{})};
+    const request={...watchPlan(p,this.spec.task,this.spec.key),...(this.spec.reservation?{reservationId:this.spec.reservation.id}:{}),...(this.spec.reservation?.grantId?{reservationGrantId:this.spec.reservation.grantId,reservationGeneration:this.spec.reservation.generation}:{})};
+    need(!p.machineIds||this.spec.reservation?.machineIds,'GROUP_RESERVATION_REQUIRED');
     if(this.spec.reservation){
       const catalog=await this.client.call('/api/tasks/reservations'),r=catalog.reservations?.[this.spec.reservation.id];
       need(catalog.schema==='simplehtmlwatch.reservations.v1'&&r?.machineId===p.machineId&&!r.releasedAt,'RESERVATION_OWNERSHIP_INVALID');
+      if(p.machineIds){checkGroupReservation(r,this.spec.reservation);need(r.planSha256===sha(request.shell)&&r.taskId===request.id,'GROUP_PLAN_CHANGED');}
     }
     // Write intent before POST. An unknown response is queried by ID, never submitted again.
     save(this.file,{id:request.id,request,created_at:now()});this.event('server_task_submitting',{id:request.id});

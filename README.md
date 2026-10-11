@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.11 将入口配置合并、加载和指定版本验收交给程序完成，并细分模型请求计时。** Pi 传附件 ID 和哈希，无需重新生成整份入口配置；完成的写入可接续加载，未知操作不重放。模型请求的准备、响应头、首个输出与结束记录在结果 ZIP 中。保留 0.7.10 的公平 Poll、机器锁和持久化恢复机制。内网性能改善须升级后实测。
+**v0.7.12 修复 Pi 工具循环中的无进展检查，支持八机整组原子预留，并加入固定入口直接执行模式。** 固定任务执行、校验和 ZIP 回传无需模型调用；整组等待不占用 Pi，原 Grant 和未知启动意图持久化恢复。包内附带所需 simpleHtmlWatch 升级程序；全部 rank 退出证据齐全才释放整组锁。内网 A5 实验和 E2E 性能仍须在 Windows 更新后实测。
 
-[下载服务候选包 v0.7.11-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.11-rc.1) · [本版修复与验收](docs/PROFILE-AND-MODEL-0711.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+[下载服务候选包 v0.7.12-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.12-rc.1) · [本版修复与验收](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 

@@ -66,7 +66,9 @@ function executionEvents(r){
   const events=[],w=r.job?.worker;
   const observed=(w?.execution_time_source||r.result?.execution?.time_source)==='controller_observed';
   for(const [title,at]of [[observed?'服务器提交记录':'子进程开始',w?.execution_started_at||r.result?.execution?.started_at],[observed?'服务器退出确认':'子进程结束',w?.execution_ended_at||r.result?.execution?.ended_at]])if(at)events.push({title,at,meta:observed?'控制器记录时间，非远端精确时间':'仅命令时间，不是 Pi 总运行时间'});
-  for(const [title,at]of [['Pi 会话开始',w?.agent_started_at||r.result?.agent?.started_at],['Pi 会话结束',w?.agent_ended_at||r.result?.agent?.ended_at]])if(at)events.push({title,at,meta:'包含模型、工具调用和独立验收'});
+  const direct=r.result?.execution?.engine==='direct'||w?.execution_mode==='direct';
+  if(direct){for(const [title,at]of [['固定入口开始',w?.executor_started_at],['固定入口结束',w?.executor_ended_at]])if(at)events.push({title,at,meta:'程序直接执行与独立验收，模型调用 0 次'});}
+  else for(const [title,at]of [['Pi 会话开始',w?.agent_started_at||r.result?.agent?.started_at],['Pi 会话结束',w?.agent_ended_at||r.result?.agent?.ended_at]])if(at)events.push({title,at,meta:'包含模型、工具调用和独立验收'});
   for(const e of w?.events||[])if(['compaction_start','compaction_end','server_task_submitting','server_result_collected','web_fetched'].includes(e.type))events.push({title:({compaction_start:'正在压缩上下文',compaction_end:e.success?'上下文压缩完成':'上下文压缩未完成',server_task_submitting:'提交服务器任务',server_result_collected:'服务器结果已回收',web_fetched:'已读取参考网页'})[e.type],at:e.at,meta:e.id||e.host||e.reason||''});
   return events.sort((a,b)=>timestamp(a.at)-timestamp(b.at));
 }
@@ -105,7 +107,7 @@ function renderDetail(r){
     milestones.append(disclosure('execution-events','执行与工具记录 · '+events.length+' 条',log));
   }
   if(r.result?.agent){
-    const a=r.result.agent,parts=[a.duration_ms==null?'该历史结果未记录 Pi 总耗时':'Pi 总运行 '+a.duration_ms+' ms'];
+    const a=r.result.agent,parts=[r.result.execution?.engine==='direct'?'固定入口直接执行 · 模型调用 0 次 · 执行与校验 '+r.result.execution.executor_duration_ms+' ms':a.duration_ms==null?'该历史结果未记录 Pi 总耗时':'Pi 总运行 '+a.duration_ms+' ms'];
     if(a.turns!=null)parts.push(a.turns+' 轮');if(a.continuations!=null)parts.push('继续修复 '+a.continuations+' 次');
     milestones.append(el('p',parts.join(' · '),'duration'));
   }

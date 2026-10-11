@@ -7,7 +7,7 @@ import {ROOT,sha,now,read,save,atomic,need,run,safeEnv,cleanError,lock} from './
 import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {WatchClient,WatchExecution} from './watch.mjs';
 import {webTools} from './web-tools.mjs';
-import {checkRequirements,VERSION} from './capabilities.mjs';
+import {checkRequirements,VERSION,engineOf} from './capabilities.mjs';
 import {Maintenance} from './maintenance.mjs';
 import {Inputs} from './inputs.mjs';
 import {Outputs} from './outputs.mjs';
@@ -17,6 +17,7 @@ import {authoritativeReport} from './reporting.mjs';
 import {ProfileWorkflow} from './profile-workflow.mjs';
 import {canConfigureProfiles} from './profile-data.mjs';
 import {ModelTiming} from './model-timing.mjs';
+import {Progress} from './progress.mjs';
 
 // One disposable Pi process per run. Service restarts do not restart this process.
 export async function work(dir,secrets={}) {
@@ -34,9 +35,11 @@ export async function work(dir,secrets={}) {
   const redact=text=>secretValues.reduce((v,s)=>v.split(s).join('[REDACTED]'),String(text));
   const abort=new AbortController();
   const model=spec.model;
+  const direct=engineOf(spec.profile)==='direct';status.execution_mode=direct?'direct':'pi';
   spec.agent??=snapshotAgent(agentConfig({},model),dir);
   const agent=spec.agent;
   const budget={maxContinuations:4,maxNoProgress:2,maxActions:64,maxTotalTokens:200000,maxCost:0,...agent.budget};
+  const progress=new Progress(budget.maxNoProgress);
   const usage={input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:0};
   const addUsage=u=>{if(!u)return;for(const k of ['input','output','cacheRead','cacheWrite','totalTokens'])usage[k]+=u[k]||0;usage.cost+=u.cost?.total||0;status.usage={...usage};if(usage.totalTokens>budget.maxTotalTokens||budget.maxCost&&usage.cost>budget.maxCost){failure='MODEL_USAGE_BUDGET';abort.abort();void session.abort();}};
   const workspace=path.join(dir,'work');fs.mkdirSync(workspace,{recursive:true,mode:0o700});
@@ -108,6 +111,15 @@ export async function work(dir,secrets={}) {
       maintenance=new Maintenance(spec,dir,{signal:abort.signal,redact,event});
       if(canConfigureProfiles(spec.profile))profileWorkflow=new ProfileWorkflow(maintenance,inputs);
     }
+    if(direct){
+      status.executor_started_at=now();event('direct_started');
+      timer=setTimeout(()=>{failure='EXECUTION_TIMEOUT';abort.abort();},spec.timeoutSeconds*1000);
+      await execute();
+      report={summary:'固定入口执行结束；结果以独立检查和原始输出为准。',metrics:{},source:'executor'};summaryCurrent=true;
+      save(path.join(dir,'summary.json'),report);await completion();
+      need(!acceptance.unknown,'EXECUTION_UNKNOWN');need(acceptance.status==='passed','ACCEPTANCE_FAILED');need(goalReady,'OUTPUTS_INCOMPLETE');
+      goalVerified=true;event('direct_verified',{checks:acceptance.checks.length});
+    }else{
     need(model&&secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
     const modelRuntime=await ModelRuntime.create({authPath:path.join(dir,'no-auth.json'),modelsPath:null,allowModelNetwork:false,refreshOnCreate:false});
     modelRuntime.registerProvider('aiconnector',{api:model.api,baseUrl:model.baseUrl,authHeader:true,models:[{
@@ -155,7 +167,10 @@ export async function work(dir,secrets={}) {
     for(const t of tools){t.executionMode='sequential';const fn=t.execute;t.execute=async(...args)=>{
       goalReady=false;need(!failure,failure||'RUN_STOPPED');need(!abort.signal.aborted,'RUN_STOPPED');
       if(!observations.has(t.name))summaryCurrent=false;
-      const value=await fn(...args);
+      let value;
+      try{value=await fn(...args);}catch(e){progress.observe(t.name,args[1]||{},{error:cleanError(e)});throw e;}
+      let observed;try{observed=JSON.parse(value.content?.find(c=>c.type==='text')?.text);}catch{observed={};}
+      progress.observe(t.name,args[1]||{},observed);
       if(t.name==='submit_summary')summaryCurrent=true;
       // Recheck after all later actions, including a write after a summary in the same turn.
       await completion();return value;
@@ -178,9 +193,12 @@ export async function work(dir,secrets={}) {
       if(e.type==='turn_end'&&goalReady&&!failure&&!e.toolResults?.some(r=>r.isError)){
         goalVerified=true;clearTimeout(timer);event('goal_verified',{checks:acceptance.checks.length});void session.abort();
       }
+      if(e.type==='turn_end'&&!goalVerified&&!failure&&!progress.endTurn()){
+        failure='NO_PROGRESS';event('no_progress',{stalled_turns:progress.stalled});abort.abort();void session.abort();
+      }
       if(e.type==='tool_execution_start'||e.type==='tool_execution_end'){profiler.set(e.type==='tool_execution_start'?'tool.'+e.toolName:'model.wait');event(e.type,{tool:e.toolName});if(e.type==='tool_execution_start'&&++toolSteps>budget.maxActions){failure='ACTION_BUDGET';abort.abort();void session.abort();}}
       if(e.type==='compaction_start'){status.compaction.active=true;event(e.type,{reason:e.reason});}
-      if(e.type==='compaction_end'){status.compaction.active=false;if(e.result)status.compaction.count++;addUsage(e.result?.usage);event(e.type,{reason:e.reason,success:Boolean(e.result)&&!e.aborted,tokens_before:e.result?.tokensBefore,will_retry:e.willRetry});}
+      if(e.type==='compaction_end'){status.compaction.active=false;if(e.result){status.compaction.count++;progress.recoveryEpoch=status.compaction.count;}addUsage(e.result?.usage);event(e.type,{reason:e.reason,success:Boolean(e.result)&&!e.aborted,tokens_before:e.result?.tokensBefore,will_retry:e.willRetry});}
       if(e.type==='message_end'&&e.message?.role==='assistant') {
         addUsage(e.message.usage);
         if(['error','aborted'].includes(e.message.stopReason)&&!goalVerified)event('model_attempt_failed');
@@ -190,7 +208,7 @@ export async function work(dir,secrets={}) {
     profiler.set('model.wait');
     status.state='agent';status.agent_started_at=now();status.tools=tools.map(t=>t.name);event('agent_started');
     const grants=maintenance?{files:Object.fromEntries(Object.entries(maintenance.policy.files||{}).map(([id,f])=>[id,{format:f.format,write:f.write===true,pointers:f.pointers||[]}])),commands:Object.keys(maintenance.policy.commands||{}),apis:Object.keys(maintenance.policy.apis||{})}:undefined;
-    let prompt=JSON.stringify({task:spec.task,profile:spec.task.environment.target,grants,acceptance_contract:spec.profile.verification||[{id:'cpu-smoke',expected_sum:50005000}],inputs:inputs.list()}),previous='',stalled=0;
+    let prompt=JSON.stringify({task:spec.task,profile:spec.task.environment.target,grants,acceptance_contract:spec.profile.verification||[{id:'cpu-smoke',expected_sum:50005000}],inputs:inputs.list()});
     for(;;){
       await session.prompt(prompt);if(failure)throw new Error(failure);
       if(goalVerified)break;
@@ -198,23 +216,23 @@ export async function work(dir,secrets={}) {
       await verify();await completion();
       if(goalReady){goalVerified=true;break;}
       need(!acceptance.unknown,'EXECUTION_UNKNOWN');
-      const progress=sha(JSON.stringify({checks:acceptance.checks.map(c=>({id:c.id,ok:c.ok,error:c.error,evidence:c.evidence_sha256})),actions:maintenance?.publicActions().filter(a=>a.kind==='file-write'||a.kind==='file-restore'),execution:execution?.ended_at,report}));
-      stalled=progress===previous?stalled+1:0;previous=progress;
-      need(stalled<budget.maxNoProgress,'NO_PROGRESS');need(continuations<budget.maxContinuations,'CONTINUATION_BUDGET');
+      need(continuations<budget.maxContinuations,'CONTINUATION_BUDGET');
       continuations++;event('agent_continued',{continuation:continuations});
       prompt=JSON.stringify({instruction:'用户目标尚未通过验收。检查下列证据，在授权范围内修复并重新验证；不要重跑未知任务或无关自检。若无可用修复能力，请说明具体阻塞。',acceptance,summary_required:!report});
     }
+    }
   } catch(e) {failure=failure||cleanError(e);event('agent_failed',{code:failure});}
-  finally {clearTimeout(timer);status.agent_ended_at=now();status.stop_reason=failure||'GOAL_VERIFIED';if(session)session.dispose();modelTiming.stop(status.stop_reason);}
+  finally {clearTimeout(timer);status.agent_ended_at=now();if(direct)status.executor_ended_at=status.agent_ended_at;status.stop_reason=failure||(direct?'DIRECT_VERIFIED':'GOAL_VERIFIED');if(session)session.dispose();modelTiming.stop(status.stop_reason);}
   try {
     profiler.set('result.package');
     const packagingStarted=performance.now();status.packaging_started_at=now();
     const resultData={outcome:failure?'blocked':acceptance?.status==='passed'?'succeeded':'blocked',exit_code:failure?-1:execution?.exit_code??0,
       actual_revision:execution?.actual_revision||(maintenance?spec.profile.revision:'not-executed'),summary:'',
       metrics:{...report?.metrics,...(failure?{runner_error:failure}:{})},artifacts:[],acceptance:acceptance||{status:'blocked',checks:[],reason:failure},
-      execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,time_source:execution?.time_source||'executor',engine:'pi-0.87.1',profile:spec.task.environment.target,unknown:execution?.unknown||Boolean(watch?.record&&!execution),exit_code:execution?.exit_code??null,outcome:execution?.outcome||'not-executed',server_task_id:execution?.server_task?.id||watch?.record?.id||null},
+      execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,time_source:execution?.time_source||'executor',engine:direct?'direct':'pi-0.87.1',executor_duration_ms:direct&&status.executor_started_at?Date.parse(status.executor_ended_at)-Date.parse(status.executor_started_at):null,profile:spec.task.environment.target,unknown:execution?.unknown||Boolean(watch?.record&&!execution),exit_code:execution?.exit_code??null,outcome:execution?.outcome||'not-executed',server_task_id:execution?.server_task?.id||watch?.record?.id||null},
       agent:{version:VERSION,started_at:status.agent_started_at||null,ended_at:status.agent_ended_at,duration_ms:status.agent_started_at?Date.parse(status.agent_ended_at)-Date.parse(status.agent_started_at):0,turns,continuations,tool_steps:toolSteps,stop_reason:status.stop_reason,usage,cost_configured:Boolean(model?.cost),usage_scope:'Cumulative SDK assistant and compaction usage; absent provider usage is unmeasured, not a billing total',tools:status.tools||[],context_sha256:agent.contextDigest,context_captured_at:agent.capturedAt,skills:(agent.skills||[]).map(s=>({name:s.name,sha256:s.sha256})),compactions:status.compaction.count}};
     Object.assign(resultData,authoritativeReport({report,agent:resultData.agent,acceptance:resultData.acceptance,failure,profile:spec.profile}));
+    if(spec.reservation?.machineIds){resultData.execution.resource_grant={id:spec.reservation.id,grant_id:spec.reservation.grantId,generation:spec.reservation.generation,machine_count:spec.reservation.machineIds.length,group_sha256:sha(JSON.stringify(spec.reservation.machineIds)),plan_sha256:spec.reservation.planSha256};resultData.metrics.all_nodes_reserved=Boolean(spec.reservation.grantId);}
     // Leave room for artifact descriptors within the protocol's 16 KiB payload.
     // Full bounded model report stays in the ZIP; it cannot make delivery fail.
     if(Buffer.byteLength(JSON.stringify(resultData))>14000){resultData.model_report={verified:false,report_in_zip:true};resultData.metrics={runner_error:failure||null,report_in_zip:true,...(spec.profile.kind==='builtin-smoke'?{npu:false}:{})};}
@@ -226,8 +244,9 @@ export async function work(dir,secrets={}) {
       'actions.json':strToU8(JSON.stringify(maintenance?.publicActions()||[],null,2)),
       'profile-workflows.json':strToU8(JSON.stringify(profileWorkflow?.publicRows()||[],null,2)),
       'model-timing.json':strToU8(JSON.stringify(modelTiming.snapshot(),null,2)),
+      'resource-grant.json':strToU8(JSON.stringify(resultData.execution.resource_grant||null,null,2)),
       'inputs.json':strToU8(JSON.stringify(inputs?.state||{initialized:false},null,2))};
-    entries['worker-timing.json']=strToU8(JSON.stringify({schema:'aiconnector.worker-timing.v1',key:spec.key,startup_timings:spec.startupTimings||{},worker_started_at:status.started_at,agent_started_at:status.agent_started_at,agent_ended_at:status.agent_ended_at,packaging_started_at:status.packaging_started_at,events:status.events,delivery_timing:'Post-publication diagnostics are a separate diagnostics--windows-inner--SHA256.zip Release asset; this immutable result ZIP predates upload and receipt.'},null,2));
+    entries['worker-timing.json']=strToU8(JSON.stringify({schema:'aiconnector.worker-timing.v1',key:spec.key,execution_mode:status.execution_mode,executor_started_at:status.executor_started_at,executor_ended_at:status.executor_ended_at,startup_timings:spec.startupTimings||{},worker_started_at:status.started_at,agent_started_at:status.agent_started_at,agent_ended_at:status.agent_ended_at,packaging_started_at:status.packaging_started_at,events:status.events,delivery_timing:'Post-publication diagnostics are a separate diagnostics--windows-inner--SHA256.zip Release asset; this immutable result ZIP predates upload and receipt.'},null,2));
     let total=0;
     for(const name of spec.profile.outputs||[]) {
       need(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}$/.test(name)&&!Object.hasOwn(entries,name),'INVALID_OUTPUT_NAME');

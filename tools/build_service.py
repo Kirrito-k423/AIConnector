@@ -11,11 +11,11 @@ import sys
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-FILES=['Connector.ps1','connector.config.json','package.json','package-lock.json','CONTEXT.md','tools/benchmark_profile_workflow.mjs','docs/evidence/profile-0711-macos.json',
+FILES=['Connector.ps1','connector.config.json','package.json','package-lock.json','CONTEXT.md','tools/benchmark_profile_workflow.mjs','tools/validate_group_bridge.mjs','docs/EXECUTION-0712.md','docs/evidence/profile-0711-macos.json',
        'Open-Windows-Dashboard.cmd','Install-Windows-Service.cmd','Prepare-Windows-Service.cmd',
        'Open-Mac-Dashboard.command','Install-Mac-Service.command','Upgrade-Windows.cmd','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/EXECUTION-ACCEPTANCE.md','docs/SERVER-SETUP.md','docs/PROTOCOL.md','docs/RELAY.md','docs/ISSUE-7-8-FIX.md','docs/ISSUE-9-FIX.md','docs/ISSUE-11-FIX.md','docs/ISSUE-13-FIX.md','docs/PARALLEL-OPERATIONS.md','docs/TRANSPORT-PERFORMANCE.md','docs/TRANSPORT-075.md','docs/TRANSPORT-076.md','docs/TRANSPORT-077.md','docs/TRANSPORT-078.md','docs/TRANSPORT-079.md','docs/POLL-AND-FLUSH-0710.md','docs/PROFILE-AND-MODEL-0711.md','docs/evidence/flush-0710-macos.json','tools/report_windows.py']
 
-def build(output,node,pwsh=None):
+def build(output,node,pwsh=None,watch_home=None):
     system='windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux'
     arch=subprocess.check_output([str(node),'-p','process.arch'],text=True).strip()
     output.mkdir(parents=True,exist_ok=True)
@@ -23,6 +23,12 @@ def build(output,node,pwsh=None):
     records={}
     payload={name:ROOT/name for name in FILES}
     payload.update({p.relative_to(ROOT).as_posix():p for p in (ROOT/'service').rglob('*') if p.is_file()})
+    if watch_home:
+        companion=json.loads((watch_home/'version.json').read_text());pin=json.loads((ROOT/'service/watch-companion.json').read_text())
+        if companion['revision']!=pin['revision']:raise ValueError('companion revision mismatch')
+        if hashlib.sha256((watch_home/companion['binary']).read_bytes()).hexdigest()!=companion['binary_sha256']:raise ValueError('companion binary checksum mismatch')
+        for p in watch_home.rglob('*'):
+            if p.is_file() and not p.is_symlink():payload['watch-companion/'+p.relative_to(watch_home).as_posix()]=p
     for p in (ROOT/'node_modules').rglob('*'):
         if not p.is_file() or p.is_symlink():continue
         rel=p.relative_to(ROOT).as_posix();parts=rel.split('/')
@@ -62,5 +68,5 @@ def build(output,node,pwsh=None):
     return target
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,default=ROOT/'dist/service');p.add_argument('--node',type=Path,default=Path(shutil.which('node')));p.add_argument('--pwsh-home',type=Path)
-    a=p.parse_args();build(a.output,a.node,a.pwsh_home)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,default=ROOT/'dist/service');p.add_argument('--node',type=Path,default=Path(shutil.which('node')));p.add_argument('--pwsh-home',type=Path);p.add_argument('--watch-home',type=Path)
+    a=p.parse_args();build(a.output,a.node,a.pwsh_home,a.watch_home)

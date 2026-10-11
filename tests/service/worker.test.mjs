@@ -46,6 +46,25 @@ test('revision mismatch never executes',async()=>{const r=await exercise({},s=>s
 test('prior durable execution intent is never replayed',async()=>{const r=await exercise({},(s,dir)=>save(path.join(dir,'execution-intent.json'),{key:s.key}));assert.equal(r.result.outcome,'blocked');assert.equal(r.execution,undefined);});
 test('model repeats run_experiment but actual experiment executes once',async()=>{const r=await exercise({repeat:true});assert.equal(r.result.outcome,'succeeded');assert.equal(r.worker.events.filter(e=>e.type==='execution_started').length,1);assert.equal(r.requests,3);});
 
+test('Pi stops identical tool evidence inside one prompt before exhausting model turns',async()=>{
+ const r=await exercise({handler:(_d,n)=>n===1?{tool:'run_experiment'}:{tool:'read_output',args:{name:'metrics.json'}}});
+ assert.equal(r.result.agent.stop_reason,'NO_PROGRESS');assert.equal(r.requests,4);
+ assert.equal(r.worker.events.filter(e=>e.type==='execution_started').length,1);
+});
+
+test('direct fixed task verifies and delivers without a model key or HTTP request',async()=>{
+ const r=await exercise({fail:true},s=>{s.profile.executionMode='direct';delete s.model;s.task.requirements.tools=[];s.task.requirements.execution_mode='direct';});
+ assert.equal(r.requests,0);assert.equal(r.result.outcome,'succeeded');assert.equal(r.result.execution.engine,'direct');
+ assert.equal(r.result.agent.turns,0);assert.equal(r.result.agent.duration_ms,0);assert.equal(r.result.agent.stop_reason,'DIRECT_VERIFIED');
+ assert.equal(r.result.model_report,null);assert.equal(r.result.acceptance.status,'passed');
+});
+test('direct mode never hides a missing declared output or bypasses revision checks',async()=>{
+ for(const failure of ['output','revision']){
+  const r=await exercise({fail:true},s=>{s.profile.executionMode='direct';delete s.model;if(failure==='output')s.profile.outputs.push('missing.json');else s.task.code.revision='wrong';});
+  assert.equal(r.requests,0);assert.equal(r.result.outcome,'blocked');assert.equal(r.result.agent.stop_reason,failure==='output'?'OUTPUTS_INCOMPLETE':'CODE_REVISION_MISMATCH');
+ }
+});
+
 test('exit zero with an explicitly incomplete user goal must not be a successful task',async()=>{
  const r=await exercise({handler:(_data,n)=>[
   {tool:'run_experiment'},

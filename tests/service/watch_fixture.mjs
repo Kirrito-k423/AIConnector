@@ -13,7 +13,7 @@ export function tarBundle(files,kind='0') {
   return gzipSync(Buffer.concat([...chunks,Buffer.alloc(1024)]));
 }
 
-export async function watchFixture({losePost=false,loseReserve=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false}={}) {
+export async function watchFixture({losePost=false,loseReserve=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false,atomicGroups=1}={}) {
   let posts=0,reads=0,token='watch-one',job;const requests=[];
   const reservations={};
   const archive=tarBundle({'stdout.log':'fixture server result\n','stderr.log':'','results/aiconnector-revision.txt':revision+'\n','results/metrics.json':'{"fixture":true,"sum":7}','results/not-exported.txt':'PRIVATE_OTHER_FILE'});
@@ -24,10 +24,11 @@ export async function watchFixture({losePost=false,loseReserve=false,revision='f
     if(u.pathname==='/'){res.end(`<meta name="watch-token" content="${token}">`);return;}
     if(req.headers['x-watch-token']!==token)return reply({error:'token'},403);
     if(u.pathname==='/api/tasks/reservations'){
-      if(req.method==='GET')return reply({schema:'simplehtmlwatch.reservations.v1',reservations});
+      if(req.method==='GET')return reply({schema:'simplehtmlwatch.reservations.v1',atomicGroups,reservations});
       const data=JSON.parse(body),old=reservations[data.id];if(old)return reply(old,old.releasedAt?410:200);
-      if(Object.values(reservations).some(r=>r.machineId===data.machineId&&!r.releasedAt))return reply({error:'busy'},409);
+      if(Object.values(reservations).some(r=>!r.releasedAt&&(r.machineIds||[r.machineId]).some(id=>(data.machineIds||[data.machineId]).includes(id))))return reply({error:'busy'},409);
       const r=reservations[data.id]={...data,resourceKey:'machine:'+data.machineId,createdAt:new Date().toISOString()};
+      if(data.machineIds)Object.assign(r,{grantId:'grant-'+data.id,generation:1,allocations:data.machineIds.map(machineId=>({machineId,resourceKey:'machine:'+machineId}))});
       if(loseReserve){loseReserve=false;req.socket.destroy();return;}return reply(r,201);
     }
     if(u.pathname==='/api/tasks/reservations/release'){

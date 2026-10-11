@@ -3,10 +3,12 @@ import path from 'node:path';
 import {need,sha,now,cleanError} from './common.mjs';
 import {pointer} from './maintenance.mjs';
 import {modeOf} from './capabilities.mjs';
+import {groupCompletion} from './group-completion.mjs';
 
 export async function verifyTask(spec,dir,{execution,maintenance,profileWorkflow,report,pass=0}={}) {
   const definitions=spec.profile.kind==='builtin-smoke'?[{id:'cpu-smoke',kind:'output-json',file:'metrics.json',pointer:'/sum',equals:50005000}]:(spec.profile.verification||[]);
   const checks=[];let readiness;
+  if(spec.profile.machineIds){try{const e=groupCompletion(spec,dir);checks.push({id:'group-processes-stopped',ok:true,...e});}catch(e){checks.push({id:'group-processes-stopped',ok:false,error:cleanError(e)});}}
   for(const check of definitions){
     const row={id:check.id,ok:false};
     try{

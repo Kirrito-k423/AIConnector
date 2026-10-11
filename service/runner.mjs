@@ -6,7 +6,7 @@ import {ROOT,sha,now,id,save,read,atomic,alive,need,safeEnv,cleanError} from './
 import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {validateWatchProfile} from './watch.mjs';
 import {Resources} from './resources.mjs';
-import {checkRequirements,capabilities,VERSION} from './capabilities.mjs';
+import {checkRequirements,capabilities,VERSION,engineOf} from './capabilities.mjs';
 import {timing,deliveryDiagnostics} from './telemetry.mjs';
 
 export class Runner {
@@ -107,13 +107,13 @@ export class Runner {
         profile=this.profile(row.task);agent=snapshotAgent(agentConfig(this.c.runner.agent,this.c.runner.model),path.dirname(this.c.file));
         checkRequirements(row.task,profile,agent);
         need(!row.task.receiver_config_sha256||row.task.receiver_config_sha256===capabilities(this.c,this.secrets,agent).config_sha256,'RECEIVER_CONFIG_CHANGED');
-        need(this.c.runner.model&&this.secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
+        need(engineOf(profile)==='direct'||this.c.runner.model&&this.secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
       }catch(e){preflightError=cleanError(e);}
       const dir=job.dir;
       try{
         job.timings??={};job.timings.resource_acquire_started_at=now();timing(this.c.dataDir,'resource_acquire_started',{key:job.key});this.persist();
-        if(!preflightError&&!await this.resources.acquire(job,profile)){
-          job.state='waiting';job.next_attempt=Date.now()+5000;this.waiting(job,'RESOURCE_BUSY');this.persist();return;
+        if(!preflightError&&!await this.resources.acquire(job,profile,row.task)){
+          job.state='waiting';job.next_attempt=Date.now()+5000;this.waiting(job,job.wait_reason||'RESOURCE_BUSY',job.wait_owner);this.persist();return;
         }
         if(!preflightError){job.timings.resource_acquired_at=now();timing(this.c.dataDir,'resource_acquired',{key:job.key});}
       }catch(e){preflightError=cleanError(e);}

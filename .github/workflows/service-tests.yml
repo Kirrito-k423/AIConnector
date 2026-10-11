@@ -110,9 +110,38 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
       - run: npm test
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+      - name: Read pinned group controller source
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        id: watch-pin
+        shell: pwsh
+        run: |
+          $watchPin = Get-Content service/watch-companion.json | ConvertFrom-Json
+          "revision=$($watchPin.revision)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        with:
+          repository: Kirrito-k423/simpleHtmlWatch
+          ref: ${{ steps.watch-pin.outputs.revision }}
+          path: watch-companion-source
+      - uses: actions/setup-go@v5
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        with:
+          go-version-file: watch-companion-source/go.mod
+          cache: false
+      - name: Race and static checks for actual Windows group controller
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        working-directory: watch-companion-source
+        run: |
+          go test -race ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build pinned offline group controller
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        run: python tools/build_watch_companion.py --source watch-companion-source --output dist/watch-companion
       - name: Build offline Windows delivery
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
-        run: python tools/build_service.py
+        run: python tools/build_service.py --watch-home dist/watch-companion
       - name: Relay delivery isolation and incremental readback on PowerShell 5.1
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         env:

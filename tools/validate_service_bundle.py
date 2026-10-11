@@ -34,6 +34,15 @@ def validate(archive,maintenance_repeats=0,parallel_repeats=0):
             print(json.dumps(dict(package=archive.name,parallel_repeats=parallel_repeats,scope='parallel-only',real_windows=os.name=='nt')))
             return
         subprocess.run([str(node),'--test','--test-concurrency=1',*cases],cwd=app,env=env,check=True)
+        companion=app/'watch-companion'
+        if companion.exists():
+            info=json.loads((companion/'version.json').read_text());pin=json.loads((app/'service/watch-companion.json').read_text())
+            assert info['revision']==pin['revision']
+            assert hashlib.sha256((companion/info['binary']).read_bytes()).hexdigest()==info['binary_sha256']
+            assert subprocess.check_output([str(companion/info['binary']),'--version'],text=True).strip()==pin['version']
+            source=Path(os.environ.get('AIC_WATCH_SOURCE',str(ROOT/'watch-companion-source')))
+            if source.exists():
+                subprocess.run(['go','test','-race','./internal/watch','-run','TestAIConnectorNativeGroupBridge','-v'],cwd=source,env=dict(env,AIC_SOURCE_ROOT=str(app)),check=True)
         # Original source tests, delivered server/worker/Pi/runtime; no npm or installed Node used.
         command=[os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests/service'),'-p','test_e2e.py','-v']
         for _ in range(maintenance_repeats or 1):
