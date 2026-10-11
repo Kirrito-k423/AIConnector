@@ -15,3 +15,7 @@ test('verification clocks and rewritten summaries do not reset the idle budget',
   assert.equal(p.endTurn(),i<2);
  }
 });
+test('new action IDs for no-op writes are not new repair progress',()=>{
+ const p=new Progress(2);
+ for(let i=0;i<3;i++){p.observe('write_local_file',{file:'config',action_id:'new-'+i},{after_sha256:'fixed',backup_action:'new-'+i});assert.equal(p.endTurn(),i<2);}
+});

@@ -15,6 +15,7 @@ export class Progress {
     if(name==='submit_summary'){this.mark('summary-recorded');return;}
     if(name==='get_run_state'){this.mark('state-recovered:'+this.recoveryEpoch);return;}
     if(name==='call_local_api')value=value?.value||value;
+    if(['write_local_file','patch_local_json','restore_local_file'].includes(name))value={file:args.file||value?.file_id,sha256:value?.after_sha256||value?.sha256,error:value?.error};
     if(['read_input','read_output','read_local_file'].includes(name)&&typeof value?.content==='string'){
       const key=name+':'+(args.name||args.id||args.file)+':'+value.sha256;
       const start=value.offset??args.offset??0,end=start+value.content.length;

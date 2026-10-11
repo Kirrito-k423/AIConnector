@@ -59,7 +59,8 @@ def build(output,node,pwsh=None,watch_home=None):
             executable=name.endswith('.command')or name in ['runtime/node','runtime/pwsh/pwsh']or bool(src.stat().st_mode&0o111)
             info.create_system=3;info.external_attr=(0o100755 if executable else 0o100644)<<16
             z.writestr(info,data)
-        manifest=dict(schema='aiconnector.package.v1',version=json.loads((ROOT/'package.json').read_text())['version'],platform=system,arch=arch,
+        revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+        manifest=dict(schema='aiconnector.package.v1',version=json.loads((ROOT/'package.json').read_text())['version'],source_revision=revision,platform=system,arch=arch,
                       node=subprocess.check_output([str(node),'--version'],text=True).strip(),pi='0.87.1',sha256=records)
         z.writestr('AIConnector-Service/package-manifest.json',json.dumps(manifest,indent=2)+'\n')
     digest=hashlib.sha256(target.read_bytes()).hexdigest()

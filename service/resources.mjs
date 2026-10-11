@@ -44,7 +44,8 @@ export class Resources {
     if(plan)need(remote.planSha256===group.planSha256&&JSON.stringify(remote.machineIds)===JSON.stringify(group.machineIds),'GROUP_PLAN_CHANGED');
     job.resources={...job.resources,keys,remote,state:'reserving'};this.persist();
     try{
-      const client=new WatchClient({baseUrl:remote.baseUrl});
+      const client=new WatchClient({baseUrl:remote.baseUrl,...(plan?{expectedServiceId:remote.serviceId}:{})});
+      if(plan){const identity=await client.identity();remote.serviceId=identity.serviceId;client.config.expectedServiceId=remote.serviceId;this.persist();}
       const catalog=await client.call('/api/tasks/reservations');
       need(catalog.schema==='simplehtmlwatch.reservations.v1','WATCH_RESERVATIONS_REQUIRED');
       if(plan)need(catalog.atomicGroups===1,'WATCH_GROUP_RESERVATIONS_REQUIRED');
@@ -55,7 +56,7 @@ export class Resources {
     }catch(e){
       // Reserve is idempotent and starts no SSH command. Reconcile the same ID
       // after a lost reply; never discard an uncertain reservation.
-      if(['WATCH_GROUP_RESERVATIONS_REQUIRED','WATCH_HTTP_400','WATCH_HTTP_404','WATCH_HTTP_410'].includes(e.message)){job.resources.state='waiting';this.persist();throw e;}
+      if(['WATCH_GROUP_RESERVATIONS_REQUIRED','WATCH_INSTANCE_IDENTITY_REQUIRED','WATCH_HTTP_400','WATCH_HTTP_404','WATCH_HTTP_410'].includes(e.message)){job.resources.state='waiting';this.persist();throw e;}
       job.resources.state=e.message==='WATCH_HTTP_409'?'waiting':'unknown';
       job.wait_reason=e.message==='WATCH_HTTP_404'?'WATCH_RESERVATIONS_REQUIRED':cleanError(e);
       this.persist();return false;
@@ -70,7 +71,7 @@ export class Resources {
         try{const spec=read(path.join(job.dir,'spec.json'));need(spec&&result.execution?.unknown!==true,'GROUP_EXECUTION_UNKNOWN');r.completion=groupCompletion(spec,job.dir);}
         catch(e){r.state='unknown';r.error=cleanError(e);this.persist();return;}
       }
-      const client=new WatchClient({baseUrl:r.remote.baseUrl});
+      const client=new WatchClient({baseUrl:r.remote.baseUrl,...(r.remote.machineIds?{expectedServiceId:r.remote.serviceId}:{})});
       try{
         const catalog=await client.call('/api/tasks/reservations');
         need(catalog.schema==='simplehtmlwatch.reservations.v1','WATCH_RESERVATIONS_REQUIRED');

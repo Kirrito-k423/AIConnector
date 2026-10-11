@@ -53,10 +53,17 @@ export function checkGroupReservation(r,remote){
 
 export class WatchClient {
   constructor(config,{signal}={}) {this.config=config;this.signal=signal;this.token='';}
+  async identity(){
+    const r=await localRequest(this.config.baseUrl+'/healthz',{signal:this.signal,maxBytes:16384});need(r.status===200,'WATCH_INSTANCE_IDENTITY_REQUIRED');
+    const value=JSON.parse(r.body.toString('utf8'));
+    need(typeof value.serviceId==='string'&&value.serviceId.length>0&&typeof value.runId==='string'&&value.runId.length>0,'WATCH_INSTANCE_IDENTITY_REQUIRED');
+    need(!this.config.expectedServiceId||value.serviceId===this.config.expectedServiceId,'WATCH_INSTANCE_CHANGED');
+    this.instanceRunId=value.runId;return value;
+  }
   async call(route,{method='GET',body,maxBytes=1048576,bytes=false,timeoutSeconds=15}={}) {
     for(let attempt=0;attempt<2;attempt++) {
-      if(!this.token){const r=await localRequest(this.config.baseUrl+'/',{signal:this.signal});need(r.status===200,'WATCH_UNAVAILABLE');this.token=r.body.toString('utf8').match(/<meta\s+name="watch-token"\s+content="([^"]+)"/)?.[1]||'';need(this.token,'WATCH_TOKEN_MISSING');}
-      const r=await localRequest(this.config.baseUrl+route,{method,body:body===undefined?undefined:JSON.stringify(body),headers:{'X-Watch-Token':this.token,'Content-Type':'application/json'},signal:this.signal,maxBytes,timeoutSeconds});
+      if(!this.token){if(this.config.expectedServiceId)await this.identity();const r=await localRequest(this.config.baseUrl+'/',{signal:this.signal});need(r.status===200,'WATCH_UNAVAILABLE');this.token=r.body.toString('utf8').match(/<meta\s+name="watch-token"\s+content="([^"]+)"/)?.[1]||'';need(this.token,'WATCH_TOKEN_MISSING');}
+      const r=await localRequest(this.config.baseUrl+route,{method,body:body===undefined?undefined:JSON.stringify(body),headers:{'X-Watch-Token':this.token,'Content-Type':'application/json',...(this.config.expectedServiceId?{'X-Watch-Instance':this.instanceRunId}:{})},signal:this.signal,maxBytes,timeoutSeconds});
       // A rejected token is checked before dispatch in SHW, so only this response can retry POST.
       if(r.status===403&&attempt===0){this.token='';continue;}
       need(r.status>=200&&r.status<300,'WATCH_HTTP_'+r.status);
@@ -72,7 +79,7 @@ export class WatchClient {
 
 export class WatchExecution {
   constructor(spec,dir,{signal,event=()=>{},redact=s=>s}={}) {
-    Object.assign(this,{spec,dir,signal,event,redact});this.client=new WatchClient(spec.agent.simpleHtmlWatch,{signal});this.file=path.join(dir,'watch-task.json');
+    Object.assign(this,{spec,dir,signal,event,redact});this.client=new WatchClient({...spec.agent.simpleHtmlWatch,...(spec.reservation?.machineIds?{expectedServiceId:spec.reservation.serviceId}:{})},{signal});this.file=path.join(dir,'watch-task.json');
   }
   get record(){return read(this.file);}
   remember(job) {
@@ -98,6 +105,14 @@ export class WatchExecution {
     catch(error){this.event('server_task_unconfirmed',{id:request.id,status:'unknown'});throw error;}
   }
   async status() {const r=this.record;need(r,'WATCH_NOT_SUBMITTED');return this.remember(await this.client.call('/api/tasks?id='+encodeURIComponent(r.id)));}
+  async awaitStatus(){
+    let job=await this.status();
+    while(!terminal(job)){
+      need(!['unknown','abandoned'].includes(job.status),'WATCH_EXECUTION_UNKNOWN');
+      await pause(this.spec.agent.simpleHtmlWatch.pollSeconds*1000,undefined,{signal:this.signal});job=await this.status();
+    }
+    return job;
+  }
   async logs() {const r=this.record;need(r,'WATCH_NOT_SUBMITTED');return this.client.call('/api/tasks/logs?id='+encodeURIComponent(r.id));}
   async collect() {
     const cached=read(path.join(this.dir,'execution.json'));if(cached)return cached;

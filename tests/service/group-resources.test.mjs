@@ -35,3 +35,21 @@ test('an old SHW blocks the group before Pi or SSH is launched',async()=>{
  const w=await watchFixture({atomicGroups:0}),job={key:'old/1/run',state:'waiting'},c={runner:{maxConcurrentRuns:4,agent:{simpleHtmlWatch:{baseUrl:w.url}}}};
  try{await assert.rejects(new Resources(c,{jobs:{job}},()=>{}).acquire(job,profile,task),/WATCH_GROUP_RESERVATIONS_REQUIRED/);assert.equal(w.posts,0);assert.equal(job.resources.state,'waiting');}finally{await w.close();}
 });
+test('an unchanged running SSH task is polled inside one tool, never re-submitted',async()=>{
+ const w=await watchFixture({status:'running',finishAfterReads:3}),dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC wait '));
+ try{
+  const ex=new WatchExecution({key:'wait/1/run',profile:{...profile,machineIds:undefined},task,agent:{simpleHtmlWatch:{baseUrl:w.url,pollSeconds:.01}}},dir);
+  await ex.submit();assert.equal((await ex.awaitStatus()).status,'succeeded');assert.equal(w.posts,1);assert.equal(w.reads,3);
+ }finally{await w.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+test('a different instance on the same port cannot execute or release the original group',async()=>{
+ const w=await watchFixture(),dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC identity '));
+ try{
+  const job={key:'identity/1/run',dir,state:'waiting'},resources=new Resources({runner:{maxConcurrentRuns:4,agent:{simpleHtmlWatch:{baseUrl:w.url}}}},{jobs:{job}},()=>{});
+  assert.equal(await resources.acquire(job,profile,task),true);w.replaceInstance('other-service');
+  const ex=new WatchExecution({key:job.key,profile,task,reservation:job.resources.remote,agent:{simpleHtmlWatch:{baseUrl:w.url}}},dir);
+  await assert.rejects(ex.submit(),/WATCH_INSTANCE_CHANGED/);assert.equal(w.posts,0);
+  save(path.join(dir,'result.json'),{execution:{unknown:false}});await resources.release(job);assert.equal(job.resources.state,'unknown');assert.equal(job.resources.error,'WATCH_INSTANCE_CHANGED');
+  assert.equal(w.requests.filter(r=>r.url==='/api/tasks/reservations/release').length,0);
+ }finally{await w.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
