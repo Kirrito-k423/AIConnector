@@ -360,7 +360,9 @@ const c=loadConfig(process.argv[1]),key=process.argv[2],owner=process.argv[3];sa
         node='windows-inner' if os.name=='nt' else 'mac-outer';path,c=self.configs[node]
         # This test creates only a temporary, uniquely named per-user service.
         def cli(action):
-            return subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),action,'--config',str(path)],capture_output=True,encoding='utf-8',timeout=30)
+            # Graceful shutdown can drain for 45 seconds before refusing an
+            # incomplete stop. Do not kill its client at 30 seconds first.
+            return subprocess.run([NODE,str(SERVICE_ROOT/'service/cli.mjs'),action,'--config',str(path)],capture_output=True,encoding='utf-8',timeout=60)
         info=Path(c['dataDir'])/'service-info.json'
         try:
             r=cli('install');self.assertEqual(r.returncode,0,r.stdout+r.stderr)
