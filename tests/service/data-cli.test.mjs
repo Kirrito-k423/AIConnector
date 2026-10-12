@@ -27,7 +27,7 @@ test('real data CLI executes through a directory alias instead of silently exiti
     entryTest(path.join(alias,'service/data-cli.mjs'));
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
-test('Windows data CLI executes through case-insensitive path spelling',{skip:process.platform!=='win32'},()=>entryTest(path.join(root,'service/data-cli.mjs').toUpperCase()));
+test('Windows data CLI executes through case-insensitive path spelling',{skip:process.platform!=='win32'},()=>entryTest(path.join(root,'service').toUpperCase()+path.sep+'DATA-CLI.mjs'));
 test('importing data CLI has no command side effects',()=>{
   const r=spawnSync(process.execPath,['--input-type=module','-e',`await import(${JSON.stringify(pathToFileURL(path.join(root,'service/data-cli.mjs')).href)}); console.log('IMPORTED');`],{encoding:'utf8',timeout:10000});
   assert.equal(r.status,0,r.stderr);assert.equal(r.stdout.trim(),'IMPORTED');assert.equal(r.stderr,'');
