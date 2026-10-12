@@ -1,0 +1,16 @@
+name: Windows file transfer activation repair
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-pairing:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - run: node --test tests/service/data-cli.test.mjs tests/service/transfer-pairing.test.mjs tests/service/file-transfer.test.mjs tests/service/file-export.test.mjs

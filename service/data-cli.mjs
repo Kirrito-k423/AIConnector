@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {fileURLToPath} from 'node:url';
 import {sha,need,cleanError,loadConfig,json,atomic,read,save} from './common.mjs';
 import {decodeInputArchive} from './inputs.mjs';
 import {newExportIdentity,openExport,transferTask,validateTransferTask,exportProfile,validateExportProfile} from './file-export.mjs';
@@ -117,6 +116,6 @@ export async function dataCli(args){
   }
   throw new Error('UNKNOWN_DATA_COMMAND');
 }
-if(process.argv[1]===fileURLToPath(import.meta.url)){
+if(import.meta.main){
   try{console.log(JSON.stringify(await dataCli(process.argv.slice(2)),null,2));}catch(e){console.error(cleanError(e));process.exitCode=1;}
 }
