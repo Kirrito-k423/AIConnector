@@ -302,6 +302,34 @@ const c=loadConfig(process.argv[1]),key=process.argv[2],owner=process.argv[3];sa
             self.assertTrue(json.loads(z.read('acceptance.json'))['checks'][1]['ok'])
             self.assertEqual(json.loads(z.read('actions.json'))[0]['state'],'done')
             self.assertFalse(any(str(target).encode() in z.read(name) for name in z.namelist()))
+    def test_direct_profile_workflow_zero_model_and_exact_receipt(self):
+        path,c=self.configs['windows-inner']
+        c['runner'].pop('model')
+        c['runner']['agent']=dict(simpleHtmlWatch=dict(enabled=True,baseUrl=f'http://127.0.0.1:{self.server.server_port}'))
+        profile=dict(kind='simplehtmlwatch',mode='experiment',machineId='fixture-approved',entry='fixture-device',repository='fixture-device',revision='v1',revisionCommand='printf v1',shell='printf fixture',outputs=['metrics.json'],verification=[dict(id='exit',kind='execution',equals=0)])
+        target=self.folder/'server-registry.json';original=dict(schema='aiconnector.server-registry.v1',machineIds=['fixture-approved'],profiles=dict(device=profile))
+        target.write_text(json.dumps(original));c['runner']['serverRegistry']=str(target.resolve())
+        base=f'http://127.0.0.1:{c["port"]}';token=str(Path(c['dataDir'])/'dashboard.token')
+        c['runner']['profiles']['configure']=dict(kind='maintenance',entry='registry',repository='registry',revision='registry-v1',outputs=[],maintenance=dict(enabled=True,files={'registry':dict(path=str(target.resolve()),format='server-registry',write=True,pointers=['/profiles'])},apis=dict(reload=dict(baseUrl=base,route='/api/reload-agent',method='POST',body={},readOnly=False,auth='dashboard',tokenFile=token),readiness=dict(baseUrl=base,route='/api/server-readiness',method='GET',readOnly=True,auth='dashboard',tokenFile=token))),verification=[dict(id='loaded',kind='local-api',api='readiness',pointer='/reloaded',equals=True)])
+        path.write_text(json.dumps(c));incoming=dict(device=dict(profile,executionMode='direct'));member=self.folder/'profile.json';member.write_text(json.dumps(incoming))
+        metadata=json.loads(subprocess.check_output([NODE,str(SERVICE_ROOT/'tools/profile_contract.mjs'),str(member)],text=True))
+        self.task.update(task_id='profiles',requirements=dict(mode='maintenance',profile_workflow='direct',tools=['configure_server_profiles','verify_task'],checks=['server-profiles-loaded'],**metadata),code=dict(repository='registry',revision='registry-v1'),environment=dict(target='configure'),invocation=dict(entry='registry',arguments=[]))
+        self.key='profiles/1/run-001';self.launch('mac-outer');self.launch('windows-inner')
+        self.until(lambda:self.get('mac-outer')['capabilities']['receiver'])
+        z=io.BytesIO()
+        with zipfile.ZipFile(z,'w')as archive:archive.writestr('profile.json',member.read_bytes())
+        self.get('mac-outer','/api/tasks',dict(task=self.task,zipBase64=base64.b64encode(z.getvalue()).decode()))
+        row=self.until(lambda:self.phase('mac-outer','receipt'))
+        self.assertEqual(row['result']['outcome'],'succeeded',row['result']);self.assertEqual(len(self.model.calls),0)
+        self.assertEqual(row['result']['agent']['stop_reason'],'PROFILE_WORKFLOW_VERIFIED');self.assertEqual(row['result']['agent']['turns'],0)
+        self.assertEqual(row['result']['execution']['engine'],'profile-workflow');self.assertIsNone(row['result']['execution']['server_task_id'])
+        self.assertEqual(json.loads(target.read_text()),dict(original,profiles=incoming))
+        result=next(b for p,b in self.ctx['assets'].items() if '/result--' in p)
+        with zipfile.ZipFile(io.BytesIO(result))as archive:
+            embedded=json.loads(archive.read('result.json'));self.assertEqual(embedded['agent'],row['result']['agent'])
+            self.assertEqual(json.loads(archive.read('model-timing.json'))['requests_started'],0)
+            self.assertTrue(all(r['phases']['write']=='done' and r['phases']['reload']=='done' and r['phases']['readiness']=='done' for r in json.loads(archive.read('profile-workflows.json'))))
+
     def test_worker_crash_keeps_unknown_and_does_not_reexecute(self):
         self.model.pause=True
         self.launch('mac-outer');self.launch('windows-inner');self.publish()

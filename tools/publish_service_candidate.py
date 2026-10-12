@@ -44,10 +44,10 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           '0.7.12 checks semantic progress at every Pi tool turn, reserves a fixed whole machine group atomically, and adds direct execution for locally configured fixed tasks with zero model calls. '
+           f'{version} validates frozen profile attachments before publication and model startup, adds an explicitly selected zero-model profile merge workflow, and returns authoritative usage limits and counts. '
            'The package includes the pinned offline simpleHtmlWatch group-controller update. Upgrade the original Windows instance with its original data directory; configuration and unknown task/reservation state remain authoritative. '
            'All group rank exit records are required before AIConnector releases a group. Lost responses and uncertain launch intents are queried by original ID, never replayed. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/EXECUTION-0712.md\n\n'
+           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/ISSUE-14-FIX.md\n\n'
            'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

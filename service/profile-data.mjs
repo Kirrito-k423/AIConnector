@@ -1,4 +1,5 @@
 import {need,sha} from './common.mjs';
+import {decodeInputArchive} from './inputs.mjs';
 
 // Stable definition identity, independent of JSON field order. No source bodies
 // or machine addresses are exposed by readiness or the public workflow journal.
@@ -17,6 +18,34 @@ export function profileWorkflowGranted(p,file){
     m.apis.reload.baseUrl===m.apis.readiness.baseUrl;
 }
 export const canConfigureProfiles=p=>Object.keys(p?.maintenance?.files||{}).some(id=>profileWorkflowGranted(p,id));
+
+export function checkProfileContract(pinned,profiles){
+  const requested=profileDefinitions(profiles);
+  need(Array.isArray(pinned)&&pinned.length===requested.length&&pinned.every(p=>requested.some(r=>r.id===p.id&&r.revision===p.revision&&(!p.definition_sha256||r.definition_sha256===p.definition_sha256))),'REQUESTED_PROFILE_MISMATCH');
+  return requested;
+}
+
+// Identify by the complete pinned ID set, never by an invented filename or
+// whichever JSON member happens to come first. Reject competing definitions.
+export function selectProfileInput(pinned,candidates){
+  const found=[];
+  for(const item of candidates){
+    if(!item.name.toLowerCase().endsWith('.json'))continue;
+    const bytes=item.load();let loose;
+    try{loose=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{continue;}
+    if(!loose||Array.isArray(loose)||typeof loose!=='object'||!pinned.every(p=>Object.hasOwn(loose,p.id)))continue;
+    const profiles=parseProfileInput(bytes);found.push({item,profiles});
+  }
+  need(found.length>0,'PROFILE_INPUT_REQUIRED');need(found.length===1,'PROFILE_INPUT_AMBIGUOUS');
+  const selected=found[0];return {...selected,requested:checkProfileContract(pinned,selected.profiles)};
+}
+
+export function validateProfileArchive(task,bytes){
+  const pinned=task.requirements?.server_profiles;if(!pinned)return;
+  need(bytes,'PROFILE_INPUT_REQUIRED');
+  const members=decodeInputArchive(bytes),candidates=Object.entries(members).map(([name,bytes])=>({name,load:()=>bytes}));
+  return selectProfileInput(pinned,candidates).requested;
+}
 
 // JSON.parse silently accepts duplicate keys. Scan the bounded input first so
 // ambiguous or prototype-sensitive data cannot reach the merge operation.

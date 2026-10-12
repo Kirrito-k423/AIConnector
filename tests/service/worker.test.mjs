@@ -78,6 +78,8 @@ test('exit zero with an explicitly incomplete user goal must not be a successful
 test('token budget stops tool execution and reports cumulative usage',async()=>{
  const r=await exercise({handler:()=>({tool:'run_experiment',usage:{prompt_tokens:1200,completion_tokens:20,total_tokens:1220}})},(s,d)=>s.agent=snapshotAgent(agentConfig({budget:{maxTotalTokens:1024}}),d));
  assert.equal(r.result.outcome,'blocked');assert.equal(r.result.agent.stop_reason,'MODEL_USAGE_BUDGET');assert.ok(r.result.agent.usage.totalTokens>=1220);assert.equal(r.execution,undefined);
+ assert.equal(r.result.metrics.runner_token_limit,1024);assert.equal(r.result.metrics.runner_total_tokens,r.result.agent.usage.totalTokens);
+ assert.equal(r.result.agent.budget.limits.maxTotalTokens,1024);assert.equal(r.result.agent.budget.sdk_usage_observed,true);
 });
 
 test('missing capability can report blocked without executing an unrelated CPU smoke',async()=>{

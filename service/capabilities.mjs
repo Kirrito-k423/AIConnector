@@ -23,6 +23,7 @@ export function checkRequirements(task,p,agent={}) {
   validateRequirements(task);
   validateProfile(p);
   need(modeOf(p)===task.requirements.mode,'CAPABILITY_MODE_MISMATCH');
+  need(!task.requirements.profile_workflow||canConfigureProfiles(p),'PROFILE_WORKFLOW_NOT_AUTHORIZED');
   need(!task.requirements.execution_mode||engineOf(p)===task.requirements.execution_mode,'EXECUTION_MODE_MISMATCH');
   if(task.requirements.resources){const r=task.requirements.resources;need((p.machineIds?.length||1)===r.machine_count&&(!r.atomic_group||p.machineIds)&&(!r.group_sha256||r.group_sha256===sha(JSON.stringify(p.machineIds))),'RESOURCE_REQUIREMENTS_MISMATCH');}
   const required=task.requirements.tools||[];
@@ -49,6 +50,8 @@ export function validateRequirements(task){
     need(r.mode==='maintenance'&&r.checks.includes('server-profiles-loaded')&&Array.isArray(r.server_profiles)&&r.server_profiles.length>0&&r.server_profiles.length<=24,'INVALID_REQUIRED_PROFILES');
     const ids=new Set();for(const p of r.server_profiles){need(p&&/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(p.id)&&!ids.has(p.id)&&/^[\w.-]{1,128}$/.test(p.revision)&&(!p.definition_sha256||/^[a-f0-9]{64}$/.test(p.definition_sha256)),'INVALID_REQUIRED_PROFILES');ids.add(p.id);}
   }
+  if(r.profile_workflow!==undefined)need(r.profile_workflow==='direct'&&r.mode==='maintenance'&&Array.isArray(r.server_profiles)&&r.server_profiles.every(p=>/^[a-f0-9]{64}$/.test(p.definition_sha256))&&!r.execution_mode&&
+    r.tools?.includes('configure_server_profiles')&&r.tools.every(t=>['configure_server_profiles','verify_task'].includes(t)),'INVALID_PROFILE_WORKFLOW');
 }
 export function validateProfile(p){
   need(['pi','direct'].includes(engineOf(p))&&!(engineOf(p)==='direct'&&p.kind==='maintenance'),'INVALID_EXECUTION_MODE');
@@ -69,7 +72,7 @@ export function validateProfile(p){
 export function capabilities(c,secrets={},snapshot) {
   const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);if(p.kind==='simplehtmlwatch')need(c.runner.agent.simpleHtmlWatch?.enabled,'WATCH_NOT_ENABLED');if(engineOf(p)!=='direct')for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
     return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,execution_mode:engineOf(p),resources:{machine_count:p.machineIds?.length||1,atomic_group:Boolean(p.machineIds),...(p.machineIds?{group_sha256:sha(JSON.stringify(p.machineIds))}:{})},
-    tools:toolsFor(p,c.runner.agent),checks:checksFor(p),
+      tools:toolsFor(p,c.runner.agent),checks:checksFor(p),...(canConfigureProfiles(p)?{profile_workflow:{schema:'aiconnector.profile-workflow.v1',direct:true}}:{}),
     ...(p.revision?{revision:p.revision}:{}),
     ...(p.kind==='builtin-smoke'?{revision:'builtin-smoke-v1'}:{}),
     arguments_allowed:p.allowTaskArguments===true};});
@@ -86,6 +89,7 @@ export function preflight(task,remote) {
   need(remote.enabled,'RECEIVER_NOT_READY');
   validateRequirements(task);
   const match=p=>p.ready!==false&&p.mode===task.requirements.mode&&(task.requirements.tools||[]).every(t=>p.tools.includes(t))&&
+    (!task.requirements.profile_workflow||p.profile_workflow?.direct===true)&&
     (task.requirements.checks||[]).every(t=>p.checks.includes(t))&&p.repository===task.code.repository&&(!task.requirements.execution_mode||(p.execution_mode||'pi')===task.requirements.execution_mode)&&
     (!task.requirements.resources||p.resources&&p.resources.machine_count===task.requirements.resources.machine_count&&(!task.requirements.resources.atomic_group||p.resources.atomic_group)&&(!task.requirements.resources.group_sha256||task.requirements.resources.group_sha256===p.resources.group_sha256));
   const candidates=remote.profiles.filter(match);
@@ -97,7 +101,7 @@ export function preflight(task,remote) {
       next:remote.profiles.some(p=>p.mode==='maintenance')?'可先用接收端已授权的维护入口登记真实实验，再重新投递。':'在 Windows 看板打开「接入服务器」，选择真实机器并启用入口维护；升级软件不会自动新增服务器权限。'};throw e;
   }
   need(selected.checks.length>0,'ACCEPTANCE_CHECKS_NOT_CONFIGURED');
-  need((selected.execution_mode||'pi')==='direct'||remote.model_configured,'RECEIVER_NOT_READY');
+  need((selected.execution_mode||'pi')==='direct'||task.requirements.profile_workflow==='direct'||remote.model_configured,'RECEIVER_NOT_READY');
   need(task.invocation.entry==='auto'||selected.entry===task.invocation.entry,'CAPABILITY_ENTRY_MISMATCH');
   need(!selected.revision||task.code.revision===selected.revision,'CODE_REVISION_MISMATCH');
   need(!task.invocation.arguments.length||selected.arguments_allowed,'TASK_ARGUMENTS_DISABLED');

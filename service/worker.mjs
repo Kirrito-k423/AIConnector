@@ -29,13 +29,14 @@ export async function work(dir,secrets={}) {
   const write=()=>save(statusFile,status);
   const event=(type,extra={})=>{status.events.push({type,at:now(),...extra});status.events=status.events.slice(-100);write();};
   write(); const beat=setInterval(()=>{status.heartbeat=now();write();},2000);
-  let session,execution,report,timer,turns=0,failure='',maintenance,profileWorkflow,inputs,acceptance,verifyPass=0,continuations=0,toolSteps=0,goalReady=false,goalVerified=false,summaryCurrent=false;
+  let session,execution,report,timer,turns=0,failure='',maintenance,profileWorkflow,workflowPlan,lastToolResult,inputs,acceptance,verifyPass=0,continuations=0,toolSteps=0,goalReady=false,goalVerified=false,summaryCurrent=false;
   const modelTiming=new ModelTiming(path.join(dir,'model-requests.jsonl'),spec.key,{phase:()=>({kind:status.compaction?.active?'compaction':'agent',turn:turns})});
   const secretValues=Object.values(secrets).filter(x=>typeof x==='string'&&x.length>3);
   const redact=text=>secretValues.reduce((v,s)=>v.split(s).join('[REDACTED]'),String(text));
   const abort=new AbortController();
   const model=spec.model;
-  const direct=engineOf(spec.profile)==='direct';status.execution_mode=direct?'direct':'pi';
+  const workflowDirect=spec.task.requirements?.profile_workflow==='direct',direct=engineOf(spec.profile)==='direct',noModel=direct||workflowDirect;
+  status.execution_mode=workflowDirect?'profile-workflow':direct?'direct':'pi';
   spec.agent??=snapshotAgent(agentConfig({},model),dir);
   const agent=spec.agent;
   const budget={maxContinuations:4,maxNoProgress:2,maxActions:64,maxTotalTokens:200000,maxCost:0,...agent.budget};
@@ -110,8 +111,17 @@ export async function work(dir,secrets={}) {
       need(spec.task.code.revision===spec.profile.revision,'CODE_REVISION_MISMATCH');
       maintenance=new Maintenance(spec,dir,{signal:abort.signal,redact,event});
       if(canConfigureProfiles(spec.profile))profileWorkflow=new ProfileWorkflow(maintenance,inputs);
+      if(spec.task.requirements.server_profiles){need(profileWorkflow,'PROFILE_WORKFLOW_NOT_AUTHORIZED');workflowPlan=profileWorkflow.prepare();event('profile_contract_verified');}
     }
-    if(direct){
+    if(workflowDirect){
+      need(workflowPlan,'PROFILE_INPUT_REQUIRED');status.executor_started_at=now();event('profile_workflow_started');
+      timer=setTimeout(()=>{failure='EXECUTION_TIMEOUT';abort.abort();},spec.timeoutSeconds*1000);
+      await profileWorkflow.configure(workflowPlan);
+      report={summary:'指定入口定义已合并、热加载并通过独立检查；未执行 SSH/NPU。',metrics:{},source:'executor'};summaryCurrent=true;
+      save(path.join(dir,'summary.json'),report);await completion();
+      need(!acceptance.unknown,'ACTION_UNKNOWN');need(acceptance.status==='passed','ACCEPTANCE_FAILED');need(goalReady,'OUTPUTS_INCOMPLETE');
+      goalVerified=true;event('profile_workflow_verified',{checks:acceptance.checks.length});
+    }else if(direct){
       status.executor_started_at=now();event('direct_started');
       timer=setTimeout(()=>{failure='EXECUTION_TIMEOUT';abort.abort();},spec.timeoutSeconds*1000);
       await execute();
@@ -165,11 +175,16 @@ export async function work(dir,secrets={}) {
     tools.push(...webTools(agent.web,{signal:abort.signal,event,redact}));
     const observations=new Set(['get_run_state','verify_task','list_inputs','read_input','list_outputs','read_output','server_status','server_task_status','server_task_logs','web_fetch','web_search']);
     for(const t of tools){t.executionMode='sequential';const fn=t.execute;t.execute=async(...args)=>{
+      lastToolResult={tool:t.name,ok:false};
       goalReady=false;need(!failure,failure||'RUN_STOPPED');need(!abort.signal.aborted,'RUN_STOPPED');
       if(!observations.has(t.name))summaryCurrent=false;
       let value;
-      try{value=await fn(...args);}catch(e){progress.observe(t.name,args[1]||{},{error:cleanError(e)});throw e;}
+      try{value=await fn(...args);}catch(e){lastToolResult.error=cleanError(e);progress.observe(t.name,args[1]||{},{error:cleanError(e)});throw e;}
       let observed;try{observed=JSON.parse(value.content?.find(c=>c.type==='text')?.text);}catch{observed={};}
+      lastToolResult.ok=true;
+      if(['read_input','read_output','read_local_file'].includes(t.name)&&typeof observed.content==='string'){
+        Object.assign(lastToolResult,{read_offset:observed.offset??0,read_length:observed.content.length,...(/^[a-f0-9]{64}$/.test(observed.sha256||'')?{evidence_sha256:observed.sha256}:{})});
+      }
       progress.observe(t.name,args[1]||{},observed);
       if(t.name==='submit_summary')summaryCurrent=true;
       // Recheck after all later actions, including a write after a summary in the same turn.
@@ -196,7 +211,7 @@ export async function work(dir,secrets={}) {
       if(e.type==='turn_end'&&!goalVerified&&!failure&&!progress.endTurn()){
         failure='NO_PROGRESS';event('no_progress',{stalled_turns:progress.stalled});abort.abort();void session.abort();
       }
-      if(e.type==='tool_execution_start'||e.type==='tool_execution_end'){profiler.set(e.type==='tool_execution_start'?'tool.'+e.toolName:'model.wait');event(e.type,{tool:e.toolName});if(e.type==='tool_execution_start'&&++toolSteps>budget.maxActions){failure='ACTION_BUDGET';abort.abort();void session.abort();}}
+      if(e.type==='tool_execution_start'||e.type==='tool_execution_end'){profiler.set(e.type==='tool_execution_start'?'tool.'+e.toolName:'model.wait');event(e.type,{tool:e.toolName,...(e.type==='tool_execution_end'&&lastToolResult?.tool===e.toolName?lastToolResult:{})});if(e.type==='tool_execution_start'&&++toolSteps>budget.maxActions){failure='ACTION_BUDGET';abort.abort();void session.abort();}}
       if(e.type==='compaction_start'){status.compaction.active=true;event(e.type,{reason:e.reason});}
       if(e.type==='compaction_end'){status.compaction.active=false;if(e.result){status.compaction.count++;progress.recoveryEpoch=status.compaction.count;}addUsage(e.result?.usage);event(e.type,{reason:e.reason,success:Boolean(e.result)&&!e.aborted,tokens_before:e.result?.tokensBefore,will_retry:e.willRetry});}
       if(e.type==='message_end'&&e.message?.role==='assistant') {
@@ -208,7 +223,7 @@ export async function work(dir,secrets={}) {
     profiler.set('model.wait');
     status.state='agent';status.agent_started_at=now();status.tools=tools.map(t=>t.name);event('agent_started');
     const grants=maintenance?{files:Object.fromEntries(Object.entries(maintenance.policy.files||{}).map(([id,f])=>[id,{format:f.format,write:f.write===true,pointers:f.pointers||[]}])),commands:Object.keys(maintenance.policy.commands||{}),apis:Object.keys(maintenance.policy.apis||{})}:undefined;
-    let prompt=JSON.stringify({task:spec.task,profile:spec.task.environment.target,grants,acceptance_contract:spec.profile.verification||[{id:'cpu-smoke',expected_sum:50005000}],inputs:inputs.list()});
+    let prompt=JSON.stringify({task:spec.task,profile:spec.task.environment.target,grants,profile_workflow_plan:workflowPlan,acceptance_contract:spec.profile.verification||[{id:'cpu-smoke',expected_sum:50005000}],inputs:inputs.list()});
     for(;;){
       await session.prompt(prompt);if(failure)throw new Error(failure);
       if(goalVerified)break;
@@ -222,20 +237,22 @@ export async function work(dir,secrets={}) {
     }
     }
   } catch(e) {failure=failure||cleanError(e);event('agent_failed',{code:failure});}
-  finally {clearTimeout(timer);status.agent_ended_at=now();if(direct)status.executor_ended_at=status.agent_ended_at;status.stop_reason=failure||(direct?'DIRECT_VERIFIED':'GOAL_VERIFIED');if(session)session.dispose();modelTiming.stop(status.stop_reason);}
+  finally {clearTimeout(timer);status.agent_ended_at=now();if(noModel)status.executor_ended_at=status.agent_ended_at;status.stop_reason=failure||(workflowDirect?'PROFILE_WORKFLOW_VERIFIED':direct?'DIRECT_VERIFIED':'GOAL_VERIFIED');if(session)session.dispose();modelTiming.stop(status.stop_reason);}
   try {
     profiler.set('result.package');
     const packagingStarted=performance.now();status.packaging_started_at=now();
+    const actionUnknown=Object.values(maintenance?.actions||{}).some(a=>a.state==='unknown'||a.state==='intent'||a.result?.unknown);
     const resultData={outcome:failure?'blocked':acceptance?.status==='passed'?'succeeded':'blocked',exit_code:failure?-1:execution?.exit_code??0,
       actual_revision:execution?.actual_revision||(maintenance?spec.profile.revision:'not-executed'),summary:'',
-      metrics:{...report?.metrics,...(failure?{runner_error:failure}:{})},artifacts:[],acceptance:acceptance||{status:'blocked',checks:[],reason:failure},
-      execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,time_source:execution?.time_source||'executor',engine:direct?'direct':'pi-0.87.1',executor_duration_ms:direct&&status.executor_started_at?Date.parse(status.executor_ended_at)-Date.parse(status.executor_started_at):null,profile:spec.task.environment.target,unknown:execution?.unknown||Boolean(watch?.record&&!execution),exit_code:execution?.exit_code??null,outcome:execution?.outcome||'not-executed',server_task_id:execution?.server_task?.id||watch?.record?.id||null},
+      metrics:{...report?.metrics,...(failure?{runner_error:failure}:{})},artifacts:[],acceptance:acceptance||{status:'blocked',checks:[],reason:failure,unknown:actionUnknown},
+      execution:{started_at:execution?.started_at||null,ended_at:execution?.ended_at||null,time_source:execution?.time_source||'executor',engine:workflowDirect?'profile-workflow':direct?'direct':'pi-0.87.1',executor_duration_ms:noModel&&status.executor_started_at?Date.parse(status.executor_ended_at)-Date.parse(status.executor_started_at):null,profile:spec.task.environment.target,unknown:execution?.unknown||actionUnknown||Boolean(watch?.record&&!execution),exit_code:execution?.exit_code??null,outcome:execution?.outcome||'not-executed',server_task_id:execution?.server_task?.id||watch?.record?.id||null},
       agent:{version:VERSION,started_at:status.agent_started_at||null,ended_at:status.agent_ended_at,duration_ms:status.agent_started_at?Date.parse(status.agent_ended_at)-Date.parse(status.agent_started_at):0,turns,continuations,tool_steps:toolSteps,stop_reason:status.stop_reason,usage,cost_configured:Boolean(model?.cost),usage_scope:'Cumulative SDK assistant and compaction usage; absent provider usage is unmeasured, not a billing total',tools:status.tools||[],context_sha256:agent.contextDigest,context_captured_at:agent.capturedAt,skills:(agent.skills||[]).map(s=>({name:s.name,sha256:s.sha256})),compactions:status.compaction.count}};
-    Object.assign(resultData,authoritativeReport({report,agent:resultData.agent,acceptance:resultData.acceptance,failure,profile:spec.profile}));
+    resultData.agent.budget={limits:{...budget,maxTurns:spec.maxTurns},used:{turns,actions:toolSteps,maintenanceActions:Object.keys(maintenance?.actions||{}).length,continuations,noProgress:progress.stalled,totalTokens:usage.totalTokens,cost:usage.cost},sdk_usage_observed:modelTiming.rows.some(r=>r.sdk_usage!==null),scope:'Actions count SDK tool steps; durable maintenance actions are separate. Tokens include cached context for each SDK request, not billing.'};
+    Object.assign(resultData,authoritativeReport({report,agent:resultData.agent,acceptance:resultData.acceptance,failure,profile:spec.profile,engine:resultData.execution.engine}));
     if(spec.reservation?.machineIds){resultData.execution.resource_grant={id:spec.reservation.id,grant_id:spec.reservation.grantId,generation:spec.reservation.generation,machine_count:spec.reservation.machineIds.length,group_sha256:sha(JSON.stringify(spec.reservation.machineIds)),plan_sha256:spec.reservation.planSha256};resultData.metrics.all_nodes_reserved=Boolean(spec.reservation.grantId);}
     // Leave room for artifact descriptors within the protocol's 16 KiB payload.
     // Full bounded model report stays in the ZIP; it cannot make delivery fail.
-    if(Buffer.byteLength(JSON.stringify(resultData))>14000){resultData.model_report={verified:false,report_in_zip:true};resultData.metrics={runner_error:failure||null,report_in_zip:true,...(spec.profile.kind==='builtin-smoke'?{npu:false}:{})};}
+    if(Buffer.byteLength(JSON.stringify(resultData))>14000){resultData.model_report={verified:false,report_in_zip:true};resultData.metrics={...Object.fromEntries(Object.entries(resultData.metrics).filter(([k])=>k.startsWith('runner_'))),runner_error:failure||null,report_in_zip:true,...(spec.profile.kind==='builtin-smoke'?{npu:false}:{})};}
     const entries={'result.json':strToU8(JSON.stringify(resultData,null,2)),
       'execution.json':strToU8(JSON.stringify(execution?{...execution,stdout:undefined,stderr:undefined}:{executed:false},null,2)),
       'stdout.txt':strToU8(execution?.stdout||''),'stderr.txt':strToU8(execution?.stderr||''),

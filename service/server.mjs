@@ -13,6 +13,7 @@ import {WindowProfiler} from './window-profiler.mjs';
 import {timing,diagnostics} from './telemetry.mjs';
 
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
+import {validateProfileArchive} from './profile-data.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
 const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact,timings:j.timings,delivery_attempts:j.delivery_attempts,delivery_diagnostics:j.delivery_diagnostics});
@@ -146,11 +147,13 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
         const checked=preflight(task,snapshot.receiver_capabilities?.data);
         task.environment.target=checked.profile.id;task.invocation.entry=checked.profile.entry;
         task.receiver_config_sha256=checked.config_sha256;
-        let zipFile;
+        let zipFile,zipBytes;
         if(data.zipBase64) {
           const bytes=Buffer.from(data.zipBase64,'base64');need(bytes.length>4&&bytes.length<5242880&&bytes.subarray(0,2).toString()==='PK','INVALID_INPUT_ZIP');
-          zipFile=path.join(c.dataDir,'submissions',sha(key)+'.zip');atomic(zipFile,bytes);
+          zipBytes=bytes;
         }
+        validateProfileArchive(task,zipBytes);
+        if(zipBytes){zipFile=path.join(c.dataDir,'submissions',sha(key)+'.zip');atomic(zipFile,zipBytes);}
         ledger.submissions[key]={key,digest,task,zipFile,state:'pending',error:'',created_at:now()};persist();timing(c.dataDir,'task_submitted',{key});lastTick=0;void submit();reply(202,{key,state:'pending'});return;
       }
       if(url.pathname==='/api/settings') {

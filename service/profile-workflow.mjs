@@ -1,13 +1,34 @@
 import path from 'node:path';
 import {need,read,save,sha,now} from './common.mjs';
 import {validateRegistry} from './server-registry.mjs';
-import {parseProfileInput,profileWorkflowGranted,profileDefinitions,definitionSha} from './profile-data.mjs';
+import {parseProfileInput,profileWorkflowGranted,profileDefinitions,definitionSha,checkProfileContract,selectProfileInput} from './profile-data.mjs';
 
 const idPattern=/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 export class ProfileWorkflow {
   constructor(maintenance,inputs){this.maintenance=maintenance;this.inputs=inputs;this.file=path.join(maintenance.dir,'profile-workflows.json');this.rows=read(this.file,{});}
   persist(){save(this.file,this.rows);}
   publicRows(){return Object.values(this.rows).map(r=>({action_id:r.action_id,input_id:r.input_id,input_sha256:r.input_sha256,file:r.file,requested:r.requested,before_sha256:r.expected_sha256,after_sha256:r.after_sha256,started_at:r.started_at,verified_at:r.verified_at,phases:Object.fromEntries(['write','reload','readiness'].map(k=>[k,this.maintenance.actions[r[k+'_action']]?.state||'not-started']))}));}
+  prepare(){
+    const m=this.maintenance,pinned=m.spec.task.requirements.server_profiles;
+    need(Array.isArray(pinned)&&pinned.length>0,'PROFILE_INPUT_REQUIRED');
+    need(!Object.values(m.actions).some(a=>a.state==='unknown'||a.state==='intent'||a.result?.unknown),'ACTION_UNKNOWN');
+    const files=Object.keys(m.policy.files||{}).filter(id=>profileWorkflowGranted(m.spec.profile,id));
+    need(files.length===1,'PROFILE_REGISTRY_AMBIGUOUS');const file=files[0],current=m.fileInfo(file);
+    const selected=selectProfileInput(pinned,this.inputs.state.files.map(item=>({...item,load:()=>this.inputs.verifiedBytes(item.id,item.sha256,65536,{reader:'program'})})));
+    const registry=validateRegistry(JSON.parse(current.bytes.toString('utf8').replace(/^\uFEFF/,'')));
+    validateRegistry({...registry,profiles:{...registry.profiles,...selected.profiles}});
+    let action_id='configure-'+sha(m.spec.key).slice(0,32);
+    const matching=Object.values(this.rows).filter(r=>r.file===file&&r.input_id===selected.item.id&&r.input_sha256===selected.item.sha256);
+    need(matching.length<=1,'PROFILE_WORKFLOW_AMBIGUOUS');const previous=this.rows[action_id]||matching[0];
+    if(previous){
+      need(previous.file===file&&previous.input_id===selected.item.id&&previous.input_sha256===selected.item.sha256,'ACTION_ID_CONFLICT');
+      checkProfileContract(previous.requested,selected.profiles);action_id=previous.action_id;
+      // Preserve the pre-write CAS from the durable request. A known completed
+      // write may be resumed at reload; current bytes are its post-write hash.
+      return {action_id,file,input_id:previous.input_id,input_sha256:previous.input_sha256,expected_sha256:previous.expected_sha256};
+    }
+    return {action_id,file,input_id:selected.item.id,input_sha256:selected.item.sha256,expected_sha256:current.digest};
+  }
   async configure({action_id,file,input_id,input_sha256,expected_sha256}){
     const m=this.maintenance;need(idPattern.test(action_id),'INVALID_ACTION_ID');need(profileWorkflowGranted(m.spec.profile,file),'PROFILE_WORKFLOW_NOT_AUTHORIZED');
     const request={key:m.spec.key,file,input_id,input_sha256,expected_sha256},digest=sha(JSON.stringify(request));let row=this.rows[action_id];
@@ -18,7 +39,7 @@ export class ProfileWorkflow {
     const merged={...registry.profiles,...incoming};validateRegistry({...registry,profiles:merged});
     const requested=profileDefinitions(incoming);
     const pinned=m.spec.task.requirements.server_profiles;
-    if(pinned)need(pinned.length===requested.length&&pinned.every(p=>requested.some(r=>r.id===p.id&&r.revision===p.revision&&(!p.definition_sha256||r.definition_sha256===p.definition_sha256))),'REQUESTED_PROFILE_MISMATCH');
+    if(pinned)checkProfileContract(pinned,incoming);
     if(!row){
       need(current.digest===expected_sha256,'FILE_CHANGED');need(Object.keys(this.rows).length<8,'PROFILE_WORKFLOW_BUDGET');
       const prefix='profiles-'+sha(m.spec.key+'/'+action_id).slice(0,32);

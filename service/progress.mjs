@@ -12,6 +12,9 @@ export class Progress {
   constructor(limit){this.limit=limit;this.seen=new Set();this.ranges=new Map();this.changed=false;this.stalled=0;this.recoveryEpoch=0;}
   mark(key){if(this.seen.has(key))return;this.seen.add(key);this.changed=true;}
   observe(name,args,value){
+    // New error text or new action IDs do not change the target state. A later
+    // successful read/repair can still establish fresh evidence normally.
+    if(typeof value?.error==='string')return;
     if(name==='submit_summary'){this.mark('summary-recorded');return;}
     if(name==='get_run_state'){this.mark('state-recovered:'+this.recoveryEpoch);return;}
     if(name==='call_local_api')value=value?.value||value;

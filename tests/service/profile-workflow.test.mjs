@@ -11,8 +11,9 @@ import {Inputs} from '../../service/inputs.mjs';
 import {ProfileWorkflow} from '../../service/profile-workflow.mjs';
 import {profileDefinitions,definitionSha,parseProfileInput} from '../../service/profile-data.mjs';
 import {verifyTask} from '../../service/verification.mjs';
-import {toolsFor,checkRequirements} from '../../service/capabilities.mjs';
+import {toolsFor,checkRequirements,capabilities,preflight,validateRequirements} from '../../service/capabilities.mjs';
 import {modelFixture} from './model_fixture.mjs';
+import {agentConfig,snapshotAgent} from '../../service/agent-config.mjs';
 
 const profile=revision=>({kind:'simplehtmlwatch',mode:'experiment',machineId:'approved',entry:'device',repository:'fixture-device',revision,revisionCommand:'printf '+revision,shell:'printf fixture',outputs:['metrics.json'],verification:[{id:'exit',kind:'execution',equals:0}]});
 async function fixture({source=JSON.stringify({device:profile('v2')}),large=false}={}){
@@ -110,4 +111,93 @@ test('real pinned Pi configures a staged update with bounded ID/hash arguments a
     assert.ok(!read(path.join(f.dir,'worker.json')).events.some(e=>e.type==='model_attempt_failed'));
     assert.ok(Buffer.byteLength(JSON.stringify(f.args))<400,'model does not regenerate the registry');
   }finally{if(model)await model.close();await f.close();}
+});
+
+test('invalid frozen profile digest fails before Pi instead of exhausting budget on fresh registry pages',async()=>{
+  const f=await fixture({large:true});let model;
+  try{
+    // Same sender mistake as Relay #36: insertion-order JSON instead of the
+    // registry's canonical definition digest. Extra reads cannot repair it.
+    f.spec.task.requirements.server_profiles[0].definition_sha256=sha(JSON.stringify(profile('v2')));
+    assert.notEqual(f.spec.task.requirements.server_profiles[0].definition_sha256,definitionSha(profile('v2')));
+    model=await modelFixture({handler:(_d,n)=>n===1?{tool:'configure_server_profiles',args:f.args,usage:{prompt_tokens:600,completion_tokens:20,total_tokens:620}}:
+      {tool:'read_local_file',args:{file:'registry',offset:n,length:1},usage:{prompt_tokens:600,completion_tokens:20,total_tokens:620}}});
+    save(path.join(f.dir,'spec.json'),{...f.spec,agent:{...snapshotAgent(agentConfig({budget:{maxTotalTokens:1024}}),f.dir)},model:{api:'openai-completions',baseUrl:model.url,id:'fixture',compat:{supportsDeveloperRole:false}},timeoutSeconds:20,maxTurns:6});
+    const child=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',f.dir],{input:JSON.stringify({apiKey:'LOCAL_FIXTURE_KEY'})});
+    assert.equal(child.code,0,child.err);const r=read(path.join(f.dir,'result.json'));
+    assert.equal(r.agent.stop_reason,'REQUESTED_PROFILE_MISMATCH');
+    assert.equal(model.requests,0);assert.equal(f.reloads,0);assert.deepEqual(json(f.file),f.original);
+  }finally{if(model)await model.close();await f.close();}
+});
+
+test('explicit profile workflow applies a frozen single-field merge without invoking the model',async()=>{
+  const source=JSON.stringify({device:{...profile('v1'),executionMode:'direct'}}),f=await fixture({source,large:true});let model;
+  try{
+    const requested=profileDefinitions(JSON.parse(source));f.spec.task.requirements.server_profiles=requested;
+    f.spec.task.requirements.profile_workflow='direct';
+    model=await modelFixture({fail:true});
+    save(path.join(f.dir,'spec.json'),{...f.spec,model:{api:'openai-completions',baseUrl:model.url,id:'fixture'},timeoutSeconds:20,maxTurns:6});
+    const child=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',f.dir]);
+    assert.equal(child.code,0,child.err);const r=read(path.join(f.dir,'result.json'));
+    assert.equal(r.outcome,'succeeded',JSON.stringify(r));assert.equal(model.requests,0);
+    assert.equal(r.agent.turns,0);assert.equal(r.execution.engine,'profile-workflow');assert.equal(r.agent.stop_reason,'PROFILE_WORKFLOW_VERIFIED');
+    assert.equal(f.reloads,1);assert.deepEqual(json(f.file).machineIds,f.original.machineIds);
+    for(const [id,p]of Object.entries(f.original.profiles))assert.deepEqual(json(f.file).profiles[id],id==='device'?{...p,executionMode:'direct'}:p);
+  }finally{if(model)await model.close();await f.close();}
+});
+
+test('direct profile workflow retains unknown reload and never rewrites or replays it',async()=>{
+  const f=await fixture();
+  try{
+    f.spec.task.requirements.profile_workflow='direct';f.disconnect=true;
+    save(path.join(f.dir,'spec.json'),{...f.spec,timeoutSeconds:20,maxTurns:6});
+    const execute=()=>run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',f.dir]);
+    assert.equal((await execute()).code,0);let r=read(path.join(f.dir,'result.json'));
+    assert.equal(r.outcome,'blocked');assert.equal(r.execution.unknown,true);assert.equal(f.reloads,1);
+    const after=sha(fs.readFileSync(f.file));f.disconnect=false;
+    assert.equal((await execute()).code,0);r=read(path.join(f.dir,'result.json'));
+    assert.equal(r.agent.stop_reason,'ACTION_UNKNOWN');assert.equal(r.execution.unknown,true);
+    assert.equal(f.reloads,1);assert.equal(sha(fs.readFileSync(f.file)),after);
+  }finally{await f.close();}
+});
+
+test('direct workflow resumes a known completed write with its original CAS and no second write',async()=>{
+ const f=await fixture();try{
+  f.spec.task.requirements.profile_workflow='direct';const controller=new AbortController();
+  const maintenance=new Maintenance(f.spec,f.dir,{signal:controller.signal,event:(_e,row)=>{if(row.kind==='file-write')controller.abort();}}),flow=new ProfileWorkflow(maintenance,f.inputs);
+  await assert.rejects(flow.configure({...flow.prepare(),action_id:'original-operator-workflow'}),/RUN_STOPPED/);const after=sha(fs.readFileSync(f.file));assert.equal(f.reloads,0);
+  save(path.join(f.dir,'spec.json'),{...f.spec,timeoutSeconds:20,maxTurns:6});
+  const child=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',f.dir]);assert.equal(child.code,0,child.err);
+  const r=read(path.join(f.dir,'result.json'));assert.equal(r.outcome,'succeeded',JSON.stringify(r));assert.equal(f.reloads,1);
+  assert.equal(sha(fs.readFileSync(f.file)),after);assert.equal(Object.values(read(path.join(f.dir,'actions.json'))).filter(r=>r.kind==='file-write').length,1);
+ }finally{await f.close();}
+});
+
+test('conflicting staged profile maps and unauthorized machines fail before direct workflow effects',async()=>{
+ for(const kind of ['ambiguous','scope']){
+  const source=JSON.stringify({device:{...profile('v2'),...(kind==='scope'?{machineId:'other'}:{})}}),f=await fixture({source});
+  try{
+   f.spec.task.requirements.server_profiles=profileDefinitions(JSON.parse(source));f.spec.task.requirements.profile_workflow='direct';
+   if(kind==='ambiguous'){
+    const bytes=zipSync({'first.json':strToU8(source),'second.json':strToU8(source)});fs.writeFileSync(path.join(f.dir,'inputs','profiles.zip'),bytes);
+    f.spec.task.artifacts=[{name:'profiles.zip',sha256:sha(bytes),bytes:bytes.length}];fs.unlinkSync(f.inputs.file);
+   }
+   save(path.join(f.dir,'spec.json'),{...f.spec,timeoutSeconds:20,maxTurns:6});
+   const child=await run(process.execPath,[path.join(ROOT,'service/worker.mjs'),'--work',f.dir]);assert.equal(child.code,0,child.err);
+   const r=read(path.join(f.dir,'result.json'));assert.equal(r.agent.stop_reason,kind==='ambiguous'?'PROFILE_INPUT_AMBIGUOUS':'SERVER_PROFILE_SCOPE');
+   assert.equal(r.agent.turns,0);assert.equal(f.reloads,0);assert.deepEqual(json(f.file),f.original);
+  }finally{await f.close();}
+ }
+});
+
+test('direct profile workflow requires frozen definitions and an explicitly capable receiver',async()=>{
+ const f=await fixture();try{
+  f.spec.task.requirements.profile_workflow='direct';
+  const remote=capabilities({node:'windows-inner',connector:{namespace:'fixture'},runner:{enabled:true,agent:{},profiles:{maintenance:f.spec.profile}}});
+  assert.equal(remote.model_configured,false);assert.equal(preflight(f.spec.task,remote).ok,true);
+  delete remote.profiles[0].profile_workflow;assert.throws(()=>preflight(f.spec.task,remote),/CAPABILITY_MISMATCH/);
+  delete f.spec.task.requirements.server_profiles[0].definition_sha256;assert.throws(()=>validateRequirements(f.spec.task),/INVALID_PROFILE_WORKFLOW/);
+  f.spec.task.requirements.server_profiles[0].definition_sha256='a'.repeat(64);
+  f.spec.task.requirements.tools.push('server_status');assert.throws(()=>validateRequirements(f.spec.task),/INVALID_PROFILE_WORKFLOW/);
+ }finally{await f.close();}
 });

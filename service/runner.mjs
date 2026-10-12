@@ -107,7 +107,7 @@ export class Runner {
         profile=this.profile(row.task);agent=snapshotAgent(agentConfig(this.c.runner.agent,this.c.runner.model),path.dirname(this.c.file));
         checkRequirements(row.task,profile,agent);
         need(!row.task.receiver_config_sha256||row.task.receiver_config_sha256===capabilities(this.c,this.secrets,agent).config_sha256,'RECEIVER_CONFIG_CHANGED');
-        need(engineOf(profile)==='direct'||this.c.runner.model&&this.secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
+        need(engineOf(profile)==='direct'||row.task.requirements.profile_workflow==='direct'||this.c.runner.model&&this.secrets.apiKey,'MODEL_CREDENTIAL_REQUIRED');
       }catch(e){preflightError=cleanError(e);}
       const dir=job.dir;
       try{

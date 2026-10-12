@@ -19,3 +19,8 @@ test('new action IDs for no-op writes are not new repair progress',()=>{
  const p=new Progress(2);
  for(let i=0;i<3;i++){p.observe('write_local_file',{file:'config',action_id:'new-'+i},{after_sha256:'fixed',backup_action:'new-'+i});assert.equal(p.endTurn(),i<2);}
 });
+test('different rejected writes cannot reset the no-progress budget',()=>{
+ const p=new Progress(2);
+ p.observe('patch_local_json',{file:'registry',action_id:'first'},{error:'JSON_POINTER_NOT_AUTHORIZED'});assert.equal(p.endTurn(),true);
+ p.observe('patch_local_json',{file:'registry',action_id:'different'},{error:'SERVER_PROFILE_SCOPE'});assert.equal(p.endTurn(),false);
+});
