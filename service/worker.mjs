@@ -3,7 +3,8 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {zipSync,strToU8} from 'fflate';
 import {createAgentSession,createExtensionRuntime,ModelRuntime,SessionManager,SettingsManager} from '@earendil-works/pi-coding-agent';
-import {ROOT,sha,now,read,save,atomic,need,run,safeEnv,cleanError,lock} from './common.mjs';
+import {ROOT,sha,now,read,save,json,atomic,need,run,safeEnv,cleanError,lock} from './common.mjs';
+import {validateRegistry} from './server-registry.mjs';
 import {agentConfig,snapshotAgent} from './agent-config.mjs';
 import {WatchClient,WatchExecution} from './watch.mjs';
 import {webTools} from './web-tools.mjs';
@@ -63,6 +64,28 @@ export async function work(dir,secrets={}) {
     if(watch)return rememberExecution(await watch.run());
     need(!fs.existsSync(path.join(dir,'execution-intent.json')),'EXECUTION_UNKNOWN');
     const p=spec.profile;
+    if(p.kind==='watch-catalog'){
+      need(agent.simpleHtmlWatch.enabled,'WATCH_NOT_ENABLED');need(spec.task.code.revision===p.revision,'CODE_REVISION_MISMATCH');
+      const started_at=now();event('catalog_started');
+      let authorizedMachineIds=null,authorization_sha256=null;
+      // The selected machine list is read locally, never recreated by the model
+      // or copied from task text. Do not report a stale authorization snapshot.
+      if(p.authorizationRegistry){
+        const registry=validateRegistry(json(p.authorizationRegistry));authorization_sha256=sha(JSON.stringify(registry));
+        need(authorization_sha256===p.authorizationSha256,'CATALOG_AUTHORIZATION_CHANGED');authorizedMachineIds=registry.machineIds;
+      }
+      const client=new WatchClient(agent.simpleHtmlWatch,{signal:abort.signal});
+      const evidence=await client.catalog({authorizedMachineIds,hosts:spec.task.requirements.catalog_hosts||[]});
+      if(p.authorizationRegistry)need(sha(JSON.stringify(validateRegistry(json(p.authorizationRegistry))))===authorization_sha256,'CATALOG_AUTHORIZATION_CHANGED');
+      Object.assign(evidence,{authorization_sha256,authorization_known:authorizedMachineIds!==null});
+      status.catalog={query_complete:evidence.query_complete,requested_hosts_complete:evidence.requested_hosts_complete,
+        authorization_known:evidence.authorization_known,all_requested_authorized:evidence.all_requested_authorized,
+        ssh_executed:false,npu_workload_executed:false,...(evidence.errors[0]?{catalog_error:evidence.errors[0].code,catalog_error_route:evidence.errors[0].route}:{})};
+      atomic(path.join(workspace,'server-catalog.json'),JSON.stringify(evidence,null,2));
+      event('catalog_finished',{query_complete:evidence.query_complete,requested_hosts_complete:evidence.requested_hosts_complete,...(evidence.errors[0]?{route:evidence.errors[0].route,error:evidence.errors[0].code}:{})});
+      const value={schema:'aiconnector.execution.v1',key:spec.key,actual_revision:p.revision,exit_code:evidence.query_complete?0:1,outcome:evidence.query_complete?'succeeded':'failed',unknown:false,started_at,ended_at:now(),time_source:'executor',stdout:'',stderr:'',revision_mismatch:false};
+      save(path.join(dir,'execution.json'),value);return rememberExecution(value);
+    }
     let revision,argv,cwd;
     if(p.kind==='builtin-smoke') {revision='builtin-smoke-v1';argv=[process.execPath,path.join(ROOT,'service','smoke.mjs')];cwd=workspace;}
     else {
@@ -125,7 +148,7 @@ export async function work(dir,secrets={}) {
       status.executor_started_at=now();event('direct_started');
       timer=setTimeout(()=>{failure='EXECUTION_TIMEOUT';abort.abort();},spec.timeoutSeconds*1000);
       await execute();
-      report={summary:'固定入口执行结束；结果以独立检查和原始输出为准。',metrics:{},source:'executor'};summaryCurrent=true;
+      report={summary:'固定入口执行结束；结果以独立检查和原始输出为准。',metrics:{...status.catalog},source:'executor'};summaryCurrent=true;
       save(path.join(dir,'summary.json'),report);await completion();
       need(!acceptance.unknown,'EXECUTION_UNKNOWN');need(acceptance.status==='passed','ACCEPTANCE_FAILED');need(goalReady,'OUTPUTS_INCOMPLETE');
       goalVerified=true;event('direct_verified',{checks:acceptance.checks.length});
@@ -182,6 +205,7 @@ export async function work(dir,secrets={}) {
       try{value=await fn(...args);}catch(e){lastToolResult.error=cleanError(e);progress.observe(t.name,args[1]||{},{error:cleanError(e)});throw e;}
       let observed;try{observed=JSON.parse(value.content?.find(c=>c.type==='text')?.text);}catch{observed={};}
       lastToolResult.ok=true;
+      if(t.name==='server_status'&&Array.isArray(observed.errors))lastToolResult.watch_errors=observed.errors;
       if(['read_input','read_output','read_local_file'].includes(t.name)&&typeof observed.content==='string'){
         Object.assign(lastToolResult,{read_offset:observed.offset??0,read_length:observed.content.length,...(/^[a-f0-9]{64}$/.test(observed.sha256||'')?{evidence_sha256:observed.sha256}:{})});
       }

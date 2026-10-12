@@ -4,6 +4,7 @@ import {gunzipSync} from 'node:zlib';
 import {setTimeout as pause} from 'node:timers/promises';
 import {need,read,save,sha,now,atomic} from './common.mjs';
 import {localRequest} from './http.mjs';
+import {watchError,publicWatchError,validateInventory,catalogEvidence} from './watch-catalog.mjs';
 
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
 const publicJob=j=>({id:j.id,status:j.status,selectedMachineId:j.selectedMachineId,machineName:j.machineName,createdAt:j.createdAt,updatedAt:j.updatedAt,finishedAt:j.finishedAt,exitCode:j.exitCode,archiveReady:j.archiveReady,archiveError:j.archiveError,error:j.error});
@@ -54,26 +55,68 @@ export function checkGroupReservation(r,remote){
 export class WatchClient {
   constructor(config,{signal}={}) {this.config=config;this.signal=signal;this.token='';}
   async identity(){
+    try{
     const r=await localRequest(this.config.baseUrl+'/healthz',{signal:this.signal,maxBytes:16384});need(r.status===200,'WATCH_INSTANCE_IDENTITY_REQUIRED');
     const value=JSON.parse(r.body.toString('utf8'));
-    need(typeof value.serviceId==='string'&&value.serviceId.length>0&&typeof value.runId==='string'&&value.runId.length>0,'WATCH_INSTANCE_IDENTITY_REQUIRED');
+    need(typeof value.serviceId==='string'&&value.serviceId.length>0&&value.serviceId.length<=256&&typeof value.runId==='string'&&value.runId.length>0&&value.runId.length<=256,'WATCH_INSTANCE_IDENTITY_REQUIRED');
     need(!this.config.expectedServiceId||value.serviceId===this.config.expectedServiceId,'WATCH_INSTANCE_CHANGED');
     this.instanceRunId=value.runId;return value;
+    }catch(e){throw watchError(e,'/healthz','identity');}
+  }
+  async sessionToken(){
+    if(this.token)return;
+    this.tokenPending??=(async()=>{
+      if(this.config.expectedServiceId&&!this.instanceRunId)await this.identity();
+      const match=b=>b.toString('utf8').match(/<meta\s+name="watch-token"\s+content="([^"]+)"/);
+      try{const r=await localRequest(this.config.baseUrl+'/',{signal:this.signal,maxBytes:65536,stopWhen:b=>Boolean(match(b))});
+        need(r.status===200,'WATCH_UNAVAILABLE');this.token=match(r.body)?.[1]||'';need(this.token,'WATCH_TOKEN_MISSING');
+      }catch(e){throw watchError(e,'/','token');}
+    })().finally(()=>{this.tokenPending=null;});
+    await this.tokenPending;
   }
   async call(route,{method='GET',body,maxBytes=1048576,bytes=false,timeoutSeconds=15}={}) {
+    try{
     for(let attempt=0;attempt<2;attempt++) {
-      if(!this.token){if(this.config.expectedServiceId)await this.identity();const r=await localRequest(this.config.baseUrl+'/',{signal:this.signal});need(r.status===200,'WATCH_UNAVAILABLE');this.token=r.body.toString('utf8').match(/<meta\s+name="watch-token"\s+content="([^"]+)"/)?.[1]||'';need(this.token,'WATCH_TOKEN_MISSING');}
+      await this.sessionToken();
       const r=await localRequest(this.config.baseUrl+route,{method,body:body===undefined?undefined:JSON.stringify(body),headers:{'X-Watch-Token':this.token,'Content-Type':'application/json',...(this.config.expectedServiceId?{'X-Watch-Instance':this.instanceRunId}:{})},signal:this.signal,maxBytes,timeoutSeconds});
       // A rejected token is checked before dispatch in SHW, so only this response can retry POST.
       if(r.status===403&&attempt===0){this.token='';continue;}
       need(r.status>=200&&r.status<300,'WATCH_HTTP_'+r.status);
-      return bytes?r.body:JSON.parse(r.body.toString('utf8'));
+      if(bytes)return r.body;
+      try{return JSON.parse(r.body.toString('utf8'));}catch{throw new Error('INVALID_WATCH_JSON');}
     }
+    }catch(e){throw watchError(e,route);}
+  }
+  async machineInventory(){
+    try{return validateInventory(await this.call('/api/tasks/machines',{maxBytes:262144}));}
+    catch(e){throw watchError(e,'/api/tasks/machines');}
+  }
+  async catalog(options={}){
+    let controller=null;const errors=[];
+    try{
+      const identity=await this.identity();this.config={...this.config,expectedServiceId:identity.serviceId};
+      controller={service_id:identity.serviceId,run_id:identity.runId,
+        version:typeof identity.version==='string'&&/^[a-zA-Z0-9_.+-]{1,128}$/.test(identity.version)?identity.version:null,build_id:typeof identity.buildId==='string'&&/^[a-f0-9]{40,64}$/.test(identity.buildId)?identity.buildId:null,
+        capabilities:Array.isArray(identity.capabilities)?identity.capabilities.filter(c=>typeof c==='string'&&/^[a-z0-9-]{1,80}$/.test(c)).slice(0,24):null};
+    }catch(e){errors.push(publicWatchError(e));}
+    let evidence;
+    try{evidence=catalogEvidence(await this.machineInventory(),{...options,errors});}
+    catch(e){evidence=catalogEvidence(null,{...options,errors:[...errors,publicWatchError(e)]});}
+    return {...evidence,controller,controller_identity_known:controller!==null};
   }
   async environment(profile={}) {
     const params=new URLSearchParams();if(profile.machineId)params.set('machineId',profile.machineId);if(profile.group)params.set('group',profile.group);
-    const [status,ready]=await Promise.all([this.call('/api/status'),this.call('/api/tasks/ready?'+params)]);
-    return {observed_at:now(),ready,monitor:status,ready_is_not_npu_idle:true};
+    const [catalog,status,ready]=await Promise.allSettled([this.catalog(),this.call('/api/status'),this.call('/api/tasks/ready?'+params)]);
+    const errors=[...(catalog.value?.errors||[]),...[status,ready].filter(r=>r.status==='rejected').map(r=>publicWatchError(r.reason))];
+    let monitor=status.status==='fulfilled'?status.value:null;
+    if(monitor&&Buffer.byteLength(JSON.stringify(monitor))>8192){monitor=null;errors.push({route:'/api/status',phase:'output',code:'MONITOR_OUTPUT_TOO_LARGE'});}
+    let readyRows=ready.status==='fulfilled'?ready.value:null;
+    const ready_total=Array.isArray(readyRows)?readyRows.length:null;
+    if(readyRows&&(!Array.isArray(readyRows)||Buffer.byteLength(JSON.stringify(readyRows))>2048)){
+      readyRows=null;errors.push({route:'/api/tasks/ready',phase:'output',code:'READY_OUTPUT_TOO_LARGE_OR_INVALID'});
+    }
+    return {observed_at:now(),catalog:catalog.value,query_complete:catalog.value?.query_complete===true,
+      ready:readyRows,ready_total,monitor,errors,ready_is_not_npu_idle:true};
   }
 }
 

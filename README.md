@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.13 在发布和模型启动前校验入口附件，增加纯入口合并的程序执行路径，并回传实际预算上限和用量。** 原子整组预留、固定实验直接执行和未知任务保护继续保留。原八机只读探针已验证零模型调用；五处设备告警仍在，正常 64-rank A5 实验尚未通过。
+**v0.7.14 增加零模型的有界机器目录入口，保留忙碌、离线和未知机器；可选监控超限不会丢失目录，目录缺项不能被旧入口的绿检查覆盖。** 原子整组预留、固定实验直接执行和未知任务保护继续保留。真实 Windows 八机目录与正常 64-rank A5 实验仍分别待验收。
 
-[下载服务候选包 v0.7.13-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.13-rc.1) · [Issue 14 修复与验收](docs/ISSUE-14-FIX.md) · [八机协议与直接执行](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+[下载服务候选包 v0.7.14-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.14-rc.1) · [有界目录与验收](docs/SERVER-CATALOG-0714.md) · [Issue 14 修复与验收](docs/ISSUE-14-FIX.md) · [八机协议与直接执行](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
 服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
 

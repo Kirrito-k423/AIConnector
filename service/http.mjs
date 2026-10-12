@@ -6,13 +6,19 @@ import {need,safeEnv} from './common.mjs';
 function webProxyEnv(key) {return process.env.AIC_WEB_ENV_CAPTURED==='1'?(process.env['AIC_WEB_'+key]||''):(process.env[key]||'');}
 
 // Deliberately bypass ambient proxy variables for local service APIs.
-export function localRequest(url,{method='GET',headers={},body,signal,maxBytes=1048576,timeoutSeconds=15}={}) {
+export function localRequest(url,{method='GET',headers={},body,signal,maxBytes=1048576,timeoutSeconds=15,stopWhen}={}) {
   const u=new URL(url);need(u.protocol==='http:'&&u.hostname==='127.0.0.1','LOCAL_URL_REQUIRED');
   signal=AbortSignal.any([AbortSignal.timeout(timeoutSeconds*1000),...(signal?[signal]:[])]);
   return new Promise((resolve,reject)=>{
     const req=http.request(u,{method,headers,signal},res=>{
       let size=0;const chunks=[];
-      res.on('data',b=>{size+=b.length;if(size>maxBytes)res.destroy(new Error('HTTP_RESPONSE_TOO_LARGE'));else chunks.push(b);});
+      // Read a bounded prefix for discovery (e.g. an HTML token). Finish only
+      // after the caller has recognized a complete value, before the large UI.
+      res.on('data',b=>{
+        const part=b.subarray(0,Math.max(0,maxBytes-size));size+=b.length;chunks.push(part);
+        if(stopWhen&&stopWhen(Buffer.concat(chunks))){resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)});res.destroy();}
+        else if(size>maxBytes)res.destroy(new Error('HTTP_RESPONSE_TOO_LARGE'));
+      });
       res.on('error',reject);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}));
     });
     req.setTimeout(timeoutSeconds*1000,()=>req.destroy(new Error('HTTP_TIMEOUT')));req.on('error',reject);req.end(body);

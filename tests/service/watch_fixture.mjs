@@ -38,6 +38,7 @@ export async function watchFixture({losePost=false,loseReserve=false,revision='f
       r.releasedAt=new Date().toISOString();return reply(r);
     }
     if(u.pathname==='/api/status')return reply({updatedAt:new Date().toISOString(),machines:[{id:'fixture-machine',status:'online'}]});
+    if(u.pathname==='/api/tasks/machines')return reply([{id:'fixture-machine',name:'CPU fixture',group:'fixture',host:'192.0.2.1',resourceKey:'ssh:192.0.2.1:22',enabled:true,status:'online',ready:true,reason:'ready',updatedAt:new Date().toISOString(),taskIds:[],reservationIds:[],continuationIds:[]}]);
     if(u.pathname==='/api/tasks/ready')return reply([{id:'fixture-machine',name:'CPU fixture',updatedAt:new Date().toISOString()}]);
     if(u.pathname==='/api/tasks'&&req.method==='POST') {
       posts++;const data=JSON.parse(body);job={...data,status,exitCode,selectedMachineId:'fixture-machine',createdAt:new Date().toISOString(),finishedAt:new Date().toISOString(),archiveReady:!archivePending};

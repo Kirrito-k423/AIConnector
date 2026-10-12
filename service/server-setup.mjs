@@ -27,12 +27,11 @@ const registryPath=c=>path.join(c.dataDir,'server-profiles.local.json');
 export function setupDigest(c){return sha(fs.readFileSync(c.file)+'\n'+(fs.existsSync(registryPath(c))?fs.readFileSync(registryPath(c),'utf8'):''));}
 export async function serverCatalog(c){
   need(c.node==='windows-inner','RECEIVER_ONLY');need(c.runner.agent.simpleHtmlWatch.enabled,'WATCH_NOT_ENABLED');
-  const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();
-  need(Array.isArray(env.ready),'INVALID_WATCH_CATALOG');
+  const rows=await new WatchClient(c.runner.agent.simpleHtmlWatch).machineInventory();
   // Only list explicit IDs reported by the controller; names do not prove hardware type.
-  const machines=env.ready.map(m=>({id:m.id,name:m.name||m.id,group:m.group||'',updated_at:m.updatedAt}));
+  const machines=rows.map(m=>({id:m.id,name:m.name||m.id,group:m.group||'',updated_at:m.updatedAt,enabled:m.enabled??null,status:m.status||'unknown',ready:m.ready??null,reason:m.reason||'unknown'}));
   need(machines.every(m=>typeof m.id==='string'&&m.id.length>0),'INVALID_WATCH_CATALOG');
-  return {config_sha256:setupDigest(c),observed_at:env.observed_at,machines,selected:c.runner.serverRegistry?json(c.runner.serverRegistry).machineIds:[],ready_is_not_npu_idle:true};
+  return {config_sha256:setupDigest(c),observed_at:new Date().toISOString(),query_complete:true,machines,selected:c.runner.serverRegistry?json(c.runner.serverRegistry).machineIds:[],ready_is_not_npu_idle:true};
 }
 export function serverReadiness(c){
   let disk,valid=false;

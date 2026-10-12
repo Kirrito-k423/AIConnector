@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
 import {agentConfig} from './agent-config.mjs';
 import {validateRegistry} from './server-registry.mjs';
+import {catalogProfile} from './watch-catalog.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const now = () => new Date().toISOString();
@@ -139,5 +140,10 @@ export function loadConfig(file) {
     need(typeof m.id==='string'&&m.id.length>0,'INVALID_MODEL_ID');
   }
   c.runner.agent=agentConfig(c.runner.agent,c.runner.model);
+  if(c.node==='windows-inner'&&c.runner.agent.simpleHtmlWatch.enabled){
+    need(!c.runner.profiles['watch-catalog']||c.runner.profiles['watch-catalog'].kind==='watch-catalog','SERVER_PROFILE_CONFLICT');
+    const registry=c.runner.serverRegistry?validateRegistry(json(c.runner.serverRegistry)):null;
+    c.runner.profiles['watch-catalog']={...catalogProfile(registry?.machineIds),authorizationRegistry:c.runner.serverRegistry||null,authorizationSha256:c.runner.serverRegistrySha||null};
+  }
   return c;
 }

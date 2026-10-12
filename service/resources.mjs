@@ -10,7 +10,7 @@ export class Resources {
   constructor(config,ledger,persist){Object.assign(this,{c:config,ledger,persist});}
   keys(profile,key){
     const shared=profile.resourceKeys||[];
-    if(profile.kind==='builtin-smoke')return ['run:'+key,...shared];
+    if(['builtin-smoke','watch-catalog'].includes(profile.kind))return ['run:'+key,...shared];
     if(profile.kind==='simplehtmlwatch'&&profile.machineId&&((this.c.runner.maxConcurrentRuns??1)>1||profile.machineIds))return [...(profile.machineIds||[profile.machineId]).map(id=>'watch:'+this.c.runner.agent.simpleHtmlWatch.baseUrl+':'+id),...shared];
     // Arbitrary command and maintenance grants may touch shared directories or
     // remote hosts. Keep them exclusive until their full footprint is declared.
@@ -26,6 +26,12 @@ export class Resources {
     });
   }
   async acquire(job,profile,task){
+    // This fixed diagnostic only GETs inventory and checks a local registry
+    // digest. It must remain readable while experiments/unknown intents hold
+    // resources; it neither acquires nor clears their leases or write grants.
+    if(profile.kind==='watch-catalog'){
+      job.resources={keys:['run:'+job.key],state:'held',acquired_at:now(),read_only:true};this.persist();return true;
+    }
     const keys=this.keys(profile,job.key),conflict=this.conflict(job,keys);
     if(conflict){job.wait_reason='RESOURCE_BUSY';job.wait_owner=conflict.key;return false;}
     job.resources??={keys,state:'waiting'};

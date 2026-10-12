@@ -226,9 +226,9 @@ let serverCatalog;
 $('discover-servers').onclick=async()=>{
   const b=$('discover-servers');b.disabled=true;$('save-servers').disabled=true;$('server-setup-notice').textContent='正在读取本机 simpleHtmlWatch…';
   try{serverCatalog=await api('/api/server-catalog');$('server-machines').replaceChildren();
-    for(const m of serverCatalog.machines){const label=el('label',undefined,'check'),box=el('input');box.type='checkbox';box.value=m.id;box.checked=serverCatalog.selected.includes(m.id);label.append(box,document.createTextNode(m.name+' · '+m.id+(m.group?' · '+m.group:'')));$('server-machines').append(label);}
+    for(const m of serverCatalog.machines){const label=el('label',undefined,'check'),box=el('input');box.type='checkbox';box.value=m.id;box.checked=serverCatalog.selected.includes(m.id);label.append(box,document.createTextNode(m.name+' · '+m.id+(m.group?' · '+m.group:'')+(m.reason?' · '+m.reason:'')));$('server-machines').append(label);}
     $('server-maintenance').checked=Boolean(state.service.runner?.profiles?.['server-maintenance']);
-    $('server-setup-notice').textContent=serverCatalog.machines.length?'选择需要接入的机器。保存不会自动启动服务器任务。':'当前没有可调度机器，请先检查 simpleHtmlWatch 的连接、队列与主机信任状态。';
+    $('server-setup-notice').textContent=serverCatalog.machines.length?'目录包含忙碌、离线及停用的机器。选择需要授权的机器；保存不会启动任务，ready 也不代表 NPU 空闲。':'控制器目录为空；请检查 simpleHtmlWatch 的机器配置。';
     $('save-servers').disabled=!serverCatalog.machines.length;
   }catch(e){$('server-setup-notice').textContent=e.message==='WATCH_NOT_ENABLED'?'先在 Pi 配置中启用 simpleHtmlWatch 并填写本机地址，再读取列表。':e.message;}finally{b.disabled=false;}
 };

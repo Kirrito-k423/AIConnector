@@ -46,6 +46,7 @@ export async function verifyTask(spec,dir,{execution,maintenance,profileWorkflow
   const noWorkloadRequired=['probe','smoke','maintenance'].includes(modeOf(spec.profile));
   const falseClaims=Object.entries(report?.metrics||{}).filter(([k,v])=>v===false&&
     !(k==='npu_workload_executed'&&noWorkloadRequired)&&
+    !(k==='ssh_executed'&&spec.profile.kind==='watch-catalog')&&
     (/(?:_completed|_validated|_executed|_loaded)$/.test(k)||k==='query_complete')).map(([k])=>k);
   const unknown=execution?.unknown||!execution&&(fs.existsSync(path.join(dir,'execution-intent.json'))||fs.existsSync(path.join(dir,'watch-task.json')))||Object.values(maintenance?.actions||{}).some(a=>a.state==='unknown'||a.state==='intent'||a.result?.unknown);
   const executionOK=spec.profile.kind==='maintenance'||Boolean(execution&&execution.exit_code===0&&!execution.revision_mismatch);

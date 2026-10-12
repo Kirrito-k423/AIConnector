@@ -13,6 +13,7 @@ import {WindowProfiler} from './window-profiler.mjs';
 import {timing,diagnostics} from './telemetry.mjs';
 
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
+import {publicWatchError} from './watch-catalog.mjs';
 import {validateProfileArchive} from './profile-data.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
@@ -169,6 +170,9 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
         const disk=JSON.parse(fs.readFileSync(c.file,'utf8'));disk.runner??={};
         need(data.agent&&typeof data.enabled==='boolean'&&data.profiles&&typeof data.profiles==='object'&&!Array.isArray(data.profiles),'INVALID_AGENT_SETTINGS');
         disk.runner={...disk.runner,agent:data.agent,enabled:data.enabled,profiles:data.profiles,timeoutSeconds:data.timeoutSeconds,maxTurns:data.maxTurns,...(data.maxConcurrentRuns!==undefined?{maxConcurrentRuns:data.maxConcurrentRuns}:{})};
+        // The read-only catalog grant is derived from the current local registry,
+        // not an editable copy of runtime authorization in the settings form.
+        disk.runner.profiles={...disk.runner.profiles};if(disk.runner.profiles['watch-catalog']?.kind==='watch-catalog')delete disk.runner.profiles['watch-catalog'];
         if(disk.runner.model&&data.modelLimits)disk.runner.model={...disk.runner.model,...data.modelLimits};
         if(disk.runner.serverRegistry){
           const registry=JSON.parse(fs.readFileSync(c.runner.serverRegistry,'utf8'));
@@ -183,7 +187,10 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
         const checks={};
         try{const a=snapshotAgent(c.runner.agent,path.dirname(c.file));checks.context={ok:true,sha256:a.contextDigest,files:a.contexts.map(f=>f.name)};}catch(e){checks.context={ok:false,error:cleanError(e)};}
         if(c.runner.agent.simpleHtmlWatch.enabled) {
-          try{const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();checks.simpleHtmlWatch={ok:true,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,observed_at:env.observed_at,ready:env.ready,ready_is_not_npu_idle:true};}catch(e){checks.simpleHtmlWatch={ok:false,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,error:cleanError(e)};}
+          try{const env=await new WatchClient(c.runner.agent.simpleHtmlWatch).environment();
+            checks.simpleHtmlWatch=env.query_complete?{ok:true,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,observed_at:env.observed_at,ready:env.ready,ready_is_not_npu_idle:true,catalog_complete:true,optional_errors:env.errors}:
+              {ok:false,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,error:env.catalog?.errors[0]?.code||'INVALID_WATCH_CATALOG',route:env.catalog?.errors[0]?.route||'unknown',phase:env.catalog?.errors[0]?.phase||'unknown'};
+          }catch(e){checks.simpleHtmlWatch={ok:false,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl,error:cleanError(e)};}
         }else checks.simpleHtmlWatch={enabled:false};
         if(c.runner.agent.simpleHtmlWatch.enabled&&(c.runner.maxConcurrentRuns??1)>1){
           try{const r=await new WatchClient(c.runner.agent.simpleHtmlWatch).call('/api/tasks/reservations');need(r.schema==='simplehtmlwatch.reservations.v1','WATCH_RESERVATIONS_REQUIRED');checks.reservations={ok:true,baseUrl:c.runner.agent.simpleHtmlWatch.baseUrl};}
@@ -210,7 +217,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
         need(Date.now()-(activity.last_manual_poll||0)>=15000,'POLL_TOO_FREQUENT');activity.last_manual_poll=Date.now();nextPoll=0;lastTick=0;void tick();reply(202,{queued:true});return;
       }
       reply(404,{error:'NOT_FOUND'});
-    }catch(e){reply(['UNAUTHORIZED','INVALID_HOST','INVALID_ORIGIN'].includes(e.message)?403:400,{error:cleanError(e),...(e.diagnostic?{diagnostic:e.diagnostic}:{})});}
+    }catch(e){reply(['UNAUTHORIZED','INVALID_HOST','INVALID_ORIGIN'].includes(e.message)?403:400,{error:cleanError(e),...(e.watch_route?{watch_error:publicWatchError(e)}:{}),...(e.diagnostic?{diagnostic:e.diagnostic}:{})});}
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(c.port,'127.0.0.1',resolve);});
   atomic(path.join(c.dataDir,'service-info.json'),JSON.stringify({pid:process.pid,url:origin,started_at:now()}));
