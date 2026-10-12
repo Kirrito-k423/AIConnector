@@ -78,3 +78,12 @@ test('Windows one-time owned authorization stores request identity in DPAPI and 
   await assert.rejects(dataCli(['authorize-owned','--config',config,'--profile','owned-files','--recipient',recipient,'--allow-public-ciphertext']),/EXPORT_PROFILE_EXISTS/);
  }finally{f.close();}
 });
+test('source parent containing the active workspace excludes self-generated files and reports selection completeness honestly',async()=>{
+ const f=await fixture();try{
+  const request=await encryptRequest({operation:'read',paths:[f.dir]},f.windows.recipient,f.spec.key),a={name:'input.zip',bytes:request.length,sha256:sha(request)};
+  fs.writeFileSync(path.join(f.job,'inputs',a.name),request);f.spec.task.artifacts=[a];f.spec.task.requirements.data_export.request_zip_sha256=a.sha256;
+  const transfer=await buildTransfer(f.spec,f.job,f.windows.identity,{signal:AbortSignal.timeout(3000)}),index=JSON.parse(fs.readFileSync(path.join(f.job,'work/transfer-index.json'))),manifest=await openTransferIndex(fs.readFileSync(path.join(f.job,'work/transfer-index.age')),index,f.mac.identity,f.spec.key);
+  assert.equal(transfer.state,'sealed');assert.equal(manifest.selection_complete,false);assert.equal(manifest.excluded.length,1);assert.equal(manifest.excluded[0].reason,'active-transfer-workspace');assert.ok(manifest.excluded[0].name.endsWith('/job'));
+  assert.equal(manifest.files.length,3);assert.ok(manifest.files.every(file=>!file.name.includes('/job/')));assert.equal(transfer.parts.length,3);
+ }finally{f.close();}
+});

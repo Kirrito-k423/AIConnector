@@ -47,7 +47,7 @@ Mac 创建接收身份（父目录预先存在；不要覆盖旧身份）：
 python3 /实际Skill路径/scripts/aic.py transfer \
   --profile owned-files --recipient-sha256 Mac公钥指纹 \
   --task-id transfer-001 --revision 1 --run-id run-001 \
-  --operation find --source '@home' --name 'NDS_实验复现报告.md'
+  --operation find --source '@home' --name '项目复现报告.md'
 ```
 
 `@home` 在 Windows 展开为当前账户主目录；`@roots` 展开为可见盘符。可重复 `--source` 指定多个绝对路径。`find` 是精确文件/目录名查找；`list` 列出指定目录一层；`read` 读取指定文件或递归目录。文件名、路径不得手工写入 Issue 文案。任务 ID、入口 ID 使用中性标识。新取件修改内容时使用新修订；重查状态、继续交付与断点续传使用原运行键。
@@ -70,6 +70,8 @@ python3 /实际Skill路径/scripts/aic.py result --key transfer-001/1/run-001
 Mac 接口只下载本次经校验索引声明的分块，限制为该运行 Release 的 `result--windows-inner--SHA.zip`，匿名下载，核对 SHA 和长度。每块的加密绑定含运行键、传输 ID、文件序号和偏移；错误私钥、篡改、跨运行混包、越界路径或哈希不符都拒绝。中断后重复**同一解密命令**即可从私有 `.aiconnector-partial` 目录继续；最终文件和回执只在完整验证后出现，不覆盖已有目标。
 
 读 `listing.json` 中的匹配路径和 `query_complete`，再用新的取件修订 `--operation read --source "实际Windows路径"` 取回报告和源码目录。列表只证明查找结果；文件回执只证明取件；不要在缺少源码、复现脚本、原始结果或版本信息时通知下游“资料齐备”。向其他会话或人员发消息仍需用户明确授权。
+
+读取父目录时，程序排除**本次传输的工作目录**，避免把新生成的密文和进度文件递归复制进自身。私有清单及本地回执记录 `excluded`，并将 `selection_complete=false`；返回文件的 `files_verified=true` 只说明已交付的文件逐项一致，不能忽略排除项称整个选择完整。这是运行时临时数据的排除，不是项目或目录权限白名单。
 
 ## Windows 一次性验收
 

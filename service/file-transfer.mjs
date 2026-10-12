@@ -54,19 +54,21 @@ export async function readTransferRequest(spec,dir,identity){
 }
 function safeName(name){return typeof name==='string'&&name.length<=32768&&name.split('/').every(p=>p&&p!=='.'&&p!=='..'&&!/[\\:\x00-\x1f]/.test(p)&&!/[. ]$/.test(p)&&! /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p));}
 const identity=(a,b)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeMs===b.mtimeMs&&a.ctimeMs===b.ctimeMs;
-async function* walk(file,name){
+async function* walk(file,name,{workspace,excluded}={}){
+  const normalize=p=>process.platform==='win32'?p.toLowerCase():p;
+  if(workspace&&normalize(path.resolve(file))===normalize(workspace)){excluded.push({name,reason:'active-transfer-workspace'});return;}
   const stat=await fs.promises.lstat(file);need(!stat.isSymbolicLink(),'EXPORT_LINK_FORBIDDEN');
   if(stat.isFile()){need(safeName(name),'INVALID_EXPORT_NAME');yield {file,name,stat};return;}
   need(stat.isDirectory(),'EXPORT_NOT_REGULAR_FILE');
   need(safeName(name),'INVALID_EXPORT_NAME');yield {file,name,stat,directory:true};
-  const d=await fs.promises.opendir(file);for await(const child of d){yield* walk(path.join(file,child.name),name+'/'+child.name);}
+  const d=await fs.promises.opendir(file);for await(const child of d){yield* walk(path.join(file,child.name),name+'/'+child.name,{workspace,excluded});}
   need(identity(stat,await fs.promises.lstat(file)),'EXPORT_DIRECTORY_CHANGED');
 }
 export async function buildTransfer(spec,dir,identityKey,{signal,checkGrant=()=>{}}={}){
   const request=await readTransferRequest(spec,dir,identityKey),stateFile=path.join(dir,'transfer-state.json');
   const previous=read(stateFile);if(previous){need(previous.key===spec.key&&previous.request_sha256===spec.task.requirements.data_export.request_zip_sha256,'TRANSFER_REQUEST_BINDING_MISMATCH');need(previous.state==='sealed','TRANSFER_INTERRUPTED');return previous;}
   const state={schema:'aiconnector.transfer-state.v1',key:spec.key,request_sha256:spec.task.requirements.data_export.request_zip_sha256,state:'reading',parts:[],started_at:now()};save(stateFile,state);
-  const files=[],directories=[],partDir=path.join(dir,'transfer-parts');fs.mkdirSync(partDir,{recursive:true,mode:0o700});
+  const files=[],directories=[],excluded=[],workspace=fs.realpathSync(dir),partDir=path.join(dir,'transfer-parts');fs.mkdirSync(partDir,{recursive:true,mode:0o700});
   const addPart=async(payload,record)=>{
     checkGrant();need(!signal?.aborted,'EXECUTION_TIMEOUT');
     const e=new Encrypter();e.addRecipient(spec.profile.delivery.recipient);const privateBytes=zipSync({'binding.json':strToU8(JSON.stringify({key:spec.key,...record})),'bytes':payload},{level:0});
@@ -90,7 +92,7 @@ export async function buildTransfer(spec,dir,identityKey,{signal,checkGrant=()=>
     files.push({name:'listing.json',bytes:bytes.length,sha256:hash,parts});
   }else for(const [selection,source] of request.paths.entries()){
     need(!(await fs.promises.lstat(source)).isSymbolicLink(),'EXPORT_LINK_FORBIDDEN');
-    for await(const item of walk(await fs.promises.realpath(source),'selection-'+selection+'/'+(path.basename(source)||'root'))){
+    for await(const item of walk(await fs.promises.realpath(source),'selection-'+selection+'/'+(path.basename(source)||'root'),{workspace,excluded})){
       if(item.directory){directories.push(item.name);continue;}
       checkGrant();const fd=fs.openSync(item.file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0));
       try{
@@ -108,7 +110,7 @@ export async function buildTransfer(spec,dir,identityKey,{signal,checkGrant=()=>
     }
   }
   checkGrant();need(!signal?.aborted,'EXECUTION_TIMEOUT');
-  const manifest={schema:'aiconnector.file-transfer.v1',key:spec.key,transferId,operation:request.operation,files,directories},plain=Buffer.from(JSON.stringify(manifest));
+  const manifest={schema:'aiconnector.file-transfer.v1',key:spec.key,transferId,operation:request.operation,files,directories,excluded,selection_complete:excluded.length===0},plain=Buffer.from(JSON.stringify(manifest));
   // Data size is not capped at one ZIP. Only the bounded index is an output.
   need(plain.length<3*1024*1024,'TRANSFER_INDEX_TOO_LARGE');const e=new Encrypter();e.addRecipient(spec.profile.delivery.recipient);const sealed=Buffer.from(await e.encrypt(plain));
   checkGrant();atomic(path.join(dir,'work','transfer-index.age'),sealed);
@@ -121,6 +123,8 @@ export async function openTransferIndex(bytes,index,identityKey,key){
   need(bytes.length<4*1024*1024&&index.schema==='aiconnector.transfer-index.v1'&&index.key===key&&index.sealed===true&&sha(bytes)===index.index_sha256&&sha(await identityToRecipient(identityKey))===index.recipient_sha256,'EXPORT_BINDING_MISMATCH');
   need(Array.isArray(index.parts)&&index.parts.length<=4096&&index.parts.every(p=>/^[a-f0-9]{64}$/.test(p.sha256)&&Number.isInteger(p.bytes)&&p.bytes>0&&p.bytes<5242880)&&new Set(index.parts.map(p=>p.sha256)).size===index.parts.length,'INVALID_TRANSFER_INDEX');
   const manifest=JSON.parse(await decrypt(bytes,identityKey));need(manifest.schema==='aiconnector.file-transfer.v1'&&manifest.key===key&&/^[a-f0-9]{32}$/.test(manifest.transferId)&&Array.isArray(manifest.files),'INVALID_TRANSFER_INDEX');
+  if(manifest.excluded===undefined&&manifest.selection_complete===undefined){manifest.excluded=[];manifest.selection_complete=true;}
+  need(Array.isArray(manifest.excluded)&&manifest.excluded.every(e=>safeName(e.name)&&e.reason==='active-transfer-workspace')&&typeof manifest.selection_complete==='boolean'&&manifest.selection_complete===(manifest.excluded.length===0),'INVALID_TRANSFER_INDEX');
   const names=new Set(),parts=new Map(index.parts.map(p=>[p.sha256,p])),used=new Set();
   need(Array.isArray(manifest.directories)&&manifest.directories.every(safeName),'INVALID_TRANSFER_INDEX');
   const dirs=new Set(manifest.directories.map(n=>n.toLowerCase()));need(dirs.size===manifest.directories.length,'INVALID_TRANSFER_INDEX');

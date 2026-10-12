@@ -85,7 +85,7 @@ test('owned transfer encrypts path requests before persistence and repeated subm
  const mac=await newExportIdentity(),win=await newExportIdentity(),profile=ownedTransferProfile(mac.recipient,win.recipient);
  const data=capabilities({node:'windows-inner',connector:{namespace:'fixture'},runner:{enabled:true,profiles:{files:profile},agent:{}}},{fileTransferIdentity:win.identity,fileTransferRecipient:win.recipient});
  const connector={call:async()=>({runs:[],outbox:[],receiver_capabilities:{data}}),close:async()=>{}};
- const request={task_id:'transfer',revision:1,run_id:'run',profile:'files',recipient_sha256:data.profiles[0].data_export.recipient_sha256,paths:['C:\\PRIVATE_PROJECT\\NDS_实验复现报告.md'],operation:'read'};
+ const request={task_id:'transfer',revision:1,run_id:'run',profile:'files',recipient_sha256:data.profiles[0].data_export.recipient_sha256,paths:['C:\\PRIVATE_PROJECT\\SYNTHETIC_REPORT.md'],operation:'read'};
  try{
   service=await start(file,{secrets:{},connector});const post=body=>fetch(service.url+'/api/transfers',{method:'POST',headers:{Authorization:'Bearer '+service.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
   const first=await post(request);assert.equal(first.status,202,JSON.stringify(await first.json()));const task=service.status().submissions[0].task,pin=task.requirements.data_export.request_zip_sha256;

@@ -62,7 +62,7 @@ async function retrieveTransfer(entries,identity,key,destination,resultSha,loadP
       try{fs.linkSync(path.join(stage,i+'.part'),target);}catch(e){if(!['ENOTSUP','EOPNOTSUPP','EXDEV','EPERM'].includes(e.code))throw e;fs.copyFileSync(path.join(stage,i+'.part'),target,fs.constants.COPYFILE_EXCL);}fs.chmodSync(target,0o600);
     }
     const receipt={schema:'aiconnector.file-receipt.v1',key,result_sha256:resultSha,decrypted:true,files_verified:true,verified_at:new Date().toISOString(),
-      files:manifest.files.map(f=>({name:f.name,sha256:f.sha256,bytes:f.bytes})),directories:manifest.directories,scope:'Files retrieved and verified; content acceptance is separate.'};
+      files:manifest.files.map(f=>({name:f.name,sha256:f.sha256,bytes:f.bytes})),directories:manifest.directories,selection_complete:manifest.selection_complete,excluded:manifest.excluded||[],scope:'Returned files verified; exclusions and content acceptance are separate.'};
     createFile(path.join(assembled,'.aiconnector-receipt.json'),JSON.stringify(receipt,null,2)+'\n');
     need(!fs.existsSync(destination),'EXPORT_DESTINATION_EXISTS');fs.renameSync(assembled,destination);fs.rmSync(stage,{recursive:true,force:true});return receipt;
   }catch(e){fs.rmSync(assembled,{recursive:true,force:true});throw e;}
@@ -113,7 +113,7 @@ export async function dataCli(args){
     }:undefined;
     const receipt=await decryptResult({result:path.resolve(option('result')),expectedSha:option('sha256'),identity:fs.readFileSync(file,'utf8').trim(),key,destination:path.resolve(option('destination')),loadPart});
     // Private file names and plaintext hashes stay in the local receipt.
-    return {key:receipt.key,decrypted:true,files_verified:true,file_count:receipt.files.length,result_sha256:receipt.result_sha256,receipt_saved:true};
+    return {key:receipt.key,decrypted:true,files_verified:true,file_count:receipt.files.length,selection_complete:receipt.selection_complete??true,excluded_count:receipt.excluded?.length||0,result_sha256:receipt.result_sha256,receipt_saved:true};
   }
   throw new Error('UNKNOWN_DATA_COMMAND');
 }
