@@ -1,5 +1,12 @@
 name: Windows file transfer activation repair
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/transfer-pairing-tests.yml'
+      - 'tools/enable_owned_transfer.mjs'
+      - 'service/data-cli.mjs'
+      - 'tests/service/data-cli.test.mjs'
+      - 'tests/service/transfer-pairing.test.mjs'
   workflow_dispatch:
 permissions:
   contents: read

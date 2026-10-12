@@ -50,9 +50,10 @@ export async function enableOwnedTransfer(recipient,{processes,parse=parseServic
 }
 if(import.meta.main){
   const args=process.argv.slice(2),i=args.indexOf('--recipient-text');
-  try{console.log(JSON.stringify(await enableOwnedTransfer(i<0?'':args[i+1]),null,2));}
+  try{const result=await enableOwnedTransfer(i<0?'':args[i+1]);console.log(args.includes('--human')?result.message:JSON.stringify(result,null,2));}
   catch(e){const code=/^[A-Z0-9_]+$/.test(e.message||'')?e.message:'ENABLE_TRANSFER_FAILED';
     const messages={RECEIVER_NOT_RUNNING:'请先打开 Windows AIConnector 看板，再双击本程序。',MULTIPLE_RECEIVERS:'检测到多个 Windows 接收服务，未修改任何配置。',FILE_TRANSFER_UPGRADE_REQUIRED:'请先升级 Windows AIConnector 到 0.7.15-rc.2。',EXPORT_RECIPIENT_MISMATCH:'现有入口绑定了另一台 Mac，未更换接收人。'};
-    console.error(JSON.stringify({ok:false,error:code,message:messages[code]||'启用未完成。请把这一行结果发给 Mac 侧，勿提供私钥或凭据。'}));process.exitCode=1;
+    const message=messages[code]||'启用未完成。请把这一行结果发给 Mac 侧，勿提供私钥或凭据。';
+    console.error(args.includes('--human')?message+' ('+code+')':JSON.stringify({ok:false,error:code,message}));process.exitCode=1;
   }
 }
