@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import {spawnSync} from 'node:child_process';
 import {parseServiceProcess,enableOwnedTransfer} from '../../tools/enable_owned_transfer.mjs';
 import {ROOT,loadConfig} from '../../service/common.mjs';
 import {newExportIdentity} from '../../service/file-export.mjs';
@@ -20,6 +21,15 @@ test('pairing discovers only absolute receiver start commands, including case an
 test('missing or ambiguous receivers never enable or replace a profile',async()=>{
   const key=await newExportIdentity();await assert.rejects(enableOwnedTransfer(key.recipient,{processes:[]}),/RECEIVER_NOT_RUNNING/);
   await assert.rejects(enableOwnedTransfer('bad',{processes:[]}),/INVALID_EXPORT_RECIPIENT/);
+});
+test('Windows double-click launcher exits clearly when no receiver is running and has valid PowerShell quoting',{skip:process.platform!=='win32'},async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC pairing launcher '));
+  try{
+    const key=await newExportIdentity(),launcher=path.join(dir,'Enable-file-transfer.cmd');
+    fs.copyFileSync(path.join(ROOT,'tools/enable_owned_transfer.cmd'),launcher);fs.copyFileSync(path.join(ROOT,'tools/enable_owned_transfer.mjs'),path.join(dir,'enable_owned_transfer.mjs'));fs.writeFileSync(path.join(dir,'mac-recipient.txt'),key.recipient+'\n');
+    const r=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/c',launcher],{encoding:'utf8',timeout:30000,env:{...process.env,AICONNECTOR_ENABLE_NO_PAUSE:'1'}});
+    assert.equal(r.status,1,r.stderr);assert.match(r.stdout,/Please open the AIConnector Windows dashboard first/);assert.equal(r.stderr,'');
+  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('Windows pairing calls the real installed library, reloads live secrets, preserves credentials and safely repeats',{skip:process.platform!=='win32'},async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC live pairing '));let service;

@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/transfer-pairing-tests.yml'
       - 'tools/enable_owned_transfer.mjs'
+      - 'tools/enable_owned_transfer.cmd'
       - 'service/data-cli.mjs'
       - 'tests/service/data-cli.test.mjs'
       - 'tests/service/transfer-pairing.test.mjs'
