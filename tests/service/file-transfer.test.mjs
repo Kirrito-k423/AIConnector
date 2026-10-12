@@ -80,6 +80,10 @@ test('Windows one-time owned authorization stores request identity in DPAPI and 
 });
 test('source parent containing the active workspace excludes self-generated files and reports selection completeness honestly',async()=>{
  const f=await fixture();try{
+  if(process.platform==='win32'){
+    const a=fs.realpathSync(f.job),b=path.join(await fs.promises.realpath(f.dir),'job'),sa=fs.lstatSync(a,{bigint:true}),sb=fs.lstatSync(b,{bigint:true});
+    console.log(JSON.stringify({fixture:'workspace-identity',path_strings_match:a.toLowerCase()===b.toLowerCase(),filesystem_identity_matches:sa.dev===sb.dev&&sa.ino===sb.ino}));
+  }
   const request=await encryptRequest({operation:'read',paths:[f.dir]},f.windows.recipient,f.spec.key),a={name:'input.zip',bytes:request.length,sha256:sha(request)};
   fs.writeFileSync(path.join(f.job,'inputs',a.name),request);f.spec.task.artifacts=[a];f.spec.task.requirements.data_export.request_zip_sha256=a.sha256;
   const transfer=await buildTransfer(f.spec,f.job,f.windows.identity,{signal:AbortSignal.timeout(3000)}),index=JSON.parse(fs.readFileSync(path.join(f.job,'work/transfer-index.json'))),manifest=await openTransferIndex(fs.readFileSync(path.join(f.job,'work/transfer-index.age')),index,f.mac.identity,f.spec.key);

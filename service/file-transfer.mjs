@@ -54,21 +54,25 @@ export async function readTransferRequest(spec,dir,identity){
 }
 function safeName(name){return typeof name==='string'&&name.length<=32768&&name.split('/').every(p=>p&&p!=='.'&&p!=='..'&&!/[\\:\x00-\x1f]/.test(p)&&!/[. ]$/.test(p)&&! /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(p));}
 const identity=(a,b)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeMs===b.mtimeMs&&a.ctimeMs===b.ctimeMs;
-async function* walk(file,name,{workspace,excluded}={}){
-  const normalize=p=>process.platform==='win32'?p.toLowerCase():p;
-  if(workspace&&normalize(path.resolve(file))===normalize(workspace)){excluded.push({name,reason:'active-transfer-workspace'});return;}
+async function* walk(file,name,{workspaceIdentity,excluded}={}){
   const stat=await fs.promises.lstat(file);need(!stat.isSymbolicLink(),'EXPORT_LINK_FORBIDDEN');
+  if(stat.isDirectory()&&workspaceIdentity){
+    // Windows may expose the same directory through 8.3 and long paths. Match
+    // the actual filesystem object, using exact BigInts instead of lossy IDs.
+    const actual=await fs.promises.lstat(file,{bigint:true});
+    if(actual.dev===workspaceIdentity.dev&&actual.ino===workspaceIdentity.ino){excluded.push({name,reason:'active-transfer-workspace'});return;}
+  }
   if(stat.isFile()){need(safeName(name),'INVALID_EXPORT_NAME');yield {file,name,stat};return;}
   need(stat.isDirectory(),'EXPORT_NOT_REGULAR_FILE');
   need(safeName(name),'INVALID_EXPORT_NAME');yield {file,name,stat,directory:true};
-  const d=await fs.promises.opendir(file);for await(const child of d){yield* walk(path.join(file,child.name),name+'/'+child.name,{workspace,excluded});}
+  const d=await fs.promises.opendir(file);for await(const child of d){yield* walk(path.join(file,child.name),name+'/'+child.name,{workspaceIdentity,excluded});}
   need(identity(stat,await fs.promises.lstat(file)),'EXPORT_DIRECTORY_CHANGED');
 }
 export async function buildTransfer(spec,dir,identityKey,{signal,checkGrant=()=>{}}={}){
   const request=await readTransferRequest(spec,dir,identityKey),stateFile=path.join(dir,'transfer-state.json');
   const previous=read(stateFile);if(previous){need(previous.key===spec.key&&previous.request_sha256===spec.task.requirements.data_export.request_zip_sha256,'TRANSFER_REQUEST_BINDING_MISMATCH');need(previous.state==='sealed','TRANSFER_INTERRUPTED');return previous;}
   const state={schema:'aiconnector.transfer-state.v1',key:spec.key,request_sha256:spec.task.requirements.data_export.request_zip_sha256,state:'reading',parts:[],started_at:now()};save(stateFile,state);
-  const files=[],directories=[],excluded=[],workspace=fs.realpathSync(dir),partDir=path.join(dir,'transfer-parts');fs.mkdirSync(partDir,{recursive:true,mode:0o700});
+  const files=[],directories=[],excluded=[],workspaceIdentity=fs.lstatSync(dir,{bigint:true}),partDir=path.join(dir,'transfer-parts');fs.mkdirSync(partDir,{recursive:true,mode:0o700});
   const addPart=async(payload,record)=>{
     checkGrant();need(!signal?.aborted,'EXECUTION_TIMEOUT');
     const e=new Encrypter();e.addRecipient(spec.profile.delivery.recipient);const privateBytes=zipSync({'binding.json':strToU8(JSON.stringify({key:spec.key,...record})),'bytes':payload},{level:0});
@@ -92,7 +96,7 @@ export async function buildTransfer(spec,dir,identityKey,{signal,checkGrant=()=>
     files.push({name:'listing.json',bytes:bytes.length,sha256:hash,parts});
   }else for(const [selection,source] of request.paths.entries()){
     need(!(await fs.promises.lstat(source)).isSymbolicLink(),'EXPORT_LINK_FORBIDDEN');
-    for await(const item of walk(await fs.promises.realpath(source),'selection-'+selection+'/'+(path.basename(source)||'root'),{workspace,excluded})){
+    for await(const item of walk(await fs.promises.realpath(source),'selection-'+selection+'/'+(path.basename(source)||'root'),{workspaceIdentity,excluded})){
       if(item.directory){directories.push(item.name);continue;}
       checkGrant();const fd=fs.openSync(item.file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0));
       try{
