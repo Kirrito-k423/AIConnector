@@ -134,7 +134,15 @@ export class Runner {
           const src=path.join(this.c.stateDir,'artifacts',artifact.sha256+'.zip'), bytes=fs.readFileSync(src);
           need(bytes.length===artifact.bytes&&sha(bytes)===artifact.sha256,'INPUT_HASH_MISMATCH');atomic(path.join(dir,'inputs',artifact.name),bytes);
         }
-        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,startupTimings:job.timings,reservation:job.resources?.remote,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
+        let exportAuthorization;
+        if(['file-export','file-transfer'].includes(profile.kind)){
+          // Pin the actual local grant and observe revocation while a claim was
+          // queued. Never copy remote task paths into filesystem permissions.
+          const bytes=fs.readFileSync(this.c.file),disk=JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,''));
+          need(JSON.stringify(disk.runner?.profiles?.[claim.task.environment.target])===JSON.stringify(profile),'EXPORT_AUTHORIZATION_CHANGED');
+          exportAuthorization={file:this.c.file,profileId:claim.task.environment.target,profileSha256:sha(JSON.stringify(profile))};
+        }
+        save(path.join(dir,'spec.json'),{key:row.key,task:claim.task,profile,agent,exportAuthorization,startupTimings:job.timings,reservation:job.resources?.remote,model:this.c.runner.model,timeoutSeconds:this.c.runner.timeoutSeconds,maxTurns:this.c.runner.maxTurns});
         job.state='launching';job.claimed_at=now();this.persist();
         const proxy=this.c.runner.proxy||'system';const modelEnv={};
         if(proxy!=='direct')for(const name of ['HTTP_PROXY','HTTPS_PROXY'])if(proxy!=='system'||process.env[name])modelEnv[name]=proxy==='system'?process.env[name]:proxy;
@@ -151,7 +159,7 @@ export class Runner {
           const text=sensitive.reduce((s,v)=>s.split(v).join('[REDACTED]'),stderr).slice(-8192);
           try{save(path.join(dir,'worker-exit.json'),{code,signal,at:now(),stderr:text});}catch{}
         });
-        child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||''}));
+        child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({apiKey:this.secrets.apiKey,githubToken:this.secrets.githubToken||process.env[this.c.connector.token_env]||'',...(profile.kind==='file-transfer'?{fileTransferIdentity:this.secrets.fileTransferIdentity}:{})}));
         child.on('error',()=>{job.state='unknown';job.error='WORKER_SPAWN_FAILED';this.persist();});
         job.pid=child.pid;job.state='running';job.timings.worker_spawned_at=now();timing(this.c.dataDir,'worker_spawned',{key:job.key});this.persist();child.unref();this.ledger.runner_error='';return;
       }catch(e){job.diagnostic=e.diagnostic;if(job.claimed_at&&job.state==='claiming'){this.blocked(job,cleanError(e));return;}job.state='unknown';job.error=cleanError(e);job.next_attempt=Math.max(job.next_attempt||0,e.retryAt||0);this.persist();return;}
@@ -200,6 +208,17 @@ export class Runner {
         job.delivery_attempts=(job.delivery_attempts||0)+1;job.timings.delivery_attempt_at=now();this.persist();
         timing(this.c.dataDir,'delivery_attempt',{key:job.key,attempt:job.delivery_attempts});
         const result=read(path.join(job.dir,'result.json'));need(result,'RESULT_MISSING');
+        const transfer=read(path.join(job.dir,'transfer-state.json'));
+        if(result.outcome==='succeeded'&&transfer){
+          need(transfer.state==='sealed'&&transfer.key===job.key,'TRANSFER_NOT_SEALED');
+          job.transfer_delivery={uploaded:transfer.parts.filter(p=>fs.existsSync(path.join(job.dir,'transfer-delivery',p.sha256+'.json'))).length,total:transfer.parts.length};
+          for(const part of transfer.parts){
+            const marker=path.join(job.dir,'transfer-delivery',part.sha256+'.json'),previous=read(marker);if(previous){need(previous.sha256===part.sha256&&previous.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');continue;}
+            const artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'transfer-parts',part.name)});
+            need(artifact.sha256===part.sha256&&artifact.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');save(marker,artifact);job.transfer_delivery.uploaded++;
+          }
+          this.persist();
+        }
         if(!job.artifact){job.timings.upload_queued_at??=now();this.persist();job.artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'result.zip')});job.timings.upload_confirmed_at=now();timing(this.c.dataDir,'upload_confirmed',{key:job.key,bytes:job.artifact.bytes});this.persist();}
         const completed={...result,artifacts:[job.artifact]};
         await this.connector.call('Complete',{key:job.key,data:completed});job.state='submitted';job.submitted_at=now();job.timings.result_queued_at=job.submitted_at;job.error='';timing(this.c.dataDir,'result_queued',{key:job.key});this.persist();

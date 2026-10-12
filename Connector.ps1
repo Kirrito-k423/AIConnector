@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Audit','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Audit','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','FetchTransferPart','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -1306,6 +1306,16 @@ function Local-Action {
         Queue $e; return @{ok=$true;key=$key;event_id=$e.event_id;state='queued'}
     }
     if ($Action -in @('Upload','UploadDiagnostics')) { return In-Scope ('upload:'+$Key) { Upload-Zip $File ($Action -ceq 'UploadDiagnostics') } }
+    if ($Action -eq 'FetchTransferPart') {
+        Need ($Node -ceq 'mac-outer' -and $script:Relay) 'TRANSFER_RECEIVER_ONLY'
+        $run=Get-Field (Runs) $Key
+        Need ($run -and $run.task.requirements.mode -ceq 'transfer' -and $run.phase -in @('result','receipt')) 'TRANSFER_RESULT_REQUIRED'
+        $a=Read-Json $File; Artifact-Valid $a
+        $identity=Identity-FromKey $Key; $expected=$script:C.artifact_prefixes[0]+(Run-Tag $identity)+'/result--windows-inner--'+$a.sha256+'.zip'
+        Need ($a.url -ceq $expected -and $a.name -ceq ('result--windows-inner--'+$a.sha256+'.zip')) 'ARTIFACT_RUN_MISMATCH'
+        $null=In-Scope ('transfer:'+$Key) { Fetch-Artifacts @($a) }
+        return @{verified=$true;sha256=$a.sha256;bytes=$a.bytes}
+    }
     if ($Action -eq 'RetryRejected') {
         $row=$null
         if ($script:State.outbox.ContainsKey($Key)) { $row=$script:State.outbox[$Key] }
@@ -1358,7 +1368,7 @@ function Serve-Requests {
             $request=Parse $line; $requestId=[string]$request.operation_id
             Need ($requestId -cmatch '^[a-zA-Z0-9_-]{1,96}$') 'INVALID_OPERATION_ID'
             $script:OperationId=$requestId
-            Need ($request.action -cin @('Submit','Poll','Audit','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
+            Need ($request.action -cin @('Submit','Poll','Audit','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','FetchTransferPart','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
             $script:Action=[string]$request.action; $script:OperationId=$requestId
             $script:Key=[string]$request.key; $script:File=[string]$request.file; $script:ClaimOwner=[string]$request.claim_owner
             Need ($script:Key.Length -le 300 -and $script:File.Length -le 4096 -and $script:ClaimOwner -cmatch '^(|[a-f0-9]{48})$') 'INVALID_TRANSPORT_ARGUMENT'

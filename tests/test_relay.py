@@ -489,5 +489,17 @@ class RelayTests(unittest.TestCase):
         state=self.read_state('mac-outer');self.assertGreater(state['next_poll'],time.time())
         self.assertEqual(self.run_cli('mac-outer','Upload','-Key',self.key,'-File',self.zip_path(),ok=False)['code'],'CHANNEL_COOLDOWN')
 
+    def test_transfer_part_download_is_run_bound_anonymous_and_cached(self):
+        self.task['requirements']={'mode':'transfer'};self.write_inputs();self.complete_flow()
+        artifact=self.run_cli('windows-inner','Upload','-Key',self.key,'-File',self.zip_path())
+        file=self.folder/'part-manifest.json';file.write_text(json.dumps(artifact))
+        result=self.run_cli('mac-outer','FetchTransferPart','-Key',self.key,'-File',file)
+        self.assertTrue(result['verified']);self.assertEqual(result['sha256'],artifact['sha256'])
+        self.assertEqual(set(self.ctx['artifact_auth']),{None})
+        before=len(self.ctx['artifact_auth']);self.run_cli('mac-outer','FetchTransferPart','-Key',self.key,'-File',file)
+        self.assertEqual(len(self.ctx['artifact_auth']),before)
+        bad={**artifact,'url':artifact['url'].replace('/run-1/', '/other-run/')};bad['url']=self.ctx['base']+'/assets/other/'+artifact['name'];file.write_text(json.dumps(bad))
+        self.assertEqual(self.run_cli('mac-outer','FetchTransferPart','-Key',self.key,'-File',file,ok=False)['code'],'ARTIFACT_RUN_MISMATCH')
+
 
 if __name__ == '__main__': unittest.main(verbosity=2)

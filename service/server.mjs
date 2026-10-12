@@ -14,10 +14,13 @@ import {timing,diagnostics} from './telemetry.mjs';
 
 import {serverCatalog,setupServers,serverReadiness} from './server-setup.mjs';
 import {publicWatchError} from './watch-catalog.mjs';
+import {transferTask} from './file-export.mjs';
+import {encryptRequest,ownedTransferTask} from './file-transfer.mjs';
+import {decodeInputArchive} from './inputs.mjs';
 import {validateProfileArchive} from './profile-data.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
-const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact,timings:j.timings,delivery_attempts:j.delivery_attempts,delivery_diagnostics:j.delivery_diagnostics});
+const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact,timings:j.timings,delivery_attempts:j.delivery_attempts,delivery_diagnostics:j.delivery_diagnostics,transfer_delivery:j.transfer_delivery});
 async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -35,7 +38,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
   const authFile=path.join(c.dataDir,'dashboard.token');
   if(!fs.existsSync(authFile))atomic(authFile,id());
   const token=fs.readFileSync(authFile,'utf8');
-  const connector=givenConnector??new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets);
+  const connector=givenConnector??new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets),transferIndexCache=new Map();
   let snapshot={runs:[],outbox:[]},busy=false,auditing=false,advertising=false,submitting=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0,nextAdvertise=0,nextAudit=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
   const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
@@ -134,10 +137,37 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
       }
       need(req.method==='POST'&&req.headers['content-type']==='application/json','INVALID_REQUEST');
       const data=await body(req);
+      if(url.pathname==='/api/transfers/fetch-part'){
+        need(c.node==='mac-outer'&&typeof data.key==='string'&&/^[a-f0-9]{64}$/.test(data.sha256),'INVALID_TRANSFER_PART');
+        const row=snapshot.runs.find(r=>r.key===data.key);need(row?.task?.requirements?.mode==='transfer'&&row.result?.outcome==='succeeded'&&row.result.artifacts?.length===1,'TRANSFER_RESULT_REQUIRED');
+        const a=row.result.artifacts[0],indexFile=path.join(c.stateDir,'artifacts',a.sha256+'.zip');
+        let index=transferIndexCache.get(a.sha256);
+        if(!index){const bytes=fs.readFileSync(indexFile);need(bytes.length===a.bytes&&sha(bytes)===a.sha256,'RESULT_HASH_MISMATCH');
+          const entries=decodeInputArchive(bytes);need(entries['transfer-index.json']?.length<=262144,'TRANSFER_INDEX_TOO_LARGE');index=JSON.parse(new TextDecoder().decode(entries['transfer-index.json']));
+          if(transferIndexCache.size>=16)transferIndexCache.delete(transferIndexCache.keys().next().value);transferIndexCache.set(a.sha256,index);
+        }
+        need(index.schema==='aiconnector.transfer-index.v1'&&index.key===data.key,'EXPORT_BINDING_MISMATCH');
+        const part=index.parts?.find(p=>p.sha256===data.sha256);need(part,'TRANSFER_PART_NOT_FOUND');
+        const [taskId,revision,runId]=data.key.split('/'),tag=`aic-v1.${c.connector.namespace}.${taskId}.r${revision}.${runId}`,name='result--windows-inner--'+part.sha256+'.zip';
+        const artifact={name,bytes:part.bytes,sha256:part.sha256,url:c.connector.artifact_prefixes[0]+tag+'/'+name};
+        const value=await connector.call('FetchTransferPart',{key:data.key,data:artifact});need(value.verified===true&&value.sha256===part.sha256,'TRANSFER_PART_NOT_VERIFIED');
+        reply(200,{verified:true,sha256:part.sha256,path:path.join(c.stateDir,'artifacts',part.sha256+'.zip')});return;
+      }
       if(url.pathname==='/api/server-setup'){const value=await setupServers(c,data);activity.capability_state='pending';lastTick=0;nextPoll=0;reply(200,{...value,saved:true,publication:{state:'pending',background:true}});return;}
       if(url.pathname==='/api/preflight'){reply(200,preflight(data.task,snapshot.receiver_capabilities?.data));return;}
       if(url.pathname==='/api/shutdown') {reply(202,{stopping:true});setImmediate(()=>void close());return;}
-      if(url.pathname==='/api/tasks') {
+      if(url.pathname==='/api/transfers'){
+        need(Object.keys(data).every(k=>['task_id','revision','run_id','profile','recipient_sha256','operation','paths','name'].includes(k)),'PRIVATE_TRANSFER_METADATA_FORBIDDEN');
+        if(data.paths){
+          const key=`${data.task_id}/${data.revision}/${data.run_id}`,requestDigest=sha(JSON.stringify(data)),existing=ledger.submissions[key];
+          if(existing){need(existing.request_digest===requestDigest,'RUN_IS_IMMUTABLE');reply(200,{key,state:existing.state});return;}
+          const profile=snapshot.receiver_capabilities?.data?.profiles?.find(p=>p.id===data.profile);
+          need(profile?.ready&&profile.data_export?.scope==='owned-filesystem'&&profile.data_export.request_recipient,'RECEIVER_TRANSFER_NOT_READY');
+          const bytes=await encryptRequest({operation:data.operation||'read',paths:data.paths,...(data.name?{name:data.name}:{})},profile.data_export.request_recipient,key);
+          data.task=ownedTransferTask({...data,request_recipient_sha256:profile.data_export.request_recipient_sha256,request_zip_sha256:sha(bytes)});data.zipBase64=bytes.toString('base64');data.requestDigest=requestDigest;
+        }else data.task=transferTask(data);
+      }
+      if(['/api/tasks','/api/transfers'].includes(url.pathname)) {
         need(c.node==='mac-outer','SENDER_ONLY');const task=data.task;
         need(task&&/^[a-z0-9][a-z0-9_-]{0,63}$/.test(task.task_id)&&/^[a-z0-9][a-z0-9_-]{0,63}$/.test(task.run_id)&&Number.isInteger(task.revision)&&task.revision>0,'INVALID_TASK_ID');
         need(task.title&&task.objective&&task.code?.revision&&task.code?.repository&&task.environment?.target&&task.invocation?.entry&&Array.isArray(task.invocation.arguments)&&Array.isArray(task.acceptance)&&task.acceptance.length>0&&Array.isArray(task.artifacts),'INVALID_TASK');
@@ -146,6 +176,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
         const digest=sha(JSON.stringify(data));const existing=ledger.submissions[key];
         if(existing){need(existing.digest===digest,'RUN_IS_IMMUTABLE');reply(200,{key,state:existing.state});return;}
         const checked=preflight(task,snapshot.receiver_capabilities?.data);
+        if(task.requirements.mode==='transfer')need(task.code.repository==='aiconnector-file-transfer'||!data.zipBase64,'TRANSFER_INPUT_FORBIDDEN');
         task.environment.target=checked.profile.id;task.invocation.entry=checked.profile.entry;
         task.receiver_config_sha256=checked.config_sha256;
         let zipFile,zipBytes;
@@ -155,7 +186,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
         }
         validateProfileArchive(task,zipBytes);
         if(zipBytes){zipFile=path.join(c.dataDir,'submissions',sha(key)+'.zip');atomic(zipFile,zipBytes);}
-        ledger.submissions[key]={key,digest,task,zipFile,state:'pending',error:'',created_at:now()};persist();timing(c.dataDir,'task_submitted',{key});lastTick=0;void submit();reply(202,{key,state:'pending'});return;
+        ledger.submissions[key]={key,digest,...(data.requestDigest?{request_digest:data.requestDigest}:{}),task,zipFile,state:'pending',error:'',created_at:now()};persist();timing(c.dataDir,'task_submitted',{key});lastTick=0;void submit();reply(202,{key,state:'pending'});return;
       }
       if(url.pathname==='/api/settings') {
         need(typeof data.githubToken==='string'&&typeof data.apiKey==='string','INVALID_CREDENTIALS');
@@ -202,6 +233,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
       }
       if(url.pathname==='/api/reload-agent'){
         const candidate=loadConfig(c.file);need(sha(JSON.stringify({node:candidate.node,connector:candidate.connector}))===binding&&candidate.dataDir===c.dataDir&&candidate.port===c.port,'RELOAD_IDENTITY_CHANGED');
+        Object.assign(secrets,await loadSecrets(candidate));
         for(const p of Object.values(candidate.runner.profiles))validateProfile(p);
         snapshotAgent(candidate.runner.agent,path.dirname(c.file));c.runner=candidate.runner;nextPoll=0;lastTick=0;reply(200,{reloaded:true,applies_to:'next_claim',version:VERSION});return;
       }

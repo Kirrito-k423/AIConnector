@@ -19,6 +19,8 @@ import {ProfileWorkflow} from './profile-workflow.mjs';
 import {canConfigureProfiles} from './profile-data.mjs';
 import {ModelTiming} from './model-timing.mjs';
 import {Progress} from './progress.mjs';
+import {sealExport} from './file-export.mjs';
+import {buildTransfer} from './file-transfer.mjs';
 
 // One disposable Pi process per run. Service restarts do not restart this process.
 export async function work(dir,secrets={}) {
@@ -64,6 +66,24 @@ export async function work(dir,secrets={}) {
     if(watch)return rememberExecution(await watch.run());
     need(!fs.existsSync(path.join(dir,'execution-intent.json')),'EXECUTION_UNKNOWN');
     const p=spec.profile;
+    if(['file-export','file-transfer'].includes(p.kind)){
+      need(spec.task.code.revision===p.revision,'CODE_REVISION_MISMATCH');
+      const checkGrant=()=>{
+        const a=spec.exportAuthorization;need(a?.file,'EXPORT_AUTHORIZATION_CHANGED');
+        const bytes=fs.readFileSync(a.file);
+        if(a.profileId){const selected=JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/,'')).runner?.profiles?.[a.profileId];need(selected&&sha(JSON.stringify(selected))===a.profileSha256,'EXPORT_AUTHORIZATION_CHANGED');}
+        else need(sha(bytes)===a.sha256,'EXPORT_AUTHORIZATION_CHANGED');
+      };
+      checkGrant();const started_at=now();event('export_started');
+      if(p.kind==='file-transfer'){
+        const transfer=await buildTransfer(spec,dir,secrets.fileTransferIdentity,{signal:abort.signal,checkGrant});event('export_sealed',{parts:transfer.parts.length});
+      }else{
+        const sealed=await sealExport(p,spec.key,{secrets:secretValues});checkGrant();need(!abort.signal.aborted,'EXECUTION_TIMEOUT');
+        atomic(path.join(workspace,'transfer.age'),sealed.bytes);atomic(path.join(workspace,'transfer.json'),JSON.stringify(sealed.evidence));event('export_sealed',{ciphertext_bytes:sealed.bytes.length});
+      }
+      const value={schema:'aiconnector.execution.v1',key:spec.key,actual_revision:p.revision,exit_code:0,outcome:'succeeded',unknown:false,started_at,ended_at:now(),time_source:'executor',stdout:'',stderr:'',revision_mismatch:false};
+      save(path.join(dir,'execution.json'),value);return rememberExecution(value);
+    }
     if(p.kind==='watch-catalog'){
       need(agent.simpleHtmlWatch.enabled,'WATCH_NOT_ENABLED');need(spec.task.code.revision===p.revision,'CODE_REVISION_MISMATCH');
       const started_at=now();event('catalog_started');

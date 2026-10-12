@@ -44,6 +44,12 @@ async function dashboard(t,data=fixture(),viewport={width:1440,height:900},route
   await page.waitForFunction(()=>document.querySelector('#node').textContent.includes('发送端')||document.querySelector('#node').textContent.includes('执行端'));
   return {page,data,requests,poll:()=>page.evaluate(()=>refresh())};
 }
+test('encrypted transfer receipt is shown as ciphertext integrity, with plaintext retrieval still pending',async t=>{
+  const data=fixture(),run=data.channel.runs.find(r=>r.phase==='receipt');run.task.requirements={mode:'transfer'};run.task.title='文件传输';
+  const {page}=await dashboard(t,data);await page.locator('[data-filter="confirmed"]').click();
+  assert.equal(await page.locator('.detail-heading .pill').textContent(),'密文已校验');
+  assert.match(await page.locator('[data-section="result"]').textContent(),/Mac 解密并核对每个文件后，才能确认取件成功/);
+});
 const keys=page=>page.locator('#runs .run').evaluateAll(nodes=>nodes.map(n=>n.dataset.key));
 
 test('task diagnostics downloads JSON and milestones show delivery segments',async t=>{

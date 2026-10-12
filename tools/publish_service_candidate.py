@@ -44,11 +44,12 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} validates frozen profile attachments before publication and model startup, adds an explicitly selected zero-model profile merge workflow, and returns authoritative usage limits and counts. '
-           'The package includes the pinned offline simpleHtmlWatch group-controller update. Upgrade the original Windows instance with its original data directory; configuration and unknown task/reservation state remain authoritative. '
-           'All group rank exit records are required before AIConnector releases a group. Lost responses and uncertain launch intents are queried by original ID, never replayed. '
-           f'Details and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/ISSUE-14-FIX.md\n\n'
-           'Fixture acceptance does not claim verification of the intranet proxy or A5 hardware.\n')
+           f'{version} adds model-free Windows-to-Mac file retrieval through the existing public Relay with end-to-end age encryption. '
+           'Requests, private paths, file names, contents and manifests are encrypted. Owned-filesystem read/list/find uses current account permissions without per-directory whitelists; chunked uploads and recipient retrieval resume from durable checkpoints. '
+           'Enable the file-transfer profile once with the Mac public recipient; no file export is enabled merely by upgrading. Ciphertext receipt is distinct from decrypted, per-file verified retrieval. '
+           'The package retains the pinned offline simpleHtmlWatch controller, original configuration, data directory and unknown task/reservation state. '
+           f'Setup and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/FILE-TRANSFER-0715.md\n\n'
+           'CI fixture acceptance does not prove real intranet file retrieval, NDS completeness or A5 hardware execution.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()
         # Never replace existing assets or releases silently; reruns fail visibly.

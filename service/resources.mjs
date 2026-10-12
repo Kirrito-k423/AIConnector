@@ -10,7 +10,7 @@ export class Resources {
   constructor(config,ledger,persist){Object.assign(this,{c:config,ledger,persist});}
   keys(profile,key){
     const shared=profile.resourceKeys||[];
-    if(['builtin-smoke','watch-catalog'].includes(profile.kind))return ['run:'+key,...shared];
+    if(['builtin-smoke','watch-catalog','file-export','file-transfer'].includes(profile.kind))return ['run:'+key,...shared];
     if(profile.kind==='simplehtmlwatch'&&profile.machineId&&((this.c.runner.maxConcurrentRuns??1)>1||profile.machineIds))return [...(profile.machineIds||[profile.machineId]).map(id=>'watch:'+this.c.runner.agent.simpleHtmlWatch.baseUrl+':'+id),...shared];
     // Arbitrary command and maintenance grants may touch shared directories or
     // remote hosts. Keep them exclusive until their full footprint is declared.

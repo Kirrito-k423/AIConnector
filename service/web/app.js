@@ -14,6 +14,7 @@ function notice(s,problem=false){$('notice').textContent=s;$('notice').classList
 const phase=r=>r.job?.state||r.phase;
 const error=r=>Boolean(r.error||r.job?.error||r.job?.resources?.state==='unknown'||r.result&&r.result.outcome!=='succeeded'||['unknown','blocked','conflict'].includes(phase(r)));
 const done=r=>['confirmed','receipt'].includes(phase(r));
+function phaseLabel(r){if(r.task?.requirements?.mode==='transfer')return ({running:'文件加密中',result:'密文已发布',receipt:'密文已校验',confirmed:'密文已校验'})[phase(r)]||labels[phase(r)]||phase(r);return labels[phase(r)]||phase(r);}
 const matches=(r,f)=>f==='all'||f==='confirmed'&&done(r)||f==='error'&&error(r)||f==='active'&&!done(r)&&!error(r);
 function activityTime(r){
   const j=r.job,w=j?.worker;
@@ -49,7 +50,7 @@ function renderRuns(visible){
     if(b._signature!==signature){
       const time=el('time',row.activity_at?date(row.activity_at):'活动时间未知');
       if(row.activity_at)time.dateTime=new Date(row.activity_at).toISOString();
-      b.replaceChildren(el('strong',row.task?.title||row.key),el('small',row.key),el('div',labels[phase(row)]||phase(row),'status'+(error(row)?' error':'')),time);
+      b.replaceChildren(el('strong',row.task?.title||row.key),el('small',row.key),el('div',phaseLabel(row),'status'+(error(row)?' error':'')),time);
       b.title=(row.task?.title||row.key)+'\n'+row.key;b._signature=signature;
     }
     b.classList.toggle('selected',row.key===selected);b.setAttribute('aria-pressed',String(row.key===selected));
@@ -85,7 +86,7 @@ function renderDetail(r){
   const same=detailKey===r.key,top=same?detail.scrollTop:0;
   const disclosureState=new Map([...detail.querySelectorAll('details[data-section]')].map(d=>[d.dataset.section,{open:d.open,scroll:d.querySelector('pre')?.scrollTop||0}]));
   const focusSection=same?document.activeElement?.closest('#detail details')?.dataset.section:null;
-  const header=el('div',undefined,'detail-heading');header.append(el('h2',r.task?.title||r.key),el('span',labels[phase(r)]||phase(r),'pill'+(error(r)?' error':'')));
+  const header=el('div',undefined,'detail-heading');header.append(el('h2',r.task?.title||r.key),el('span',phaseLabel(r),'pill'+(error(r)?' error':'')));
   detail.replaceChildren(header,el('div',r.key,'meta'));
   const links=el('div',undefined,'links');link(links,'任务 Issue ↗',r.issue_url);link(links,'本次 Release ↗',r.release_url);detail.append(links);
   if(!matches(r,filter))detail.append(el('p','当前任务已移出「'+filterLabels[filter]+'」，保留详情供查看。','selection-note'));
@@ -126,6 +127,7 @@ function renderDetail(r){
     if(d.artifact)link(milestones,'下载诊断 ZIP ↗',d.artifact.url);
   }
   detail.append(milestones);
+  if(r.job?.transfer_delivery)detail.append(el('p','密文分块回传：'+r.job.transfer_delivery.uploaded+' / '+r.job.transfer_delivery.total,'selection-note'));
   if(r.job?.wait_reason)detail.append(el('p','等待原因：'+r.job.wait_reason+(r.job.wait_owner?'；当前占用者：'+r.job.wait_owner:''),'selection-note'));
   if(r.job?.resources)detail.append(disclosure('resources','机器占用 · '+r.job.resources.state,el('pre',JSON.stringify(r.job.resources,null,2))));
   if(error(r))detail.append(el('p',String(r.error||r.job?.error||'实验未通过，请查看验收与结果。'),'error'));
@@ -139,6 +141,7 @@ function renderDetail(r){
   const result=el('section',undefined,'content-section');result.dataset.section='result';result.append(el('h3','接收的结果'));
   if(r.result){
     result.append(el('p',r.result.summary));
+    if(r.task?.requirements?.mode==='transfer')result.append(el('p','这是加密文件交付。密文回执仅确认下载完整；Mac 解密并核对每个文件后，才能确认取件成功。','selection-note'));
     const artifacts=el('div',undefined,'links');
     for(const a of r.result.artifacts||[])link(artifacts,'下载 '+a.name+' · '+a.bytes+' 字节 ↗',a.url);
     result.append(artifacts);

@@ -59,7 +59,7 @@ export class Connector {
       // Claims and completion parents first; a ready ZIP precedes a fresh scan.
       // Discovery ages within foreground work. Background diagnostics/audit
       // are best effort. No active HTTP request is preempted or replayed.
-      const priority={Status:0,Complete:0,Claim:0,Flush:0,Upload:1,Submit:2,Poll:3,Advertise:6,Audit:8,UploadDiagnostics:8}[action]??8;
+      const priority={Status:0,Complete:0,Claim:0,Flush:0,Upload:1,FetchTransferPart:2,Submit:2,Poll:3,Advertise:6,Audit:8,UploadDiagnostics:8}[action]??8;
       const waitTimer=setInterval(()=>timing(this.c.dataDir,'action_wait',{operation_id:operation,action,key,queue_wait_ms:Date.now()-queued,blocker_operation_id:this.activity?.running?this.activity.operation_id:undefined,blocker_action:this.activity?.running?this.activity.action:undefined}),10000);waitTimer.unref();
       let expiryTimer;
       const item={execute:async()=>{clearInterval(waitTimer);clearTimeout(expiryTimer);need(!expiresAt||Date.now()<expiresAt,'DIAGNOSTICS_DEADLINE_EXCEEDED');return execute();},resolve,reject,action,operation_id:operation,bypassed:0,priority,background:['Audit','Advertise','UploadDiagnostics'].includes(action),at:queued};

@@ -5,6 +5,8 @@ import {validateMaintenance} from './maintenance.mjs';
 import {validateWatchProfile} from './watch.mjs';
 import {canConfigureProfiles} from './profile-data.mjs';
 import {CATALOG_REVISION,validateCatalogHosts} from './watch-catalog.mjs';
+import {validateExportProfile,validateTransferTask} from './file-export.mjs';
+import {validateOwnedProfile} from './file-transfer.mjs';
 
 export const VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'))).version;
 export const modeOf=p=>p.kind==='builtin-smoke'?'smoke':p.kind==='maintenance'?'maintenance':p.mode||'experiment';
@@ -27,7 +29,8 @@ export function checkRequirements(task,p,agent={}) {
   need(!task.requirements.profile_workflow||canConfigureProfiles(p),'PROFILE_WORKFLOW_NOT_AUTHORIZED');
   need(!task.requirements.execution_mode||engineOf(p)===task.requirements.execution_mode,'EXECUTION_MODE_MISMATCH');
   need(!task.requirements.catalog_hosts||p.kind==='watch-catalog','CATALOG_PROFILE_REQUIRED');
-  if(task.requirements.resources){const r=task.requirements.resources;need((p.kind==='watch-catalog'?0:p.machineIds?.length||1)===r.machine_count&&(!r.atomic_group||p.machineIds)&&(!r.group_sha256||r.group_sha256===sha(JSON.stringify(p.machineIds))),'RESOURCE_REQUIREMENTS_MISMATCH');}
+  if(task.requirements.data_export){need(['file-export','file-transfer'].includes(p.kind)&&sha(p.delivery.recipient)===task.requirements.data_export.recipient_sha256,'EXPORT_RECIPIENT_MISMATCH');if(p.kind==='file-transfer')need(sha(p.delivery.requestRecipient)===task.requirements.data_export.request_recipient_sha256,'TRANSFER_IDENTITY_MISMATCH');}
+  if(task.requirements.resources){const r=task.requirements.resources;need((['watch-catalog','file-export','file-transfer'].includes(p.kind)?0:p.machineIds?.length||1)===r.machine_count&&(!r.atomic_group||p.machineIds)&&(!r.group_sha256||r.group_sha256===sha(JSON.stringify(p.machineIds))),'RESOURCE_REQUIREMENTS_MISMATCH');}
   const required=task.requirements.tools||[];
   need(Array.isArray(required)&&required.every(x=>typeof x==='string'),'INVALID_REQUIRED_TOOLS');
   const available=toolsFor(p,agent);
@@ -43,7 +46,8 @@ export function checkRequirements(task,p,agent={}) {
 export function checksFor(p){return [...(p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id)),...(canConfigureProfiles(p)?['server-profiles-loaded']:[]),...(p.machineIds?['group-processes-stopped']:[])];}
 export function validateRequirements(task){
   const r=task?.requirements;
-  need(r&&['smoke','probe','maintenance','experiment'].includes(r.mode),'TASK_REQUIREMENTS_REQUIRED');
+  need(r&&['smoke','probe','maintenance','experiment','transfer'].includes(r.mode),'TASK_REQUIREMENTS_REQUIRED');
+  if(r.mode==='transfer')validateTransferTask(task);else need(r.data_export===undefined,'INVALID_EXPORT_REQUIREMENTS');
   need(Array.isArray(r.tools||[])&&(r.tools||[]).length<=32&&(r.tools||[]).every(t=>typeof t==='string'&&t.length<=64),'INVALID_REQUIRED_TOOLS');
   need(Array.isArray(r.checks)&&r.checks.length>0&&r.checks.length<=16&&r.checks.every(t=>typeof t==='string'&&t.length<=40),'INVALID_REQUIRED_CHECKS');
   need(r.execution_mode===undefined||['pi','direct'].includes(r.execution_mode),'INVALID_EXECUTION_MODE');
@@ -59,7 +63,8 @@ export function validateRequirements(task){
 export function validateProfile(p){
   need(['pi','direct'].includes(engineOf(p))&&!(engineOf(p)==='direct'&&p.kind==='maintenance'),'INVALID_EXECUTION_MODE');
   need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');
-  need(['builtin-smoke','watch-catalog','maintenance','command','simplehtmlwatch'].includes(p.kind),'INVALID_PROFILE');
+  need(['builtin-smoke','watch-catalog','maintenance','command','simplehtmlwatch','file-export','file-transfer'].includes(p.kind),'INVALID_PROFILE');
+  if(p.kind==='file-export')validateExportProfile(p);else if(p.kind==='file-transfer')validateOwnedProfile(p);else need(p.mode!=='transfer','INVALID_EXPORT_PROFILE');
   if(p.kind==='watch-catalog')need(engineOf(p)==='direct'&&p.mode==='probe'&&p.revision===CATALOG_REVISION&&p.entry==='server-catalog'&&p.repository==='aiconnector-watch-catalog'&&
     Array.isArray(p.outputs)&&p.outputs.length===1&&p.outputs[0]==='server-catalog.json'&&(p.authorizedMachineIds===null||Array.isArray(p.authorizedMachineIds)&&p.authorizedMachineIds.length<=12),'INVALID_CATALOG_PROFILE');
   if(p.kind==='builtin-smoke')return;
@@ -75,9 +80,11 @@ export function validateProfile(p){
   }
 }
 export function capabilities(c,secrets={},snapshot) {
-  const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);if(['simplehtmlwatch','watch-catalog'].includes(p.kind))need(c.runner.agent.simpleHtmlWatch?.enabled,'WATCH_NOT_ENABLED');if(engineOf(p)!=='direct')for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
-    return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,execution_mode:engineOf(p),resources:{machine_count:p.kind==='watch-catalog'?0:p.machineIds?.length||1,atomic_group:Boolean(p.machineIds),...(p.machineIds?{group_sha256:sha(JSON.stringify(p.machineIds))}:{})},
+  const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);if(p.kind==='file-transfer')need(secrets.fileTransferIdentity&&secrets.fileTransferRecipient===p.delivery.requestRecipient,'TRANSFER_IDENTITY_REQUIRED');if(['simplehtmlwatch','watch-catalog'].includes(p.kind))need(c.runner.agent.simpleHtmlWatch?.enabled,'WATCH_NOT_ENABLED');if(engineOf(p)!=='direct')for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
+    return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,execution_mode:engineOf(p),resources:{machine_count:['watch-catalog','file-export','file-transfer'].includes(p.kind)?0:p.machineIds?.length||1,atomic_group:Boolean(p.machineIds),...(p.machineIds?{group_sha256:sha(JSON.stringify(p.machineIds))}:{})},
       ...(p.kind==='watch-catalog'?{catalog:{schema:'aiconnector.watch-catalog.v1',host_sha256_filter:true,max_hosts:12,scope:'inventory-only'}}:{}),
+      ...(p.kind==='file-export'?{data_export:{schema:'aiconnector.sealed-export.v1',format:'age-v1',recipient_sha256:sha(p.delivery?.recipient||''),max_bytes:p.export?.maxBytes,public_ciphertext_authorized:p.delivery?.allowPublicCiphertext===true,scope:'fixed-local-files'}}:{}),
+      ...(p.kind==='file-transfer'?{data_export:{schema:'aiconnector.transfer-index.v1',format:'age-v1',recipient_sha256:sha(p.delivery?.recipient||''),request_recipient:p.delivery?.requestRecipient,request_recipient_sha256:sha(p.delivery?.requestRecipient||''),public_ciphertext_authorized:p.delivery?.allowPublicCiphertext===true,scope:'owned-filesystem',operations:['read','list','find'],chunked:true}}:{}),
       tools:toolsFor(p,c.runner.agent),checks:checksFor(p),...(canConfigureProfiles(p)?{profile_workflow:{schema:'aiconnector.profile-workflow.v1',direct:true}}:{}),
     ...(p.revision?{revision:p.revision}:{}),
     ...(p.kind==='builtin-smoke'?{revision:'builtin-smoke-v1'}:{}),
@@ -97,6 +104,8 @@ export function preflight(task,remote) {
   const match=p=>p.ready!==false&&p.mode===task.requirements.mode&&(task.requirements.tools||[]).every(t=>p.tools.includes(t))&&
     (!task.requirements.profile_workflow||p.profile_workflow?.direct===true)&&
     (!task.requirements.catalog_hosts||p.catalog?.host_sha256_filter===true)&&
+    (!task.requirements.data_export||p.data_export?.format===task.requirements.data_export.format&&p.data_export?.recipient_sha256===task.requirements.data_export.recipient_sha256&&p.data_export?.public_ciphertext_authorized===true)&&
+    (!task.requirements.data_export?.request_recipient_sha256||p.data_export?.request_recipient_sha256===task.requirements.data_export.request_recipient_sha256)&&
     (task.requirements.checks||[]).every(t=>p.checks.includes(t))&&p.repository===task.code.repository&&(!task.requirements.execution_mode||(p.execution_mode||'pi')===task.requirements.execution_mode)&&
     (!task.requirements.resources||p.resources&&p.resources.machine_count===task.requirements.resources.machine_count&&(!task.requirements.resources.atomic_group||p.resources.atomic_group)&&(!task.requirements.resources.group_sha256||task.requirements.resources.group_sha256===p.resources.group_sha256));
   const candidates=remote.profiles.filter(match);
