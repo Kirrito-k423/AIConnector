@@ -35,10 +35,14 @@ export async function enableOwnedTransfer(recipient,{processes,parse=parseServic
   const {loadConfig,sha}=await load('common.mjs'),{localRequest}=await load('http.mjs'),{dataCli}=await load('data-cli.mjs'),{validateOwnedProfile}=await load('file-transfer.mjs');
   const c=loadConfig(active.config),token=fs.readFileSync(path.join(c.dataDir,'dashboard.token'),'utf8');
   const request=async(route,body)=>{
-    const r=await localRequest(`http://127.0.0.1:${c.port}${route}`,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),timeoutSeconds:15});
+    const r=await localRequest(`http://127.0.0.1:${c.port}${route}`,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),maxBytes:body?16384:1048576,timeoutSeconds:15});
     need(r.status===200,'RECEIVER_API_FAILED');return JSON.parse(r.body);
   };
-  const status=await request('/api/status');need(status.schema==='aiconnector.dashboard.v1'&&status.service?.node==='windows-inner','WRONG_RECEIVER');
+  // /api/status contains the entire task history. Activation needs only the
+  // authenticated local identity and capabilities, whose size is independent
+  // of the number or size of historical tasks. Keep HTTP response limits.
+  const before=(await request('/api/capabilities')).local;
+  need(before?.schema==='aiconnector.capabilities.v1'&&before.node==='windows-inner','WRONG_RECEIVER');
   const existing=c.runner.profiles['owned-files'];
   if(existing){
     validateOwnedProfile(existing);need(existing.delivery.recipient===recipient,'EXPORT_RECIPIENT_MISMATCH');
