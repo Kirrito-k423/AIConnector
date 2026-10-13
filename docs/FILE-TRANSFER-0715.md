@@ -16,6 +16,8 @@ AIConnector 现在将文件传输与实验执行分开。文件取回由固定�
 
 先升级**原** Mac 与 Windows 服务，保留配置、凭据、数据目录、运行和资源锁。以下命令在对应安装目录执行；真实配置可以仍位于旧安装目录。
 
+已经安装 0.7.15-rc.2 的当前配对实例，可以保持 Windows 看板打开，下载 [v2 启用小修复包](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.7.15-rc.2/AIConnector-FileTransfer-Enable-Windows-v2.zip)，全部解压后双击 `Enable-file-transfer.cmd`。它自动找到原服务并核验，适用于旧命令静默退出或 [Issue #15](ISSUE-15-FIX.md) 的历史响应过大问题。包内 Mac 公钥必须是本次接收方的公钥；不要把这个配对包用于其他 Mac。
+
 Mac 创建接收身份（父目录预先存在；不要覆盖旧身份）：
 
 ```sh
