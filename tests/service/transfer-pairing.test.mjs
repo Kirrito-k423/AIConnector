@@ -7,7 +7,7 @@ import http from 'node:http';
 import {spawn,spawnSync,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {parseServiceProcess,enableOwnedTransfer} from '../../tools/enable_owned_transfer.mjs';
-import {ROOT,loadConfig,sha} from '../../service/common.mjs';
+import {ROOT,loadConfig,sha,save,read} from '../../service/common.mjs';
 import {newExportIdentity} from '../../service/file-export.mjs';
 import {ownedTransferProfile} from '../../service/file-transfer.mjs';
 import {storeSecrets,loadSecrets} from '../../service/vault.mjs';
@@ -86,16 +86,18 @@ test('Windows double-click discovers the real CLI via CIM and enables an existin
   fs.writeFileSync(config,JSON.stringify({schema:'aiconnector.service.v1',node:'windows-inner',port,dataDir,connectorConfig:connectorFile,powershell,runner:{enabled:true,profiles:{smoke}}}));
   const c=loadConfig(config),old={apiKey:'SYNTHETIC_PAIR_MODEL'},mac=await newExportIdentity();await storeSecrets(c,old);
   const submissions=Object.fromEntries(Array.from({length:120},(_,i)=>{const key=`history-${i}/1/complete`;return [key,{key,state:'queued',task:{objective:'H'.repeat(16384)}}];}));
-  fs.writeFileSync(path.join(dataDir,'service.json'),JSON.stringify({binding:sha(JSON.stringify({node:c.node,connector:c.connector})),jobs:{},submissions}));
+  save(path.join(dataDir,'service.json'),{binding:sha(JSON.stringify({node:c.node,connector:c.connector})),jobs:{},submissions});
   fs.copyFileSync(path.join(ROOT,'tools/enable_owned_transfer.cmd'),launcher);fs.copyFileSync(path.join(ROOT,'tools/enable_owned_transfer.mjs'),path.join(dir,'enable_owned_transfer.mjs'));fs.writeFileSync(path.join(dir,'mac-recipient.txt'),mac.recipient+'\n');
   const request=async(route,body)=>{
     const r=await fetch(`http://127.0.0.1:${port}${route}`,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(3000)});assert.equal(r.status,200);return r;
   };
   try{
-    child=spawn(node,[path.join(installed,'service','cli.mjs'),'start','--config',config],{stdio:'ignore',windowsHide:true});
+    let serviceError='';
+    child=spawn(node,[path.join(installed,'service','cli.mjs'),'start','--config',config],{stdio:['ignore','ignore','pipe'],windowsHide:true});
+    child.stderr.setEncoding('utf8');child.stderr.on('data',b=>{serviceError=(serviceError+b).slice(-4096);});
     let ready=false;
     for(let i=0;i<150;i++){
-      assert.equal(child.exitCode,null,'original service must remain running');
+      assert.equal(child.exitCode,null,'original service must remain running: '+serviceError);
       try{token=fs.readFileSync(path.join(dataDir,'dashboard.token'),'utf8');const cap=await(await request('/api/capabilities')).json();if(cap.local.node==='windows-inner'){ready=true;break;}}catch{}
       await new Promise(r=>setTimeout(r,100));
     }
@@ -108,7 +110,7 @@ test('Windows double-click discovers the real CLI via CIM and enables an existin
     const secrets=await loadSecrets(c);assert.equal(secrets.apiKey,old.apiKey);assert.match(secrets.fileTransferIdentity,/^AGE-SECRET-KEY-/);
     const before=fs.readFileSync(config),again=await enableOwnedTransfer(mac.recipient);assert.equal(again.already_enabled,true);assert.deepEqual(fs.readFileSync(config),before);
     assert.equal((await loadSecrets(c)).fileTransferIdentity,secrets.fileTransferIdentity);
-    const state=JSON.parse(fs.readFileSync(path.join(dataDir,'service.json')));assert.equal(Object.keys(state.submissions).length,120);assert.deepEqual(state.jobs,{});assert.deepEqual(JSON.parse(before).runner.profiles.smoke,smoke);
+    const state=read(path.join(dataDir,'service.json'));assert.equal(Object.keys(state.submissions).length,120);assert.deepEqual(state.jobs,{});assert.deepEqual(JSON.parse(before).runner.profiles.smoke,smoke);
     assert.doesNotMatch(r.stdout+r.stderr,/AGE-SECRET-KEY-|SYNTHETIC_PAIR_MODEL/);
     const manifest=path.join(installed,'package-manifest.json');t.diagnostic(JSON.stringify({history_bytes:historyBytes,installed_source:fs.existsSync(manifest)?JSON.parse(fs.readFileSync(manifest)).source_revision:'checkout',actual_cim:true,actual_double_click:true}));
   }finally{
