@@ -44,12 +44,13 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} adds model-free Windows-to-Mac file retrieval through the existing public Relay with end-to-end age encryption. '
-           'Requests, private paths, file names, contents and manifests are encrypted. Owned-filesystem read/list/find uses current account permissions without per-directory whitelists; chunked uploads and recipient retrieval resume from durable checkpoints. '
-           'Enable the file-transfer profile once with the Mac public recipient; no file export is enabled merely by upgrading. Ciphertext receipt is distinct from decrypted, per-file verified retrieval. '
+           f'{version} adds locally authorized shared machine pools, persistent waiting feedback visible on Mac, and Warning/Alarm execution with recorded health evidence. '
+           'Busy resources remain queued without model calls; selected single-node or atomic group reservations are reconciled by original IDs after lost replies. Queue IPs are owner-authorized; default execution metadata uses machine IDs and safe errors (Issue #16). '
+           'Fixed experimental environments are not silently replaced. Existing health-only OK gates must adopt the bundled npu_health_gate.py; NPU process, capacity and correctness checks remain separate. '
+           'Encrypted file retrieval and Issue #15 compact activation checks remain included. '
            'The package retains the pinned offline simpleHtmlWatch controller, original configuration, data directory and unknown task/reservation state. '
-           f'Setup and Windows acceptance: https://github.com/{repo}/blob/{commit}/docs/FILE-TRANSFER-0715.md\n\n'
-           'CI fixture acceptance does not prove real intranet file retrieval, NDS completeness or A5 hardware execution.\n')
+           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/SHARED-SCHEDULING-0716.md\n\n'
+           'CI fixture acceptance does not prove real intranet deployment, A5 hardware health or T3/T4 execution.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()
         # Never replace existing assets or releases silently; reruns fail visibly.

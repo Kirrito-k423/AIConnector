@@ -52,6 +52,21 @@ test('encrypted transfer receipt is shown as ciphertext integrity, with plaintex
 });
 const keys=page=>page.locator('#runs .run').evaluateAll(nodes=>nodes.map(n=>n.dataset.key));
 
+test('Mac shows receiver queue IPs as dated observations without changing completed runs',async t=>{
+  const data=fixture();
+  data.capabilities={receiver:{generated_at:at('12:00'),scheduler:{waiting:[
+    {key:'a-recent/1/run',reason:'NO_AVAILABLE_MACHINE',queue:{observed_at:at('12:00'),machines:[{id:'machine-1',host:'192.0.2.1',reason:'任务占用'}]}},
+    {key:'b-receipt/1/run',reason:'STALE_QUEUE',queue:{machines:[]}}
+  ]}}};
+  const {page}=await dashboard(t,data);
+  assert.match(await page.locator('.detail-heading .pill').textContent(),/等待资源/);
+  assert.match(await page.locator('[data-section="queue"]').textContent(),/192\.0\.2\.1.*任务占用/);
+  assert.match(await page.locator('[data-section="queue"]').textContent(),/实际状态可能已变化/);
+  await page.locator('[data-filter="confirmed"]').click();
+  assert.match(await page.locator('.detail-heading .pill').textContent(),/已回执/);
+  assert.equal(await page.locator('[data-section="queue"]').count(),0);
+});
+
 test('task diagnostics downloads JSON and milestones show delivery segments',async t=>{
   const key='b-receipt/1/run',url='/api/diagnostics?key='+encodeURIComponent(key);
   const expected={schema:'aiconnector.diagnostics.v1',key,events:[{kind:'upload_confirmed'}]};

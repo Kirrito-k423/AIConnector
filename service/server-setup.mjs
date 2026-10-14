@@ -62,6 +62,12 @@ export async function setupServers(c,data){
   need(!disk.runner.profiles['server-maintenance']||disk.runner.profiles['server-maintenance'].maintenance?.files?.['server-registry']?.path===file,'SERVER_PROFILE_CONFLICT');
   const registry={schema:'aiconnector.server-registry.v1',machineIds:data.machineIds,profiles:{...old?.profiles}};
   for(const machine of data.machineIds){const id='server-probe-'+sha(machine).slice(0,12);if(!registry.profiles[id])registry.profiles[id]=probeProfile(machine);}
+  // Same fixed probe on any locally authorized node; experiments keep their
+  // pinned environment until their owner explicitly declares interchangeability.
+  if(!registry.profiles['server-probe-pool']){
+    const pool={...probeProfile(data.machineIds[0]),executionMode:'direct',machinePool:[...data.machineIds],machineCount:1};delete pool.machineId;
+    registry.profiles['server-probe-pool']=pool;
+  }
   validateRegistry(registry);
   for(const id of Object.keys(registry.profiles))need(!Object.hasOwn(disk.runner.profiles,id),'SERVER_PROFILE_CONFLICT');
   disk.runner.serverRegistry=file;

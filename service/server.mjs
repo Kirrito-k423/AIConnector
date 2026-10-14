@@ -20,7 +20,7 @@ import {decodeInputArchive} from './inputs.mjs';
 import {validateProfileArchive} from './profile-data.mjs';
 
 const files={'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8']};
-const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact,timings:j.timings,delivery_attempts:j.delivery_attempts,delivery_diagnostics:j.delivery_diagnostics,transfer_delivery:j.transfer_delivery});
+const publicJob=j=>({key:j.key,state:j.state,error:j.error,diagnostic:j.diagnostic,recovery:j.recovery,resources:j.resources,wait_reason:j.wait_reason,wait_owner:j.wait_owner,queue_feedback:j.queue_feedback,created_at:j.created_at,claimed_at:j.claimed_at,submitted_at:j.submitted_at,confirmed_at:j.confirmed_at,worker:j.worker,process_exit:j.process_exit,process_failure:j.process_failure,artifact:j.artifact,timings:j.timings,delivery_attempts:j.delivery_attempts,delivery_diagnostics:j.delivery_diagnostics,transfer_delivery:j.transfer_delivery});
 async function body(req) {
   let chunks=[],size=0;for await(const b of req){size+=b.length;need(size<=8*1024*1024,'REQUEST_TOO_LARGE');chunks.push(b);}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -41,7 +41,7 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
   const connector=givenConnector??new Connector(c,secrets),runner=new Runner(c,connector,ledger,persist,secrets),transferIndexCache=new Map();
   let snapshot={runs:[],outbox:[]},busy=false,auditing=false,advertising=false,submitting=false,supervising=false,flushing=false,flushNeeded=false,stopping=false,lastTick=0,nextPoll=0,nextFlush=0,nextAdvertise=0,nextAudit=0;
   const activity={started_at:now(),node:c.node,busy:false,last_error:''};
-  const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)));}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
+  const localCapabilities=()=>{try{return capabilities(c,secrets,snapshotAgent(c.runner.agent,path.dirname(c.file)),ledger.jobs);}catch(e){const value={...capabilities(c,secrets),enabled:false,error:cleanError(e)};value.digest=sha(JSON.stringify({...value,generated_at:undefined,digest:undefined}));return value;}};
   async function tick() {
     // busy covers both queued and executing discovery. Other runs must not
     // prevent an overdue Poll from entering the serial transport queue.

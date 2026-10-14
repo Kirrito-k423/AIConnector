@@ -7,10 +7,13 @@ import {canConfigureProfiles} from './profile-data.mjs';
 import {CATALOG_REVISION,validateCatalogHosts} from './watch-catalog.mjs';
 import {validateExportProfile,validateTransferTask} from './file-export.mjs';
 import {validateOwnedProfile} from './file-transfer.mjs';
+import {healthPolicy} from './npu-health.mjs';
 
 export const VERSION=JSON.parse(fs.readFileSync(path.join(ROOT,'package.json'))).version;
 export const modeOf=p=>p.kind==='builtin-smoke'?'smoke':p.kind==='maintenance'?'maintenance':p.mode||'experiment';
 export const engineOf=p=>p.executionMode||'pi';
+export const machineCountOf=p=>['watch-catalog','file-export','file-transfer'].includes(p.kind)?0:p.machineIds?.length||p.machineCount||1;
+export const atomicGroupOf=p=>Boolean(p.machineIds||p.machinePool&&p.machineCount>1);
 export function toolsFor(p,agent={}) {
   if(engineOf(p)==='direct')return [];
   const names=['submit_summary','get_run_state','verify_task','list_inputs','read_input','list_outputs','read_output'];
@@ -30,7 +33,7 @@ export function checkRequirements(task,p,agent={}) {
   need(!task.requirements.execution_mode||engineOf(p)===task.requirements.execution_mode,'EXECUTION_MODE_MISMATCH');
   need(!task.requirements.catalog_hosts||p.kind==='watch-catalog','CATALOG_PROFILE_REQUIRED');
   if(task.requirements.data_export){need(['file-export','file-transfer'].includes(p.kind)&&sha(p.delivery.recipient)===task.requirements.data_export.recipient_sha256,'EXPORT_RECIPIENT_MISMATCH');if(p.kind==='file-transfer')need(sha(p.delivery.requestRecipient)===task.requirements.data_export.request_recipient_sha256,'TRANSFER_IDENTITY_MISMATCH');}
-  if(task.requirements.resources){const r=task.requirements.resources;need((['watch-catalog','file-export','file-transfer'].includes(p.kind)?0:p.machineIds?.length||1)===r.machine_count&&(!r.atomic_group||p.machineIds)&&(!r.group_sha256||r.group_sha256===sha(JSON.stringify(p.machineIds))),'RESOURCE_REQUIREMENTS_MISMATCH');}
+  if(task.requirements.resources){const r=task.requirements.resources;need(machineCountOf(p)===r.machine_count&&(!r.atomic_group||atomicGroupOf(p))&&(!r.group_sha256||r.group_sha256===sha(JSON.stringify(p.machineIds)))&&(!r.pool_sha256||r.pool_sha256===(p.poolSha256||sha(JSON.stringify(p.machinePool)))),'RESOURCE_REQUIREMENTS_MISMATCH');}
   const required=task.requirements.tools||[];
   need(Array.isArray(required)&&required.every(x=>typeof x==='string'),'INVALID_REQUIRED_TOOLS');
   const available=toolsFor(p,agent);
@@ -43,7 +46,7 @@ export function checkRequirements(task,p,agent={}) {
   if(engineOf(p)!=='direct')for(const s of agent.skills||[])need((s.requiredTools||[]).every(t=>available.includes(t)),'SKILL_TOOL_MISSING');
   return available;
 }
-export function checksFor(p){return [...(p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id)),...(canConfigureProfiles(p)?['server-profiles-loaded']:[]),...(p.machineIds?['group-processes-stopped']:[])];}
+export function checksFor(p){return [...(p.kind==='builtin-smoke'?['cpu-smoke']:(p.verification||[]).map(x=>x.id)),...(canConfigureProfiles(p)?['server-profiles-loaded']:[]),...(atomicGroupOf(p)?['group-processes-stopped']:[])];}
 export function validateRequirements(task){
   const r=task?.requirements;
   need(r&&['smoke','probe','maintenance','experiment','transfer'].includes(r.mode),'TASK_REQUIREMENTS_REQUIRED');
@@ -52,7 +55,7 @@ export function validateRequirements(task){
   need(Array.isArray(r.checks)&&r.checks.length>0&&r.checks.length<=16&&r.checks.every(t=>typeof t==='string'&&t.length<=40),'INVALID_REQUIRED_CHECKS');
   need(r.execution_mode===undefined||['pi','direct'].includes(r.execution_mode),'INVALID_EXECUTION_MODE');
   if(r.catalog_hosts!==undefined){validateCatalogHosts(r.catalog_hosts);need(r.mode==='probe'&&r.execution_mode==='direct'&&r.checks.includes('catalog-requested-hosts'),'INVALID_CATALOG_REQUIREMENTS');}
-  if(r.resources!==undefined)need(r.resources&&Number.isInteger(r.resources.machine_count)&&r.resources.machine_count>=1&&r.resources.machine_count<=12&&typeof r.resources.atomic_group==='boolean'&&(!r.resources.group_sha256||/^[a-f0-9]{64}$/.test(r.resources.group_sha256)),'INVALID_RESOURCE_REQUIREMENTS');
+  if(r.resources!==undefined)need(r.resources&&Number.isInteger(r.resources.machine_count)&&r.resources.machine_count>=1&&r.resources.machine_count<=12&&typeof r.resources.atomic_group==='boolean'&&(!r.resources.group_sha256||/^[a-f0-9]{64}$/.test(r.resources.group_sha256))&&(!r.resources.pool_sha256||/^[a-f0-9]{64}$/.test(r.resources.pool_sha256)),'INVALID_RESOURCE_REQUIREMENTS');
   if(r.server_profiles!==undefined){
     need(r.mode==='maintenance'&&r.checks.includes('server-profiles-loaded')&&Array.isArray(r.server_profiles)&&r.server_profiles.length>0&&r.server_profiles.length<=24,'INVALID_REQUIRED_PROFILES');
     const ids=new Set();for(const p of r.server_profiles){need(p&&/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(p.id)&&!ids.has(p.id)&&/^[\w.-]{1,128}$/.test(p.revision)&&(!p.definition_sha256||/^[a-f0-9]{64}$/.test(p.definition_sha256)),'INVALID_REQUIRED_PROFILES');ids.add(p.id);}
@@ -61,6 +64,7 @@ export function validateRequirements(task){
     r.tools?.includes('configure_server_profiles')&&r.tools.every(t=>['configure_server_profiles','verify_task'].includes(t)),'INVALID_PROFILE_WORKFLOW');
 }
 export function validateProfile(p){
+  need(p.machinePool===undefined||p.kind==='simplehtmlwatch','WATCH_PROFILE_REQUIRED');
   need(['pi','direct'].includes(engineOf(p))&&!(engineOf(p)==='direct'&&p.kind==='maintenance'),'INVALID_EXECUTION_MODE');
   need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');
   need(['builtin-smoke','watch-catalog','maintenance','command','simplehtmlwatch','file-export','file-transfer'].includes(p.kind),'INVALID_PROFILE');
@@ -79,9 +83,10 @@ export function validateProfile(p){
     if(c.kind==='local-api')need(p.maintenance.apis?.[c.api]?.readOnly===true,'VERIFIER_MUST_BE_READ_ONLY');
   }
 }
-export function capabilities(c,secrets={},snapshot) {
+export function capabilities(c,secrets={},snapshot,jobs={}) {
   const profiles=Object.entries(c.runner.profiles).map(([id,p])=>{let error='';try{validateProfile(p);if(p.kind==='file-transfer')need(secrets.fileTransferIdentity&&secrets.fileTransferRecipient===p.delivery.requestRecipient,'TRANSFER_IDENTITY_REQUIRED');if(['simplehtmlwatch','watch-catalog'].includes(p.kind))need(c.runner.agent.simpleHtmlWatch?.enabled,'WATCH_NOT_ENABLED');if(engineOf(p)!=='direct')for(const s of snapshot?.skills||[])need((s.requiredTools||[]).every(t=>toolsFor(p,c.runner.agent).includes(t)),'SKILL_TOOL_MISSING');}catch(e){error=e.message;}
-    return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,execution_mode:engineOf(p),resources:{machine_count:['watch-catalog','file-export','file-transfer'].includes(p.kind)?0:p.machineIds?.length||1,atomic_group:Boolean(p.machineIds),...(p.machineIds?{group_sha256:sha(JSON.stringify(p.machineIds))}:{})},
+    return {id,mode:modeOf(p),entry:p.entry,repository:p.repository,ready:!error,error,execution_mode:engineOf(p),resources:{machine_count:machineCountOf(p),atomic_group:atomicGroupOf(p),...(p.machineIds?{group_sha256:sha(JSON.stringify(p.machineIds))}:{}),...(p.machinePool?{selection:'authorized-pool',pool_size:p.machinePool.length,pool_sha256:sha(JSON.stringify(p.machinePool))}:{})},
+      ...(p.kind==='simplehtmlwatch'?{npu_health_policy:healthPolicy(p)}:{}),
       ...(p.kind==='watch-catalog'?{catalog:{schema:'aiconnector.watch-catalog.v1',host_sha256_filter:true,max_hosts:12,scope:'inventory-only'}}:{}),
       ...(p.kind==='file-export'?{data_export:{schema:'aiconnector.sealed-export.v1',format:'age-v1',recipient_sha256:sha(p.delivery?.recipient||''),max_bytes:p.export?.maxBytes,public_ciphertext_authorized:p.delivery?.allowPublicCiphertext===true,scope:'fixed-local-files'}}:{}),
       ...(p.kind==='file-transfer'?{data_export:{schema:'aiconnector.transfer-index.v1',format:'age-v1',recipient_sha256:sha(p.delivery?.recipient||''),request_recipient:p.delivery?.requestRecipient,request_recipient_sha256:sha(p.delivery?.requestRecipient||''),public_ciphertext_authorized:p.delivery?.allowPublicCiphertext===true,scope:'owned-filesystem',operations:['read','list','find'],chunked:true}}:{}),
@@ -91,9 +96,14 @@ export function capabilities(c,secrets={},snapshot) {
     arguments_allowed:p.allowTaskArguments===true};});
   // Paths, commands, host addresses, context bodies and credentials stay local.
   const context=snapshot?{sha256:snapshot.contextDigest,files:snapshot.contexts.map(f=>({name:f.name,sha256:f.sha256})),skills:(snapshot.skills||[]).map(s=>({name:s.name,sha256:s.sha256,requiredTools:s.requiredTools}))}:{loaded:false};
+  const waiting=Object.values(jobs).filter(j=>j.state==='waiting').sort((a,b)=>(a.sequence||0)-(b.sequence||0));
   const body={schema:'aiconnector.capabilities.v1',node:c.node,namespace:c.connector.namespace,version:VERSION,
-    enabled:c.runner.enabled===true,model_configured:Boolean(c.runner.model&&secrets.apiKey),profiles,context,scheduler:{max_concurrent_runs:c.runner.maxConcurrentRuns??1,ssh_reservations_required:(c.runner.maxConcurrentRuns??1)>1},
+    enabled:c.runner.enabled===true,model_configured:Boolean(c.runner.model&&secrets.apiKey),profiles,context,scheduler:{max_concurrent_runs:c.runner.maxConcurrentRuns??1,ssh_reservations_required:(c.runner.maxConcurrentRuns??1)>1||profiles.some(p=>p.resources.selection==='authorized-pool'),waiting_total:waiting.length,waiting:waiting.slice(0,8).map(j=>({key:j.key,reason:j.wait_reason||'WAITING',...(j.queue_feedback?{queue:j.queue_feedback}:{})}))},
     config_sha256:sha(JSON.stringify({runner:c.runner,version:VERSION,context_sha256:snapshot?.contextDigest||null}))};
+  // The capability transport has a fixed 24 KiB bound. Queue snapshots are
+  // best effort, never a source of claim/lease authority; do not grow history.
+  while(Buffer.byteLength(JSON.stringify(body))>22000&&body.scheduler.waiting.length)body.scheduler.waiting.pop();
+  body.scheduler.waiting_truncated=body.scheduler.waiting.length<waiting.length;
   return {...body,digest:sha(JSON.stringify(body)),generated_at:now()};
 }
 export function preflight(task,remote) {
@@ -107,9 +117,10 @@ export function preflight(task,remote) {
     (!task.requirements.data_export||p.data_export?.format===task.requirements.data_export.format&&p.data_export?.recipient_sha256===task.requirements.data_export.recipient_sha256&&p.data_export?.public_ciphertext_authorized===true)&&
     (!task.requirements.data_export?.request_recipient_sha256||p.data_export?.request_recipient_sha256===task.requirements.data_export.request_recipient_sha256)&&
     (task.requirements.checks||[]).every(t=>p.checks.includes(t))&&p.repository===task.code.repository&&(!task.requirements.execution_mode||(p.execution_mode||'pi')===task.requirements.execution_mode)&&
-    (!task.requirements.resources||p.resources&&p.resources.machine_count===task.requirements.resources.machine_count&&(!task.requirements.resources.atomic_group||p.resources.atomic_group)&&(!task.requirements.resources.group_sha256||task.requirements.resources.group_sha256===p.resources.group_sha256));
+    (!task.requirements.resources||p.resources&&p.resources.machine_count===task.requirements.resources.machine_count&&(!task.requirements.resources.atomic_group||p.resources.atomic_group)&&(!task.requirements.resources.group_sha256||task.requirements.resources.group_sha256===p.resources.group_sha256)&&(!task.requirements.resources.pool_sha256||task.requirements.resources.pool_sha256===p.resources.pool_sha256));
   const candidates=remote.profiles.filter(match);
-  const selected=task.environment.target==='auto'?candidates.length===1?candidates[0]:null:remote.profiles.find(p=>p.id===task.environment.target);
+  const pools=candidates.filter(p=>p.resources?.selection==='authorized-pool');
+  const selected=task.environment.target==='auto'?candidates.length===1?candidates[0]:pools.length===1?pools[0]:null:remote.profiles.find(p=>p.id===task.environment.target);
   if(!selected||!match(selected)){
     const e=new Error(selected?'CAPABILITY_MISMATCH':'RECEIVER_PROFILE_NOT_FOUND_OR_AMBIGUOUS');
     e.diagnostic={requested:{mode:task.requirements.mode,repository:task.code.repository,target:task.environment.target,tools:task.requirements.tools,checks:task.requirements.checks},

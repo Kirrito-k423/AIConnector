@@ -13,7 +13,7 @@ export function tarBundle(files,kind='0') {
   return gzipSync(Buffer.concat([...chunks,Buffer.alloc(1024)]));
 }
 
-export async function watchFixture({losePost=false,loseReserve=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false,atomicGroups=1,finishAfterReads=0,serviceId='fixture-service'}={}) {
+export async function watchFixture({losePost=false,loseReserve=false,revision='fixture-rev',status='succeeded',exitCode=0,archivePending=false,atomicGroups=1,finishAfterReads=0,serviceId='fixture-service',machines,monitor}={}) {
   let posts=0,reads=0,token='watch-one',job;const requests=[];
   const reservations={};
   const archive=tarBundle({'stdout.log':'fixture server result\n','stderr.log':'','results/aiconnector-revision.txt':revision+'\n','results/metrics.json':'{"fixture":true,"sum":7}','results/not-exported.txt':'PRIVATE_OTHER_FILE'});
@@ -27,7 +27,8 @@ export async function watchFixture({losePost=false,loseReserve=false,revision='f
     if(u.pathname==='/api/tasks/reservations'){
       if(req.method==='GET')return reply({schema:'simplehtmlwatch.reservations.v1',atomicGroups,reservations});
       const data=JSON.parse(body),old=reservations[data.id];if(old)return reply(old,old.releasedAt?410:200);
-      if(Object.values(reservations).some(r=>!r.releasedAt&&(r.machineIds||[r.machineId]).some(id=>(data.machineIds||[data.machineId]).includes(id))))return reply({error:'busy'},409);
+      const resource=id=>machines?.find(m=>m.id===id)?.resourceKey||'machine:'+id;
+      if(Object.values(reservations).some(r=>!r.releasedAt&&(r.machineIds||[r.machineId]).some(id=>(data.machineIds||[data.machineId]).some(other=>resource(id)===resource(other)))))return reply({error:'busy'},409);
       const r=reservations[data.id]={...data,resourceKey:'machine:'+data.machineId,createdAt:new Date().toISOString()};
       if(data.machineIds)Object.assign(r,{grantId:'grant-'+data.id,generation:1,allocations:data.machineIds.map(machineId=>({machineId,resourceKey:'machine:'+machineId}))});
       if(loseReserve){loseReserve=false;req.socket.destroy();return;}return reply(r,201);
@@ -37,11 +38,11 @@ export async function watchFixture({losePost=false,loseReserve=false,revision='f
       if(job?.reservationId===data.id&&['running','unknown'].includes(job.status))return reply({error:'live task'},409);
       r.releasedAt=new Date().toISOString();return reply(r);
     }
-    if(u.pathname==='/api/status')return reply({updatedAt:new Date().toISOString(),machines:[{id:'fixture-machine',status:'online'}]});
-    if(u.pathname==='/api/tasks/machines')return reply([{id:'fixture-machine',name:'CPU fixture',group:'fixture',host:'192.0.2.1',resourceKey:'ssh:192.0.2.1:22',enabled:true,status:'online',ready:true,reason:'ready',updatedAt:new Date().toISOString(),taskIds:[],reservationIds:[],continuationIds:[]}]);
+    if(u.pathname==='/api/status')return reply(monitor||{updatedAt:new Date().toISOString(),machines:[{id:'fixture-machine',status:'online'}]});
+    if(u.pathname==='/api/tasks/machines')return reply(machines||[{id:'fixture-machine',name:'CPU fixture',group:'fixture',host:'192.0.2.1',resourceKey:'ssh:192.0.2.1:22',enabled:true,status:'online',ready:true,reason:'ready',updatedAt:new Date().toISOString(),taskIds:[],reservationIds:[],continuationIds:[]}]);
     if(u.pathname==='/api/tasks/ready')return reply([{id:'fixture-machine',name:'CPU fixture',updatedAt:new Date().toISOString()}]);
     if(u.pathname==='/api/tasks'&&req.method==='POST') {
-      posts++;const data=JSON.parse(body);job={...data,status,exitCode,selectedMachineId:'fixture-machine',createdAt:new Date().toISOString(),finishedAt:new Date().toISOString(),archiveReady:!archivePending};
+      posts++;const data=JSON.parse(body);job={...data,status,exitCode,selectedMachineId:data.machineId||'fixture-machine',machineName:machines?.find(m=>m.id===data.machineId)?.host||'192.0.2.1',createdAt:new Date().toISOString(),finishedAt:new Date().toISOString(),archiveReady:!archivePending};
       if(losePost){req.socket.destroy();return;}return reply(job,202);
     }
     if(u.pathname==='/api/tasks'){reads++;if(finishAfterReads&&reads>=finishAfterReads&&job)job.status='succeeded';if(archivePending&&reads>=3&&job)job.archiveReady=true;return reply(job||{error:'missing'},job?200:404);}

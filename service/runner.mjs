@@ -55,17 +55,21 @@ export class Runner {
       timing(this.c.dataDir,'run_admitted',{key:row.key});this.persist();
     }
     for(const job of Object.values(this.jobs).filter(j=>j.state==='waiting').sort((a,b)=>(a.sequence||0)-(b.sequence||0))){
-      if(this.slots()>=(this.c.runner.maxConcurrentRuns??1)){this.waiting(job,'CAPACITY_BUSY');continue;}
+      if(this.slots()>=(this.c.runner.maxConcurrentRuns??1)){this.waiting(job,'CAPACITY_BUSY',undefined,this.c.runner.profiles[(snapshot.runs||[]).find(r=>r.key===job.key)?.task?.environment.target]);continue;}
       if((job.next_attempt||0)>Date.now()||this.pending.has('start:'+job.key))continue;
       if(job.claim_owner&&!this.retryableClaim(job)){job.state='unknown';job.error='CLAIM_LAUNCH_STATE_UNKNOWN';this.persist();continue;}
       const row=(snapshot.runs||[]).find(r=>r.key===job.key&&!r.error&&(r.phase==='accepted'||r.phase==='started'&&this.retryableClaim(job)));if(!row)continue;
       const profile=this.c.runner.profiles[row.task.environment.target];
       const conflict=this.resources.conflict(job,this.resources.keys(profile||{},job.key));
-      if(conflict){this.waiting(job,'RESOURCE_BUSY',conflict.key);continue;}
+      if(conflict){this.waiting(job,'RESOURCE_BUSY',conflict.key,profile);continue;}
       job.state='reserving';job.resources??={keys:this.resources.keys(profile||{},job.key),state:'reserving'};this.persist();this.schedule('start:'+job.key,()=>this.launch(job,row));
     }
   }
-  waiting(job,reason,owner){
+  waiting(job,reason,owner,profile){
+    if(profile?.kind==='simplehtmlwatch'&&Date.now()>=(job.queue_feedback_next_at||0)){
+      job.queue_feedback_next_at=Date.now()+30000;
+      this.schedule('queue:'+job.key,()=>this.resources.feedback(job,profile));
+    }
     if(job.wait_reason===reason&&job.wait_owner===owner)return;
     job.wait_reason=reason;job.wait_owner=owner;job.timings??={};job.timings.wait_changed_at=now();
     timing(this.c.dataDir,'scheduler_wait',{key:job.key,code:reason});this.persist();
@@ -113,9 +117,9 @@ export class Runner {
       try{
         job.timings??={};job.timings.resource_acquire_started_at=now();timing(this.c.dataDir,'resource_acquire_started',{key:job.key});this.persist();
         if(!preflightError&&!await this.resources.acquire(job,profile,row.task)){
-          job.state='waiting';job.next_attempt=Date.now()+5000;this.waiting(job,job.wait_reason||'RESOURCE_BUSY',job.wait_owner);this.persist();return;
+          job.state='waiting';job.next_attempt=Date.now()+5000;this.waiting(job,job.wait_reason||'RESOURCE_BUSY',job.wait_owner,profile);this.persist();return;
         }
-        if(!preflightError){job.timings.resource_acquired_at=now();timing(this.c.dataDir,'resource_acquired',{key:job.key});}
+        if(!preflightError){profile=job.resources?.selectedProfile||profile;job.timings.resource_acquired_at=now();timing(this.c.dataDir,'resource_acquired',{key:job.key});}
       }catch(e){preflightError=cleanError(e);}
       // Persist the owner before contacting the transport. Reuse it across
       // lost replies/restarts; a fresh owner cannot take over an existing claim.

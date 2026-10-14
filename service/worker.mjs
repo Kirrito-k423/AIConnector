@@ -293,6 +293,11 @@ export async function work(dir,secrets={}) {
       agent:{version:VERSION,started_at:status.agent_started_at||null,ended_at:status.agent_ended_at,duration_ms:status.agent_started_at?Date.parse(status.agent_ended_at)-Date.parse(status.agent_started_at):0,turns,continuations,tool_steps:toolSteps,stop_reason:status.stop_reason,usage,cost_configured:Boolean(model?.cost),usage_scope:'Cumulative SDK assistant and compaction usage; absent provider usage is unmeasured, not a billing total',tools:status.tools||[],context_sha256:agent.contextDigest,context_captured_at:agent.capturedAt,skills:(agent.skills||[]).map(s=>({name:s.name,sha256:s.sha256})),compactions:status.compaction.count}};
     resultData.agent.budget={limits:{...budget,maxTurns:spec.maxTurns},used:{turns,actions:toolSteps,maintenanceActions:Object.keys(maintenance?.actions||{}).length,continuations,noProgress:progress.stalled,totalTokens:usage.totalTokens,cost:usage.cost},sdk_usage_observed:modelTiming.rows.some(r=>r.sdk_usage!==null),scope:'Actions count SDK tool steps; durable maintenance actions are separate. Tokens include cached context for each SDK request, not billing.'};
     Object.assign(resultData,authoritativeReport({report,agent:resultData.agent,acceptance:resultData.acceptance,failure,profile:spec.profile,engine:resultData.execution.engine}));
+    if(execution?.npu_health){
+      const samples=[...execution.npu_health.before,...execution.npu_health.after];
+      resultData.execution.npu_health={policy:execution.npu_health.policy,has_warning:samples.some(s=>s.has_warning),has_alarm:samples.some(s=>s.has_alarm),unknown:samples.some(s=>!s.known||!s.fresh),evidence:'npu-health.json'};
+      if(resultData.execution.npu_health.has_warning||resultData.execution.npu_health.has_alarm)resultData.summary+='\n本次在设备 Warning/Alarm 状态下执行；详见 npu-health.json，告警没有被视为计算或通信验收通过。';
+    }
     if(spec.reservation?.machineIds){resultData.execution.resource_grant={id:spec.reservation.id,grant_id:spec.reservation.grantId,generation:spec.reservation.generation,machine_count:spec.reservation.machineIds.length,group_sha256:sha(JSON.stringify(spec.reservation.machineIds)),plan_sha256:spec.reservation.planSha256};resultData.metrics.all_nodes_reserved=Boolean(spec.reservation.grantId);}
     // Leave room for artifact descriptors within the protocol's 16 KiB payload.
     // Full bounded model report stays in the ZIP; it cannot make delivery fail.
@@ -306,6 +311,7 @@ export async function work(dir,secrets={}) {
       'profile-workflows.json':strToU8(JSON.stringify(profileWorkflow?.publicRows()||[],null,2)),
       'model-timing.json':strToU8(JSON.stringify(modelTiming.snapshot(),null,2)),
       'resource-grant.json':strToU8(JSON.stringify(resultData.execution.resource_grant||null,null,2)),
+      'npu-health.json':strToU8(JSON.stringify(execution?.npu_health||null,null,2)),
       'inputs.json':strToU8(JSON.stringify(inputs?.state||{initialized:false},null,2))};
     entries['worker-timing.json']=strToU8(JSON.stringify({schema:'aiconnector.worker-timing.v1',key:spec.key,execution_mode:status.execution_mode,executor_started_at:status.executor_started_at,executor_ended_at:status.executor_ended_at,startup_timings:spec.startupTimings||{},worker_started_at:status.started_at,agent_started_at:status.agent_started_at,agent_ended_at:status.agent_ended_at,packaging_started_at:status.packaging_started_at,events:status.events,delivery_timing:'Post-publication diagnostics are a separate diagnostics--windows-inner--SHA256.zip Release asset; this immutable result ZIP predates upload and receipt.'},null,2));
     let total=0;

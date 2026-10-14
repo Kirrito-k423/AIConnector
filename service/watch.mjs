@@ -5,9 +5,11 @@ import {setTimeout as pause} from 'node:timers/promises';
 import {need,read,save,sha,now,atomic} from './common.mjs';
 import {localRequest} from './http.mjs';
 import {watchError,publicWatchError,validateInventory,catalogEvidence} from './watch-catalog.mjs';
+import {healthPolicy,healthEvidence} from './npu-health.mjs';
+import {cleanError} from './common.mjs';
 
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
-const publicJob=j=>({id:j.id,status:j.status,selectedMachineId:j.selectedMachineId,machineName:j.machineName,createdAt:j.createdAt,updatedAt:j.updatedAt,finishedAt:j.finishedAt,exitCode:j.exitCode,archiveReady:j.archiveReady,archiveError:j.archiveError,error:j.error});
+const publicJob=j=>({id:j.id,status:j.status,selectedMachineId:j.selectedMachineId,machineName:j.selectedMachineId,createdAt:j.createdAt,updatedAt:j.updatedAt,finishedAt:j.finishedAt,exitCode:j.exitCode,archiveReady:j.archiveReady,archiveError:j.archiveError?cleanError({message:j.archiveError}):j.archiveError,error:j.error?cleanError({message:j.error}):j.error});
 const terminal=j=>['succeeded','failed'].includes(j.status)&&Number.isInteger(j.exitCode);
 
 // Parse bounded regular files in memory; never extract remote paths or follow tar links.
@@ -33,8 +35,14 @@ export function validateWatchProfile(p) {
   need(p&&p.kind==='simplehtmlwatch','WATCH_PROFILE_REQUIRED');
   need(typeof p.shell==='string'&&p.shell.length>0&&typeof p.revisionCommand==='string'&&p.revisionCommand.length>0,'WATCH_COMMAND_REQUIRED');
   need(!(p.machineId&&p.group),'INVALID_WATCH_SELECTOR');
-  need((p.machineId&&typeof p.machineId==='string')||(p.group&&typeof p.group==='string')||p.allowAnyMachine===true,'WATCH_SELECTOR_REQUIRED');
+  need((p.machineId&&typeof p.machineId==='string')||(p.group&&typeof p.group==='string')||p.allowAnyMachine===true||p.machinePool!==undefined,'WATCH_SELECTOR_REQUIRED');
   need(!p.allowTaskArguments,'WATCH_TASK_ARGUMENTS_DISABLED');
+  need(p.npuHealthPolicy===undefined||['strict','allow-warning-alarm'].includes(p.npuHealthPolicy),'INVALID_NPU_HEALTH_POLICY');
+  if(p.machinePool!==undefined){
+    need(Array.isArray(p.machinePool)&&p.machinePool.length>0&&p.machinePool.length<=12&&new Set(p.machinePool).size===p.machinePool.length&&p.machinePool.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&!p.machineId&&!p.machineIds&&!p.group&&!p.allowAnyMachine,'INVALID_WATCH_MACHINE_POOL');
+    need(Number.isInteger(p.machineCount)&&p.machineCount>=1&&p.machineCount<=p.machinePool.length,'INVALID_WATCH_MACHINE_COUNT');
+    if(p.machineCount>1)need(p.outputs?.includes(p.groupCompletionOutput)&&Number.isInteger(p.groupRanksPerMachine)&&p.groupRanksPerMachine>=1&&p.groupRanksPerMachine<=128,'GROUP_COMPLETION_CONTRACT_REQUIRED');
+  }else need(p.machineCount===undefined,'WATCH_MACHINE_POOL_REQUIRED');
   if(p.machineIds!==undefined){
     need(Array.isArray(p.machineIds)&&p.machineIds.length>=2&&p.machineIds.length<=12&&new Set(p.machineIds).size===p.machineIds.length&&p.machineIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&p.machineIds.includes(p.machineId)&&!p.group&&!p.allowAnyMachine,'INVALID_WATCH_MACHINE_GROUP');
     need(typeof p.groupCompletionOutput==='string'&&p.outputs?.includes(p.groupCompletionOutput)&&Number.isInteger(p.groupRanksPerMachine)&&p.groupRanksPerMachine>=1&&p.groupRanksPerMachine<=128,'GROUP_COMPLETION_CONTRACT_REQUIRED');
@@ -43,7 +51,8 @@ export function validateWatchProfile(p) {
 export function watchPlan(profile,task,key){
   validateWatchProfile(profile);const expected=task.code.revision;need(/^[\w.-]{1,128}$/.test(expected),'INVALID_ACTUAL_REVISION');
   const context=profile.machineIds?`export AICONNECTOR_RUN_KEY=${quote(key)}\nexport AICONNECTOR_GROUP_MACHINE_IDS=${quote(JSON.stringify(profile.machineIds))}\nexport AICONNECTOR_GROUP_RANKS_PER_MACHINE=${profile.groupRanksPerMachine}\n`:'';
-  const shell=`set -eu\n${context}aic_revision="$( ${profile.revisionCommand}\n)"\nprintf '%s\\n' "$aic_revision" > "$SHW_RESULTS_DIR/aiconnector-revision.txt"\nif [ "$aic_revision" != ${quote(expected)} ]; then printf 'CODE_REVISION_MISMATCH\\n' >&2; exit 86; fi\n${profile.shell}`.trim();
+  need(!profile.machinePool,'WATCH_POOL_NOT_RESERVED');
+  const shell=`set -eu\nexport AICONNECTOR_NPU_HEALTH_POLICY=${quote(healthPolicy(profile))}\n${context}aic_revision="$( ${profile.revisionCommand}\n)"\nprintf '%s\\n' "$aic_revision" > "$SHW_RESULTS_DIR/aiconnector-revision.txt"\nif [ "$aic_revision" != ${quote(expected)} ]; then printf 'CODE_REVISION_MISMATCH\\n' >&2; exit 86; fi\n${profile.shell}`.trim();
   need(Buffer.byteLength(shell)<=4096,'WATCH_COMMAND_TOO_LARGE');
   return {id:'aic-'+sha(key).slice(0,48),shell,...(profile.machineId?{machineId:profile.machineId}:profile.group?{group:profile.group}:{})};
 }
@@ -122,9 +131,14 @@ export class WatchClient {
 
 export class WatchExecution {
   constructor(spec,dir,{signal,event=()=>{},redact=s=>s}={}) {
-    Object.assign(this,{spec,dir,signal,event,redact});this.client=new WatchClient({...spec.agent.simpleHtmlWatch,...(spec.reservation?.machineIds?{expectedServiceId:spec.reservation.serviceId}:{})},{signal});this.file=path.join(dir,'watch-task.json');
+    Object.assign(this,{spec,dir,signal,event,redact});this.client=new WatchClient({...spec.agent.simpleHtmlWatch,...(spec.reservation?.serviceId?{expectedServiceId:spec.reservation.serviceId}:{})},{signal});this.file=path.join(dir,'watch-task.json');
   }
   get record(){return read(this.file);}
+  async health(){
+    const ids=this.spec.profile.machineIds||[this.spec.profile.machineId];
+    try{return healthEvidence(await this.client.call('/api/status',{maxBytes:1048576,timeoutSeconds:2}),ids,healthPolicy(this.spec.profile));}
+    catch(e){return ids.map(machine_id=>({machine_id,policy:healthPolicy(this.spec.profile),known:false,fresh:false,error:cleanError(e)}));}
+  }
   remember(job) {
     const record=this.record;need(record&&record.id===job.id,'WATCH_TASK_ID_MISMATCH');
     need(job.shell===record.request.shell&&(job.machineId||'')===(record.request.machineId||'')&&(job.group||'')===(record.request.group||''),'WATCH_TASK_CONTENT_MISMATCH');
@@ -143,7 +157,9 @@ export class WatchExecution {
       if(p.machineIds){checkGroupReservation(r,this.spec.reservation);need(r.planSha256===sha(request.shell)&&r.taskId===request.id,'GROUP_PLAN_CHANGED');}
     }
     // Write intent before POST. An unknown response is queried by ID, never submitted again.
-    save(this.file,{id:request.id,request,created_at:now()});this.event('server_task_submitting',{id:request.id});
+    const npu_health=await this.health();
+    if(healthPolicy(p)==='strict')need(npu_health.every(s=>s.known&&s.fresh&&!s.has_warning&&!s.has_alarm),'NPU_HEALTH_GATE');
+    save(this.file,{id:request.id,request,created_at:now(),npu_health});this.event('server_task_submitting',{id:request.id});
     try{return this.remember(await this.client.call('/api/tasks',{method:'POST',body:request}));}
     catch(error){this.event('server_task_unconfirmed',{id:request.id,status:'unknown'});throw error;}
   }
@@ -185,7 +201,7 @@ export class WatchExecution {
     const execution={schema:'aiconnector.execution.v1',key:this.spec.key,actual_revision:revision,exit_code:job.exitCode,
       outcome:mismatch?'blocked':job.exitCode===0?'succeeded':'failed',unknown:false,revision_mismatch:mismatch,
       started_at:this.record.created_at,ended_at:job.finishedAt||now(),time_source:'controller_observed',stdout:stdout.slice(-131072),stderr:stderr.slice(-131072),truncated:stdout.length>131072||stderr.length>131072,
-      server_task:publicJob(job),archive_sha256:sha(bytes)};
+      server_task:publicJob(job),archive_sha256:sha(bytes),npu_health:{policy:healthPolicy(this.spec.profile),before:this.record.npu_health||[],after:await this.health()}};
     save(path.join(this.dir,'execution.json'),execution);this.event('server_result_collected',{id:job.id,exit_code:job.exitCode});return execution;
   }
   async run() {

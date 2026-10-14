@@ -121,6 +121,7 @@ export function loadConfig(file) {
   const loopback=['127.0.0.1','localhost','[::1]'].includes(new URL(c.connector.api_base||'http://127.0.0.1').hostname);
   need(Number.isInteger(c.tickSeconds)&&c.tickSeconds>=(loopback?1:10)&&c.tickSeconds<=3600,'INVALID_POLL_INTERVAL');
   c.runner??={enabled:false,profiles:{}}; c.runner.profiles??={};
+  need(c.runner.queueFeedbackIncludeAddresses===undefined||typeof c.runner.queueFeedbackIncludeAddresses==='boolean','INVALID_QUEUE_ADDRESS_POLICY');
   if(c.runner.serverRegistry){
     c.runner.serverRegistry=path.resolve(base,c.runner.serverRegistry);
     const registry=validateRegistry(json(c.runner.serverRegistry));

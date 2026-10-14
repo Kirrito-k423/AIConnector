@@ -30,6 +30,11 @@ function collectRows(){
   const merged=new Map((state.submissions||[]).map(d=>[d.key,{...d,phase:d.state}]));
   for(const r of state.channel.runs||[])merged.set(r.key,{...merged.get(r.key),...r});
   for(const j of state.jobs||[])merged.set(j.key,{...merged.get(j.key),key:j.key,job:j});
+  // Receiver queue observations are informational; never turn them into a
+  // Claim, task failure, or permission to repeat the original run.
+  for(const j of state.capabilities?.receiver?.scheduler?.waiting||[]){
+    const r=merged.get(j.key);if(r&&!r.job&&!['result','receipt'].includes(r.phase))r.job={key:j.key,state:'waiting',wait_reason:j.reason,queue_feedback:j.queue,remote_observation_at:state.capabilities.receiver.generated_at};
+  }
   return [...merged.values()].map(r=>({...r,activity_at:activityTime(r)})).sort((a,b)=>b.activity_at-a.activity_at||a.key.localeCompare(b.key));
 }
 function emptyMessage(text){
@@ -80,7 +85,7 @@ function renderDetail(r){
     detailKey='';detailSignature='empty:'+filter;return;
   }
   const w=r.job?.worker;
-  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.job?.timings,r.job?.delivery_diagnostics,r.activity_at,matches(r,filter),filter,
+  const signature=JSON.stringify([r.key,r.task,r.timeline,r.result,r.issue_url,r.release_url,r.error,phase(r),r.job?.error,r.job?.process_exit,r.job?.process_failure,r.job?.resources,r.job?.wait_reason,r.job?.wait_owner,r.job?.queue_feedback,r.job?.timings,r.job?.delivery_diagnostics,r.activity_at,matches(r,filter),filter,
     w&&[w.state,w.context,w.compaction,w.server_task,w.events,w.agent_started_at,w.agent_ended_at,w.execution_started_at,w.execution_ended_at,w.execution_time_source]]);
   if(detailKey===r.key&&detailSignature===signature)return;
   const same=detailKey===r.key,top=same?detail.scrollTop:0;
@@ -129,8 +134,15 @@ function renderDetail(r){
   detail.append(milestones);
   if(r.job?.transfer_delivery)detail.append(el('p','密文分块回传：'+r.job.transfer_delivery.uploaded+' / '+r.job.transfer_delivery.total,'selection-note'));
   if(r.job?.wait_reason)detail.append(el('p','等待原因：'+r.job.wait_reason+(r.job.wait_owner?'；当前占用者：'+r.job.wait_owner:''),'selection-note'));
+  if(r.job?.state==='waiting'&&r.job?.queue_feedback){
+    const q=r.job.queue_feedback,box=el('section',undefined,'selection-note');box.dataset.section='queue';
+    box.append(el('h3','机器排队状态'),el('p','观察时间：'+date(q.observed_at)+'；这是接收端快照，实际状态可能已变化。'));
+    for(const m of q.machines||[])box.append(el('p',m.id+(m.host?' · '+m.host:'')+' · '+m.reason));
+    detail.append(box);
+  }
   if(r.job?.resources)detail.append(disclosure('resources','机器占用 · '+r.job.resources.state,el('pre',JSON.stringify(r.job.resources,null,2))));
   if(error(r))detail.append(el('p',String(r.error||r.job?.error||'实验未通过，请查看验收与结果。'),'error'));
+  if(r.result?.execution?.npu_health?.has_warning||r.result?.execution?.npu_health?.has_alarm)detail.append(el('p','本次在 NPU Warning/Alarm 状态下执行；请复核结果包中的 npu-health.json。','selection-note'));
   if(r.job?.state==='unknown'){
     const b=el('button','核对环境后，将本次登记为未完成');b.onclick=async()=>{if(!confirm('请先核对本机与远端实验进程已停止或已完成。将交付 blocked 结果并解除队列阻塞，原运行不会重跑。确定已核对？'))return;try{await api('/api/resolve-unknown',{key:r.key,remoteChecked:true});await refresh();}catch(e){notice(e.message,true);}};detail.append(b);
   }
