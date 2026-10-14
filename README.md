@@ -2,7 +2,7 @@
 
 **v0.7.16 增加已授权共享机器池、保留原 run 的自动排队、Mac 可见的排队 IP 反馈及 Warning/Alarm 执行标注。** 原实验的资源与正确性门禁保留，Health-only 检查接入统一策略。原子整组预留、端到端加密取件和未知任务保护继续保留。软件 fixture 不代表真实 A5 或 T3/T4 实验验收。
 
-新行为和旧实验脚本适配见 [共享调度说明](docs/SHARED-SCHEDULING-0716.md)。候选包在各平台验收通过后发布，以下旧包链接仍保留。
+新行为和旧实验脚本适配见 [共享调度说明](docs/SHARED-SCHEDULING-0716.md)。[下载 Mac / Windows v0.7.16-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.16-rc.1) 已通过两端安装包验收；以下旧包链接保留供历史参考。
 
 [下载服务候选包 v0.7.14-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.14-rc.1) · [有界目录与验收](docs/SERVER-CATALOG-0714.md) · [Issue 14 修复与验收](docs/ISSUE-14-FIX.md) · [八机协议与直接执行](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 
