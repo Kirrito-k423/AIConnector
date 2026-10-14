@@ -74,7 +74,7 @@ test('Windows pairing calls the real installed library, reloads live secrets, pr
 });
 test('Windows double-click discovers the real CLI via CIM and enables an existing package with large history',{skip:process.platform!=='win32',timeout:120000},async t=>{
   const installed=process.env.AIC_PAIRING_INSTALL_ROOT||ROOT;
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC original package pairing '));let child,token;
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC 原安装包配对 '));let child,token;
   const socket=http.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
   const config=path.join(dir,'original service.json'),connectorFile=path.join(dir,'connector.json'),dataDir=path.join(dir,'original data'),launcher=path.join(dir,'Enable-file-transfer.cmd');fs.mkdirSync(dataDir);
   const bundledNode=path.join(installed,'runtime','node.exe'),bundledPwsh=path.join(installed,'runtime','pwsh','pwsh.exe');

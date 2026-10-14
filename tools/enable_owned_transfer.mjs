@@ -17,7 +17,9 @@ export async function enableOwnedTransfer(recipient,{processes,parse=parseServic
   need(/^age1[a-z0-9]{58}$/.test(recipient||''),'INVALID_EXPORT_RECIPIENT');
   if(processes===undefined){
     need(process.platform==='win32','WINDOWS_ONLY');
-    const command="$ErrorActionPreference='Stop'; $env:PSModulePath=$PSHOME+'\\Modules'; @(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'cli\\.mjs\"?\\s+start\\s+--config' } | Select-Object ProcessId,ExecutablePath,CommandLine) | ConvertTo-Json -Compress";
+    // CIM returns Unicode paths. PowerShell 5.1 otherwise encodes redirected
+    // stdout with the console code page while Node decodes it as UTF-8.
+    const command="$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; $env:PSModulePath=$PSHOME+'\\Modules'; @(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'cli\\.mjs\"?\\s+start\\s+--config' } | Select-Object ProcessId,ExecutablePath,CommandLine) | ConvertTo-Json -Compress";
     const r=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',command],{encoding:'utf8',windowsHide:true,timeout:20000});
     need(r.status===0,'RECEIVER_DISCOVERY_FAILED');processes=JSON.parse(r.stdout.trim()||'[]');
   }
