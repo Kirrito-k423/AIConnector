@@ -1,0 +1,43 @@
+name: Issue 17 Windows repair checks
+on:
+  pull_request:
+    paths:
+      - 'Connector.ps1'
+      - 'tools/*issue17*'
+      - 'tests/test_atomic_replace.py'
+      - 'tests/test_relay.py'
+      - 'tests/service/issue17-repair.test.mjs'
+      - '.github/workflows/issue17-tests.yml'
+permissions:
+  contents: read
+jobs:
+  windows-repair:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Native Windows PowerShell regression checks
+        shell: pwsh
+        env:
+          PWSH: powershell.exe
+          PYTHONUTF8: '1'
+          PYTHONPATH: tests
+        run: |
+          python -m unittest discover -s tests -p test_atomic_replace.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest test_relay.RelayTests.test_expired_ambiguous_capability_observation_is_superseded_without_resetting_other_writes test_relay.RelayTests.test_capability_ambiguous_write_is_blocked_and_rate_limit_recovers_without_duplicate test_relay.RelayTests.test_unknown_issue_creation_not_found_is_never_reposted -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Repair helper and package integrity
+        shell: pwsh
+        run: |
+          node --test tests/service/issue17-repair.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/build_issue17_patch.py dist/issue17
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-issue17-windows-patch
+          path: dist/issue17/*
