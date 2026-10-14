@@ -19,12 +19,15 @@ export function parseActiveService(record){
 
 export function patchConnector(root,replacement,allowedSha,atomic){
   const target=path.join(root,'Connector.ps1'),manifestFile=path.join(root,'package-manifest.json');
-  const original=fs.readFileSync(target),patchedSha=digest(replacement);
-  if(digest(original)===patchedSha)return {already_patched:true,patched_sha256:patchedSha};
-  need(digest(original)===allowedSha,'UNSUPPORTED_CONNECTOR_VERSION');
+  const original=fs.readFileSync(target),originalSha=digest(original),patchedSha=digest(replacement);
   const manifestBytes=fs.existsSync(manifestFile)?fs.readFileSync(manifestFile):null;
   const manifest=manifestBytes?JSON.parse(manifestBytes):null;
-  if(manifest)need(manifest.sha256?.['Connector.ps1']===allowedSha,'PACKAGE_MANIFEST_MISMATCH');
+  if(originalSha===patchedSha){
+    if(manifest)need(manifest.sha256?.['Connector.ps1']===patchedSha,'PACKAGE_MANIFEST_MISMATCH');
+    return {already_patched:true,patched_sha256:patchedSha};
+  }
+  need((Array.isArray(allowedSha)?allowedSha:[allowedSha]).includes(originalSha),'UNSUPPORTED_CONNECTOR_VERSION');
+  if(manifest)need(manifest.sha256?.['Connector.ps1']===originalSha,'PACKAGE_MANIFEST_MISMATCH');
   const backup=path.join(root,'issue17-backup-'+Date.now());
   fs.mkdirSync(backup);fs.writeFileSync(path.join(backup,'Connector.ps1'),original,{flag:'wx'});
   if(manifestBytes)fs.writeFileSync(path.join(backup,'package-manifest.json'),manifestBytes,{flag:'wx'});
@@ -33,7 +36,7 @@ export function patchConnector(root,replacement,allowedSha,atomic){
     need(digest(fs.readFileSync(target))===patchedSha,'PATCH_VERIFICATION_FAILED');
     if(manifest){
       manifest.sha256['Connector.ps1']=patchedSha;
-      manifest.local_patches=[...(manifest.local_patches||[]),{id:'issue17',applied_at:new Date().toISOString(),original_sha256:allowedSha,patched_sha256:patchedSha}];
+      manifest.local_patches=[...(manifest.local_patches||[]),{id:'issue17',applied_at:new Date().toISOString(),original_sha256:originalSha,patched_sha256:patchedSha}];
       atomic(manifestFile,JSON.stringify(manifest,null,2)+'\n');
     }
     return {already_patched:false,patched_sha256:patchedSha,backup_created:true};
@@ -71,7 +74,7 @@ export function summarizeState(state={}){
 export async function repair({diagnoseOnly=false}={}){
   const active=await discover(),serviceDir=path.dirname(active.cli),root=path.dirname(serviceDir);
   const load=file=>import(pathToFileURL(path.join(serviceDir,file)).href);
-  const {loadConfig,read,atomic}=await load('common.mjs');
+  const {loadConfig,atomic}=await load('common.mjs');
   const {localRequest}=await load('http.mjs'),{prepareUpgrade}=await load('upgrade.mjs');
   const c=loadConfig(active.config),token=fs.readFileSync(path.join(c.dataDir,'dashboard.token'),'utf8');
   const api=async(route,body)=>{
@@ -103,14 +106,15 @@ export async function repair({diagnoseOnly=false}={}){
   const binding=JSON.parse(fs.readFileSync(path.join(packageDir,'repair-manifest.json'),'utf8'));
   need(digest(replacement)===binding.patched_sha256,'REPAIR_PACKAGE_HASH_MISMATCH');
   const originalSha=digest(fs.readFileSync(path.join(root,'Connector.ps1')));
-  need([binding.original_sha256,binding.patched_sha256].includes(originalSha),'UNSUPPORTED_CONNECTOR_VERSION');
+  const allowedSha=binding.original_sha256_variants||[binding.original_sha256];
+  need([...allowedSha,binding.patched_sha256].includes(originalSha),'UNSUPPORTED_CONNECTOR_VERSION');
   let stopped=false;
   try{
     await api('/api/shutdown',{});
     for(let i=0;i<180&&fs.existsSync(path.join(c.dataDir,'service.lock'));i++)await sleep(250);
     need(!fs.existsSync(path.join(c.dataDir,'service.lock')),'SERVICE_STOP_TIMEOUT');stopped=true;
     prepareUpgrade(active.config);
-    report.patch=patchConnector(root,replacement,binding.original_sha256,atomic);report.repaired=true;
+    report.patch=patchConnector(root,replacement,allowedSha,atomic);report.repaired=true;
   }finally{
     if(stopped){
       const log=fs.openSync(path.join(c.dataDir,'service.log'),'a');

@@ -7,19 +7,24 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_SHA = '7577a6b332702ff41292b9dabae20ae13da3e4224a0d4e9be013b9f977fc295a'
+ORIGINAL_VARIANTS = [ORIGINAL_SHA,
+    'e48151d75acd2482d685ad76ccaa4d34532b463923c129fefa0d2f945d1b6536',
+    '17c2a95594caa83b2d136a1e36adb53a5e8f1cb98be6bac1e8a2407c39518587',
+    '4a8fe118d772433bcb6fb367fd4093ddca904d73dcc3b2190aa62631b7ff1614']
 
 def build(destination):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     members = {
         'Repair-Issue17.cmd': (ROOT / 'tools/repair_issue17.cmd').read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'),
-        'repair_issue17.mjs': (ROOT / 'tools/repair_issue17.mjs').read_bytes(),
-        'Connector.ps1': (ROOT / 'Connector.ps1').read_bytes(),
-        'README.md': (ROOT / 'docs/ISSUE-17-FIX.md').read_bytes(),
+        'repair_issue17.mjs': (ROOT / 'tools/repair_issue17.mjs').read_bytes().replace(b'\r\n', b'\n'),
+        'Connector.ps1': (ROOT / 'Connector.ps1').read_bytes().replace(b'\r\n', b'\n'),
+        'README.md': (ROOT / 'docs/ISSUE-17-FIX.md').read_bytes().replace(b'\r\n', b'\n'),
     }
     members['repair-manifest.json'] = (json.dumps({
         'schema': 'aiconnector.connector-patch.v1', 'patch_id': 'issue17',
         'original_sha256': ORIGINAL_SHA,
+        'original_sha256_variants': ORIGINAL_VARIANTS,
         'patched_sha256': hashlib.sha256(members['Connector.ps1']).hexdigest(),
     }, indent=2) + '\n').encode()
     output = destination / 'AIConnector-Issue17-Windows-Patch.zip'
