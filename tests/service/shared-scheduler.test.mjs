@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {Resources} from '../../service/resources.mjs';
+import {pathToFileURL} from 'node:url';
+const {Resources}=await import(process.env.AIC_RESOURCE_MODULE?pathToFileURL(process.env.AIC_RESOURCE_MODULE).href:'../../service/resources.mjs');
 import {WatchExecution,watchPlan} from '../../service/watch.mjs';
 import {validateRegistry} from '../../service/server-registry.mjs';
 import {capabilities} from '../../service/capabilities.mjs';
@@ -13,6 +14,7 @@ import {Runner} from '../../service/runner.mjs';
 import {agentConfig} from '../../service/agent-config.mjs';
 import {save,read,sha,alive} from '../../service/common.mjs';
 import {unzipSync} from 'fflate';
+import {npuAdmission} from '../../service/npu-resources.mjs';
 import {watchFixture} from './watch_fixture.mjs';
 
 const row=(id,ready=true,resourceKey='physical:'+id)=>({id,host:'192.0.2.'+(id==='a'?1:2),resourceKey,enabled:true,status:'online',ready,reason:ready?'ready':'任务占用',updatedAt:new Date().toISOString(),taskIds:[],reservationIds:[],continuationIds:[]});
@@ -140,4 +142,28 @@ test('health evidence preserves unknown/stale samples instead of manufacturing O
   const stale=healthSample({results:[{commandId:'npu',stdout:'| NPU ID | Name | Health |\n| 0 | Ascend950DT | Alarm |',exitCode:0,endedAt:'2020-01-01T00:00:00Z'}]});
   assert.equal(stale.has_alarm,true);assert.equal(stale.fresh,false);
   assert.equal(healthSample({results:[{commandId:'npu',stdout:'| NPU ID | Name | Health |\n| 0 | Ascend950DT | OK |\n| 1 | Ascend950DT | NA |',exitCode:0,endedAt:new Date().toISOString()}]}).known,false);
+});
+
+const npuTable=(status='OK',processes='| No running processes found |',used=1000,util=0)=>
+  '| NPU ID | Name | Health |\n| | | Bus-Id | NPU Util(%) Memory-Usage(MB) HBM-Usage(MB) |\n'+Array.from({length:4},(_,i)=>`| ${i} | Ascend950DT | ${status} |\n| | | NA | ${util} 0 / 0 ${used} / 65536 |\n`).join('')+'| NPU ID | Process id | Process name | Process memory(MB) |\n'+processes+'\n';
+const npuState=stdout=>({results:[{commandId:'npu',stdout,exitCode:0,endedAt:new Date().toISOString()}]});
+const npuRequirements={model:'Ascend950DT',devicesPerMachine:4,minFreeHbmMB:8192,maxUtilization:5,maxSampleAgeSeconds:120};
+
+test('external NPU vLLM occupation is skipped even when controller ready=true; idle Alarm alternative is selected',async()=>{
+  const monitor={a:npuState(npuTable('OK','| 0 | 99 | vllm | 64000 |',64000)),b:npuState(npuTable('Alarm'))};
+  const w=await watchFixture({machines:[row('a'),row('b')],monitor}),dir=temp(),c=config(w.url);c.runner.profiles.pool.npuResources=npuRequirements;
+  try{const job={key:'npu-pool/1/run',dir,state:'waiting'};assert.equal(await new Resources(c,{jobs:{job}},()=>{}).acquire(job,c.runner.profiles.pool,task),true);assert.equal(job.resources.remote.machineId,'b');assert.equal(w.posts,0);}
+  finally{await w.close();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('NPU admission distinguishes capacity, process occupancy, unknown/stale samples and health policy',()=>{
+  assert.equal(npuAdmission(npuState(npuTable('Alarm')),npuRequirements).allowed,true);
+  assert.equal(npuAdmission(npuState(npuTable('Warning')),npuRequirements).allowed,true);
+  assert.equal(npuAdmission(npuState(npuTable('Alarm')),npuRequirements,'strict').reason,'NPU_HEALTH_GATE');
+  assert.equal(npuAdmission(npuState(npuTable('OK',undefined,64000)),npuRequirements).reason,'NPU_CAPACITY_INSUFFICIENT');
+  assert.equal(npuAdmission(npuState(npuTable('OK',undefined,1000,99)),npuRequirements).reason,'NPU_UTILIZATION_BUSY');
+  assert.equal(npuAdmission(npuState('malformed'),npuRequirements).allowed,false);
+  const stale=npuState(npuTable());stale.results[0].endedAt='2020-01-01T00:00:00Z';assert.equal(npuAdmission(stale,npuRequirements).reason,'NPU_SAMPLE_STALE');
+  assert.equal(npuAdmission(npuState(npuTable().replace('| No running processes found |','')),npuRequirements).reason,'NPU_PROCESS_UNKNOWN');
+  assert.equal(npuAdmission(npuState(npuTable().replace('Ascend950DT','Ascend910')),npuRequirements).allowed,false);
 });

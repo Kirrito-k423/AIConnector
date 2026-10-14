@@ -4,6 +4,7 @@ import {sha,now,read,need,cleanError} from './common.mjs';
 import {WatchClient,watchPlan,checkGroupReservation} from './watch.mjs';
 import {groupCompletion} from './group-completion.mjs';
 import {isIP} from 'node:net';
+import {npuAdmission} from './npu-resources.mjs';
 
 const occupied=new Set(['reserving','held','unknown']);
 const active=new Set(['claiming','launching','running','unknown']);
@@ -33,11 +34,13 @@ export class Resources {
     if(profile?.kind!=='simplehtmlwatch')return;
     const client=new WatchClient(this.c.runner.agent.simpleHtmlWatch);
     const rows=await client.machineInventory(),ids=profile.machinePool||profile.machineIds||[profile.machineId];
+    let monitor={};if(profile.npuResources)try{monitor=await client.call('/api/status',{maxBytes:1048576,timeoutSeconds:2});}catch{}
     const feedback={schema:'aiconnector.queue.v1',required_machines:profile.machineCount||profile.machineIds?.length||1,observed_at:now(),machines:ids.slice(0,12).map(id=>{
       const m=rows.find(m=>m.id===id);return {id,...(m&&isIP(m.host)&&this.c.runner.queueFeedbackIncludeAddresses!==false?{host:m.host}:{}),available:m?.ready===true,reason:queueReason(m)};
     })};
     if(profile.machinePool){
       for(const m of feedback.machines){const raw=rows.find(r=>r.id===m.id);if(raw&&this.conflict(job,['watch:'+client.config.baseUrl+':'+m.id,'physical:'+client.config.baseUrl+':'+raw.resourceKey,...(profile.resourceKeys||[])])){m.available=false;m.reason='RESOURCE_BUSY';}}
+      if(profile.npuResources)for(const m of feedback.machines){m.npu=npuAdmission(monitor[m.id],profile.npuResources,profile.npuHealthPolicy);if(!m.npu.allowed){m.available=false;m.reason=m.npu.reason;}}
       const keys=new Set();feedback.available_machines=0;
       for(const m of feedback.machines){const raw=rows.find(r=>r.id===m.id);if(m.available&&raw){if(keys.has(raw.resourceKey))m.available=false;else{keys.add(raw.resourceKey);feedback.available_machines++;}}}
       feedback.available_machines=Math.min(feedback.required_machines,feedback.available_machines);
@@ -117,15 +120,17 @@ export class Resources {
     const client=new WatchClient(this.c.runner.agent.simpleHtmlWatch);
     const identity=await client.identity();client.config={...client.config,expectedServiceId:identity.serviceId};
     const rows=await client.machineInventory();
+    const monitor=profile.npuResources?await client.call('/api/status',{maxBytes:1048576,timeoutSeconds:2}):null;
     const allowed=profile.machinePool.map(id=>rows.find(m=>m.id===id)).filter(Boolean);
     const seen=new Set(),selected=[];
     const machines=profile.machinePool.map(id=>{
       const m=allowed.find(m=>m.id===id),reason=queueReason(m);
       const candidate=m?{...profile,machinePool:undefined,machineCount:undefined,machineId:m.id,poolSelected:true}:null;
       const conflict=m&&this.conflict(job,[...this.keys(candidate,job.key),'physical:'+client.config.baseUrl+':'+m.resourceKey]);
-      const available=Boolean(m&&m.enabled===true&&['online','partial'].includes(m.status)&&m.ready===true&&!conflict&&!seen.has(m.resourceKey));
+      const npu=profile.npuResources?npuAdmission(monitor?.[id],profile.npuResources,profile.npuHealthPolicy):null;
+      const available=Boolean(m&&m.enabled===true&&['online','partial'].includes(m.status)&&m.ready===true&&!conflict&&!seen.has(m.resourceKey)&&(!npu||npu.allowed));
       if(available&&selected.length<profile.machineCount){selected.push(m);seen.add(m.resourceKey);}
-      return {id,...(m&&isIP(m.host)&&this.c.runner.queueFeedbackIncludeAddresses!==false?{host:m.host}:{}),available,reason:conflict?'RESOURCE_BUSY':reason};
+      return {id,...(m&&isIP(m.host)&&this.c.runner.queueFeedbackIncludeAddresses!==false?{host:m.host}:{}),available,reason:conflict?'RESOURCE_BUSY':npu&&!npu.allowed?npu.reason:reason,...(npu?{npu}:{})};
     });
     const feedback={schema:'aiconnector.queue.v1',required_machines:profile.machineCount,available_machines:selected.length,observed_at:now(),machines};
     // A stable digest avoids publishing a new capability comment per 5s poll.

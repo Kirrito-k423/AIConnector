@@ -14,6 +14,7 @@
   "machinePool": ["AUTHORIZED_NODE_1", "AUTHORIZED_NODE_2"],
   "machineCount": 1,
   "npuHealthPolicy": "allow-warning-alarm",
+  "npuResources": {"model": "Ascend950DT", "devicesPerMachine": 4, "minFreeHbmMB": 8192, "maxUtilization": 5, "maxSampleAgeSeconds": 120},
   "repository": "FIXED_PROJECT",
   "revision": "FIXED_REVISION",
   "entry": "experiment",
@@ -31,6 +32,8 @@
 双机及更大任务使用 `machineCount: 2` 等，并保留原 `groupCompletionOutput / groupRanksPerMachine` 和完整各 rank 终态记录。控制器一次预留整个选中组；同一 `resourceKey` 的地址别名只计一台。机器组顺序、控制机、命令 SHA 和原预留 ID 在 POST 前持久化。回复丢失、服务重启和 unknown 都核对原意图，不重新选择或再启动 SSH。
 
 候选机必须在控制器目录中启用、在线/partial 且 `ready`，不能占用别人的任务、预留、continuation 或本地未知资源。`ready` 仍不证明 NPU 空闲；原实验中的进程、HBM、设备数、SDK、模型资产和正确性检查保留。共享 GPU/NPU 的按卡资源分配不是本次机器级池的能力。
+
+NPU 实验池须登记 `npuResources` 的真实模型、所需卡数、最小剩余 HBM、最大利用率和样本年龄；示例数值由实际实验要求替换。选机程序会复用监控原始 `npu-smi` 采样，跳过外部 NPU 进程占用、容量不足、过期/未知采样及型号不符的节点；允许空闲的 Warning/Alarm 节点。为保持整机预留边界，首版不在有其他 NPU 进程的节点上分配部分卡。无该字段的池只保证 SSH 控制器层面可用，不能声称 NPU 自动选机。CPU/通用 SSH 实验池不需要该字段。
 
 新执行固定入口会收到 `AICONNECTOR_NPU_HEALTH_POLICY`，多机协调器还收到已有的 `AICONNECTOR_GROUP_MACHINE_IDS / RUN_KEY / GROUP_RANKS_PER_MACHINE`。协调器必须使用选中组，不能仍在脚本里写死原 IP。
 

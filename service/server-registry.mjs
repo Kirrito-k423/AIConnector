@@ -1,3 +1,4 @@
+import {validateNpuResources} from './npu-resources.mjs';
 // A separate, locally granted registry lets maintenance add server experiments
 // without granting writes to model credentials, transport or local commands.
 const need=(ok,code)=>{if(!ok)throw new Error(code);};
@@ -7,6 +8,7 @@ export function validateRegistry(value) {
   need(Array.isArray(value.machineIds)&&value.machineIds.length>0&&value.machineIds.length<=12&&value.machineIds.every(x=>typeof x==='string'&&x.length>0&&x.length<=256)&&new Set(value.machineIds).size===value.machineIds.length,'INVALID_SERVER_MACHINES');
   need(value.profiles&&typeof value.profiles==='object'&&!Array.isArray(value.profiles)&&Object.keys(value.profiles).length<=24,'INVALID_SERVER_PROFILES');
   for(const [id,p]of Object.entries(value.profiles)){
+    if(p.npuResources!==undefined){need(p.machinePool!==undefined,'NPU_POOL_REQUIRED');validateNpuResources(p.npuResources);}
     need(p.poolSelected===undefined&&p.poolSha256===undefined,'SERVER_POOL_INTERNAL_FIELDS');
     need(p.executionMode===undefined||['pi','direct'].includes(p.executionMode),'INVALID_EXECUTION_MODE');
     need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');

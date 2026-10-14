@@ -7,6 +7,7 @@ import {localRequest} from './http.mjs';
 import {watchError,publicWatchError,validateInventory,catalogEvidence} from './watch-catalog.mjs';
 import {healthPolicy,healthEvidence} from './npu-health.mjs';
 import {cleanError} from './common.mjs';
+import {validateNpuResources} from './npu-resources.mjs';
 
 const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
 const publicJob=j=>({id:j.id,status:j.status,selectedMachineId:j.selectedMachineId,machineName:j.selectedMachineId,createdAt:j.createdAt,updatedAt:j.updatedAt,finishedAt:j.finishedAt,exitCode:j.exitCode,archiveReady:j.archiveReady,archiveError:j.archiveError?cleanError({message:j.archiveError}):j.archiveError,error:j.error?cleanError({message:j.error}):j.error});
@@ -37,6 +38,7 @@ export function validateWatchProfile(p) {
   need(!(p.machineId&&p.group),'INVALID_WATCH_SELECTOR');
   need((p.machineId&&typeof p.machineId==='string')||(p.group&&typeof p.group==='string')||p.allowAnyMachine===true||p.machinePool!==undefined,'WATCH_SELECTOR_REQUIRED');
   need(!p.allowTaskArguments,'WATCH_TASK_ARGUMENTS_DISABLED');
+  if(p.npuResources!==undefined){need(p.machinePool!==undefined||p.poolSelected===true,'NPU_POOL_REQUIRED');validateNpuResources(p.npuResources);}
   need(p.npuHealthPolicy===undefined||['strict','allow-warning-alarm'].includes(p.npuHealthPolicy),'INVALID_NPU_HEALTH_POLICY');
   if(p.machinePool!==undefined){
     need(Array.isArray(p.machinePool)&&p.machinePool.length>0&&p.machinePool.length<=12&&new Set(p.machinePool).size===p.machinePool.length&&p.machinePool.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&!p.machineId&&!p.machineIds&&!p.group&&!p.allowAnyMachine,'INVALID_WATCH_MACHINE_POOL');
