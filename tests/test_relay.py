@@ -176,6 +176,35 @@ class RelayTests(unittest.TestCase):
         (self.folder/node/'state.json').write_text(json.dumps(dict(
             schema='aiconnector.store.v1', sha256=sha(raw), data_base64=base64.b64encode(raw).decode())))
 
+    def test_expired_ambiguous_capability_observation_is_superseded_without_resetting_other_writes(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.15',digest='d'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        data['digest']='e'*64;file.write_text(json.dumps(data));self.ctx['provision_mode']['comment']='before'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        state=self.read_state('windows-inner')
+        old_pending=state['capabilities_pending']
+        old_id='capability:'+sha(json.dumps(old_pending,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+        row=state['provisions'].pop(old_id)
+        old_pending['generated_at']='2000-01-01T00:00:00+00:00'
+        expired_id='capability:'+sha(json.dumps(old_pending,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode())
+        state['provisions'][expired_id]=row
+        state['provisions']['issue:unknown']={'status':'uncertain','http':0}
+        state['uploads']['unchanged']={'status':'rejected','http':403}
+        state['post_not_before']=0
+        raw=json.dumps(state,separators=(',',':')).encode()
+        (self.folder/'windows-inner'/'state.json').write_text(json.dumps(dict(schema='aiconnector.store.v1',sha256=sha(raw),data_base64=base64.b64encode(raw).decode())))
+        self.ctx['provision_mode'].clear()
+        data['generated_at']=datetime.now(timezone.utc).isoformat();file.write_text(json.dumps(data))
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        final=self.read_state('windows-inner')
+        self.assertEqual(final['provisions'][expired_id]['status'],'uncertain')
+        self.assertIn('superseded_at',final['provisions'][expired_id])
+        self.assertEqual(final['provisions']['issue:unknown'],{'status':'uncertain','http':0})
+        self.assertEqual(final['uploads']['unchanged'],{'status':'rejected','http':403})
+        self.assertEqual(len(self.ctx['issues']),1)
+        self.assertEqual(len(self.ctx['comments']),2)
+
     def expire_poll_maintenance(self, node, **fields):
         state=self.read_state(node)
         state['sync'].update(fields or dict(catalog_checked_at=0,audit_checked_at=0,capabilities_checked_at=0))

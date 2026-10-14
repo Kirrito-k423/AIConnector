@@ -197,8 +197,23 @@ function Atomic-Work([string]$Path,[string]$Text) {
     try {
         $stream=[IO.File]::Open($tmp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
         try { $stream.Write($data,0,$data.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($tmp,$Path,[NullString]::Value) } else { [IO.File]::Move($tmp,$Path) }
+        if ([IO.File]::Exists($Path)) { Replace-AtomicFile $tmp $Path } else { [IO.File]::Move($tmp,$Path) }
     } finally { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } }
+}
+function Replace-AtomicFile([string]$tmp,[string]$Path) {
+    for ($attempt=0; ; $attempt++) {
+        try { [IO.File]::Replace($tmp,$Path,[NullString]::Value); return }
+        catch {
+            $cause=$_.Exception
+            while ($cause.InnerException) { $cause=$cause.InnerException }
+            $native=$cause.HResult -band 65535
+            # A Windows reader can temporarily omit FILE_SHARE_DELETE. Retry
+            # this same atomic replace, without unlinking the durable ledger.
+            # Other failures (including full disks) remain visible immediately.
+            if ($cause -isnot [IO.IOException] -or $native -notin @(32,33) -or $attempt -ge 7) { throw }
+            Start-Sleep -Milliseconds ([int][Math]::Min(100,10*[Math]::Pow(2,$attempt)))
+        }
+    }
 }
 function Save {
     $stage=Start-Stage 'state.save'
@@ -617,6 +632,15 @@ function Advertise-Capabilities {
     if ($script:State.provisions.ContainsKey('capability-issue')) { $script:State.provisions['capability-issue'].status='confirmed'; Save }
     $latest=Read-Capabilities
     $pending=Get-Field $script:State 'capabilities_pending'
+    if ($pending -and ((Epoch)-([DateTimeOffset]::Parse((Source-Time $pending.generated_at))).ToUnixTimeSeconds()) -ge 1800) {
+        # Capabilities are replaceable observations, not execution commands.
+        # Keep the old ambiguous/rejected write for audit; publish the current
+        # local observation under a new identity after a complete readback.
+        # Never requeue an uncertain task issue, release, claim or upload here.
+        $oldId='capability:'+(Hash (Canonical $pending))
+        if ($script:State.provisions.ContainsKey($oldId)) { $script:State.provisions[$oldId].superseded_at=Epoch }
+        $pending=$null; $script:State.Remove('capabilities_pending'); Save
+    }
     if (-not $pending) {
         if ($latest -and $latest.data.digest -ceq $data.digest -and ((Epoch)-([DateTimeOffset]::Parse((Source-Time $latest.data.generated_at))).ToUnixTimeSeconds()) -lt 1800) { return @{confirmed=$true;data=$latest.data} }
         $pending=$data; $script:State.capabilities_pending=$pending; Save
