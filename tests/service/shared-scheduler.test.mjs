@@ -99,6 +99,14 @@ test('sender auto selects a declared pool, retains queue state outside readiness
   assert.equal(preflight(request,busy).ok,true,'busy is queued, not a capability refusal');
 });
 
+test('auto excludes pools with a different entry or code revision before choosing an available profile',()=>{
+  for(const patch of [{entry:'another-experiment'},{revision:'another-rev'}]){
+    const c=config('http://127.0.0.1:1234');c.runner.profiles.fixed={...p,machineId:'a'};Object.assign(c.runner.profiles.pool,patch);
+    const request={requirements:{mode:'experiment',checks:['fixture'],execution_mode:'direct'},code:{repository:'fixture',revision:'fixture-rev'},environment:{target:'auto'},invocation:{entry:'experiment',arguments:[]}};
+    assert.equal(preflight(request,capabilities(c)).profile.id,'fixed');
+  }
+});
+
 test('Alarm/Warning execute and return annotated ZIP through a real worker; strict blocks before SSH',async()=>{
   for(const policy of ['allow-warning-alarm','strict']){
     const npu='| NPU ID | Name | Health |\n| 0 | Ascend950DT | Alarm |\n| 1 | Ascend950DT | Warning |\n';

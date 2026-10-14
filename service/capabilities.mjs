@@ -118,7 +118,7 @@ export function preflight(task,remote) {
     (!task.requirements.data_export?.request_recipient_sha256||p.data_export?.request_recipient_sha256===task.requirements.data_export.request_recipient_sha256)&&
     (task.requirements.checks||[]).every(t=>p.checks.includes(t))&&p.repository===task.code.repository&&(!task.requirements.execution_mode||(p.execution_mode||'pi')===task.requirements.execution_mode)&&
     (!task.requirements.resources||p.resources&&p.resources.machine_count===task.requirements.resources.machine_count&&(!task.requirements.resources.atomic_group||p.resources.atomic_group)&&(!task.requirements.resources.group_sha256||task.requirements.resources.group_sha256===p.resources.group_sha256)&&(!task.requirements.resources.pool_sha256||task.requirements.resources.pool_sha256===p.resources.pool_sha256));
-  const candidates=remote.profiles.filter(match);
+  const candidates=remote.profiles.filter(p=>match(p)&&(task.invocation.entry==='auto'||p.entry===task.invocation.entry)&&(!p.revision||p.revision===task.code.revision));
   const pools=candidates.filter(p=>p.resources?.selection==='authorized-pool');
   const selected=task.environment.target==='auto'?candidates.length===1?candidates[0]:pools.length===1?pools[0]:null:remote.profiles.find(p=>p.id===task.environment.target);
   if(!selected||!match(selected)){
