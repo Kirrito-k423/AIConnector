@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('Submit','Poll','Audit','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','FetchTransferPart','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
+    [ValidateSet('Submit','Poll','Audit','Watch','Serve','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','TransferUpload','FetchTransferPart','RetryRejected','Advertise','Capabilities')][string]$Action='Status',
     [ValidateSet('mac-outer','windows-inner')][string]$Node='windows-inner',
     [string]$Config='', [string]$StateDir='', [string]$File='', [string]$Key='',
     [string]$Proxy='system', [switch]$PromptToken,
@@ -19,6 +19,124 @@ $script:Utf8=New-Object Text.UTF8Encoding($false)
 $OutputEncoding=$script:Utf8
 Add-Type -AssemblyName System.Net.Http
 $root=[IO.Path]::GetDirectoryName($PSCommandPath)
+# Resident upload pipeline: native I/O never opens or writes another ledger.
+$script:PartUploads=@{}
+$script:PartUploadPaths=@{}
+
+function Upload-Part([string]$Path) {
+    Need ($script:Resident -and $script:Relay -and $Node -ceq 'windows-inner') 'PART_UPLOAD_REQUIRES_RESIDENT'
+    $pathKey=$Key+':'+[IO.Path]::GetFullPath($Path)
+    $active=Get-Field $script:PartUploadPaths $pathKey
+    if ($active) {
+        # A completed sibling must be collected even during a provider cooldown.
+        # No projection rebuild, full ledger save or source-file rehash per tick.
+        $previous=$script:IoScope; $script:IoScope='upload:'+$Key
+        try { return Receive-PartUpload $active } finally { $script:IoScope=$previous }
+    }
+    return In-Scope ('upload:'+$Key) { Upload-Zip $Path $false $true }
+}
+
+function Start-PartUpload($Context,[string]$Upload) {
+    Need ($script:Resident -and $script:Relay -and $Node -ceq 'windows-inner') 'PART_UPLOAD_REQUIRES_RESIDENT'
+    Need ($script:PartUploads.Count -lt 4) 'UPLOAD_SLOTS_BUSY'
+    if (-not ('AIConnector.UploadHttp' -as [type])) {
+        $source=[IO.File]::ReadAllText((Join-Path $root 'service/upload-http.cs'))
+        if ($PSVersionTable.PSVersion.Major -le 5) { Add-Type -TypeDefinition $source -ReferencedAssemblies System.Net.Http,System,System.Core }
+        else { Add-Type -TypeDefinition $source }
+    }
+    $req=[Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Post,($Upload+'?name='+[Uri]::EscapeDataString($Context.name)))
+    $null=$req.Headers.TryAddWithoutValidation('Authorization',('Bearer '+$script:Token))
+    $null=$req.Headers.TryAddWithoutValidation('Accept','application/vnd.github+json')
+    $null=$req.Headers.TryAddWithoutValidation('User-Agent','AIConnector/0.7')
+    $req.Content=[Net.Http.ByteArrayContent]::new($Context.bytes)
+    $req.Content.Headers.ContentType=[Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/zip')
+    $cts=[Threading.CancellationTokenSource]::new(); $cts.CancelAfter($TimeoutSeconds*1000)
+    # Persist BOTH intent and the global start-spacing gate before starting I/O.
+    $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
+    Start-DeliveryWrite $Context.row
+    try {
+        $http=[AIConnector.UploadHttp]::new($script:HttpClient,$req,$cts.Token)
+        $script:PartUploads[$Context.uploadKey]=@{context=$Context;request=$req;cts=$cts;http=$http;result=$null;response=$null;rate_observed=$false}
+        $script:PartUploadPaths[$Context.key+':'+$Context.path]=$Context.uploadKey
+    } catch { $cts.Dispose(); $req.Dispose(); throw }
+    Trace-Event 'transfer_part_started' @{key=$Context.key;part_sha256=$Context.sha;bytes=$Context.bytes.Length;active_uploads=$script:PartUploads.Count}
+    return @{pending=$true;sha256=$Context.sha}
+}
+
+function Read-PartResponse($Flight) {
+    if ($Flight.result) { return $Flight.result }
+    $r=@{http=0;status='NETWORK_ERROR';json=$null;retry_after='';rate_remaining='';rate_reset='';elapsed_ms=0}
+    try {
+        $response=$Flight.http.Task.GetAwaiter().GetResult(); $Flight.response=$response
+        $r.http=[int]$response.StatusCode
+        if ($response.Headers.RetryAfter) { $r.retry_after=[string]$response.Headers.RetryAfter }
+        if ($response.Headers.Contains('X-RateLimit-Remaining')) { $r.rate_remaining=[string](@($response.Headers.GetValues('X-RateLimit-Remaining'))[0]) }
+        if ($response.Headers.Contains('X-RateLimit-Reset')) { $r.rate_reset=[string](@($response.Headers.GetValues('X-RateLimit-Reset'))[0]) }
+        $body=$response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        try { $r.json=Parse ($script:Utf8.GetString($body)) } catch { }
+        if ($r.http -ge 200 -and $r.http -lt 300) { $r.status='HTTP_OK' }
+        elseif ($r.http -eq 429) { $r.status='RATE_LIMITED' }
+        elseif ($r.http -eq 403) { $r.status='FORBIDDEN_OR_RATE_LIMITED' }
+        else { $r.status='HTTP_ERROR' }
+    } catch { if ($Flight.cts.IsCancellationRequested) { $r.status='TIMEOUT' } else { $r.status=Error-Code $_ } }
+    $r.elapsed_ms=$Flight.http.ElapsedMilliseconds
+    $Flight.result=$r
+    if ($r.status -cne 'HTTP_OK') { $script:MetadataCache.Clear() }
+    Trace-Event 'transfer_part_http_finished' @{key=$Flight.context.key;part_sha256=$Flight.context.sha;bytes=$Flight.context.bytes.Length;http=$r.http;category=$r.status;elapsed_ms=$r.elapsed_ms}
+    return $r
+}
+
+function Observe-PartUploadLimits {
+    foreach ($flight in @($script:PartUploads.Values)) {
+        if (-not $flight.http.Task.IsCompleted -or $flight.rate_observed) { continue }
+        $r=Read-PartResponse $flight; $flight.rate_observed=$true
+        if (Limited $r) { $r.retry_at=Cooldown $r; $script:State.next_poll=[Math]::Max($script:State.next_poll,$r.retry_at); Save }
+    }
+}
+
+function Confirm-UploadedZip($Context,$Asset,[bool]$FreshUpload) {
+    $bytes=$Context.bytes; $name=$Context.name; $sha=$Context.sha; $row=$Context.row
+    Need ($Asset.state -ceq 'uploaded' -and $Asset.size -eq $bytes.Length -and $Asset.name -ceq $name) 'ASSET_CONFLICT'
+    $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }
+    $manifest=@{name=$manifestName;bytes=$bytes.Length;sha256=$sha;url=[string]$Asset.browser_download_url}
+    if ($script:Relay) { Need ($manifest.url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $Context.identity)+'/'+$name)) 'ARTIFACT_RUN_MISMATCH' }
+    Artifact-Valid $manifest
+    $digest=[string](Get-Field $Asset 'digest'); Need (-not $digest -or $digest -ceq ('sha256:'+$sha)) 'ARTIFACT_HASH_MISMATCH'
+    $deferred=$script:DeferUploadVerification -and $script:Relay -and $Node -ceq 'windows-inner' -and $FreshUpload -and -not $Context.diagnostics
+    Trace-Event 'upload_api_confirmed' @{bytes=$bytes.Length}
+    if (-not $deferred) { $null=Fetch-Artifacts @($manifest) $true }
+    $row.public_verification='sender_verified'; if ($deferred) { $row.public_verification='receiver_required' }
+    $row.status='confirmed'; $row.manifest=$manifest; $row.confirmed_at=Epoch
+    $kind='upload_verified'; if ($deferred) { $kind='upload_verification_deferred' }
+    Trace-Event $kind @{bytes=$bytes.Length;confirmed_at=$row.confirmed_at}; Save
+    return $manifest
+}
+
+function Receive-PartUpload([string]$UploadKey) {
+    $flight=$script:PartUploads[$UploadKey]
+    if (-not $flight.http.Task.IsCompleted) { return @{pending=$true;sha256=$flight.context.sha} }
+    try {
+        $r=Read-PartResponse $flight; $row=$flight.context.row; $row.http=$r.http
+        $script:WireDiagnostic=@{category=$r.status;http=$r.http}
+        if (Limited $r) {
+            $row.status='rate_limited'; $retry=Get-Field $r 'retry_at' 0
+            if (-not $retry) { $retry=Cooldown $r }
+            $script:State.next_poll=[Math]::Max($script:State.next_poll,$retry); Save; Fail 'RATE_LIMITED'
+        }
+        if ($r.http -eq 422) {
+            $found=Read-UploadAssets $flight.context.release $row $true
+            if ($found.Count -eq 0) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
+            return Confirm-UploadedZip $flight.context $found[0] $false
+        }
+        if ($r.http -ge 400 -and $r.http -lt 500) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
+        Save; Require-Response $r
+        return Confirm-UploadedZip $flight.context $r.json ($r.http -eq 201)
+    } finally {
+        if ($flight.response) { $flight.response.Dispose() }
+        $flight.cts.Dispose(); $flight.request.Dispose(); $script:PartUploads.Remove($UploadKey)
+        $script:PartUploadPaths.Remove($flight.context.key+':'+$flight.context.path)
+    }
+}
 if (-not $Config) { $Config=Join-Path $root 'connector.config.json' }
 $defaultStateDir=-not $StateDir
 if (-not $StateDir) { $StateDir=Join-Path (Join-Path $root 'connector-state') $Node }
@@ -38,7 +156,7 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
         $row=@{schema='aiconnector.timing.v1';at=[DateTimeOffset]::UtcNow.ToString('o');source='connector';operation_id=$OperationId;action=$Action;kind=$Kind}
         if ($script:IoScope -cmatch '^[a-zA-Z0-9_:/-]{1,240}$') { $row.scope=$script:IoScope }
         if ($Key -cmatch '^[a-z0-9_-]+/[1-9][0-9]*/[a-z0-9_-]+$') { $row.key=$Key }
-        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent','entries_removed','stage','cpu_ms','exception_type','native_code','line')) {
+        foreach ($name in @('key','event_id','event_kind','method','endpoint','request_id','http','category','elapsed_ms','bytes','retry_at','confirmed_at','files_written','events_sent','entries_removed','stage','cpu_ms','exception_type','native_code','line','part_sha256','active_uploads')) {
             if ($Values.ContainsKey($name)) { $row[$name]=$Values[$name] }
         }
         $trace=Join-Path $StateDir 'transport-timing.jsonl'
@@ -283,6 +401,8 @@ function Invoke-WireHttp-Work {
     if ($null -eq $script:HttpClient) {
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.AllowAutoRedirect = $false
+    [Net.ServicePointManager]::DefaultConnectionLimit=[Math]::Max(8,[Net.ServicePointManager]::DefaultConnectionLimit)
+    if ($handler.PSObject.Properties['MaxConnectionsPerServer']) { $handler.MaxConnectionsPerServer=8 }
     $handler.UseDefaultCredentials = $false
     $handler.UseCookies = $false
     $handler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
@@ -294,6 +414,7 @@ function Invoke-WireHttp-Work {
     }
     $script:HttpClient = New-Object System.Net.Http.HttpClient($handler)
     $script:HttpClient.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $script:HttpClient.MaxResponseContentBufferSize=2097152
     }
     $client=$script:HttpClient
     $cts = New-Object Threading.CancellationTokenSource
@@ -524,7 +645,7 @@ function Cached-Metadata([string]$Name) {
     $script:MetadataCache.Remove($Name); return $null
 }
 function Cache-Metadata([string]$Name,$Value) {
-    # Successful validation only; no disk persistence, negative entries or TTL extension on hits.
+    # Validated identities and complete inventories only; no disk persistence or TTL extension on hits.
     if ($script:Resident) {
         foreach ($id in @($script:MetadataCache.Keys)) { if ($script:MetadataCache[$id].expires_at -le (Epoch)) { $script:MetadataCache.Remove($id) } }
         if ($script:MetadataCache.Count -ge 128) { $old=@($script:MetadataCache.Keys | Sort-Object @{Expression={$script:MetadataCache[$_].expires_at}})[0]; $script:MetadataCache.Remove($old) }
@@ -1191,28 +1312,35 @@ function Poll-Once {
     if (-not $script:State.last_error) { $script:State.failures=0 }
     return Snapshot
 }
-function Read-UploadAssets($Release,$Row) {
+function Read-UploadAssets($Release,$Row,[bool]$Refresh=$false) {
     try {
+        $cache=$null; $cacheKey='assets:'+ $Release.id
+        if (-not $Refresh -and $Row.status -ceq 'pending' -and -not (Get-Field $Row 'attempts' 0)) { $cache=Cached-Metadata $cacheKey }
         $assets=@(); $complete=$false
-        for ($page=1;$page -le $script:C.max_pages;$page++) {
+        if ($cache) { $assets=@($cache.assets); $complete=$true }
+        for ($page=1;-not $complete -and $page -le $script:C.max_pages;$page++) {
             $r=Api ('/repos/'+$script:C.repository+'/releases/'+$Release.id+'/assets?per_page=100&page='+$page); Require-Response $r
             Need ($r.json -is [Array]) 'INVALID_ASSET_LIST'; $assets+=@($r.json)
             if ($r.json.Count -lt 100) { $complete=$true; break }
         }
         Need $complete 'PAGINATION_INCOMPLETE'
+        if (-not $cache) { Cache-Metadata $cacheKey @{assets=$assets} }
         $found=@($assets | Where-Object { $_.name -ceq $Row.name })
         Need ($found.Count -le 1) 'ASSET_CONFLICT'
         return ,$found
     } catch { Reset-DeliveryAbsence $Row; Save; throw }
 }
-function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
+function Upload-Zip([string]$Path,[bool]$Diagnostics=$false,[bool]$Asynchronous=$false) {
     Need ($script:Token -and $script:C.provider -eq 'github') 'GITHUB_TOKEN_REQUIRED_FOR_UPLOAD'
-    Need ($script:State.next_poll -le (Epoch)) 'CHANNEL_COOLDOWN'
+    if ($Asynchronous) { Need ($script:Resident -and $script:Relay -and $Node -ceq 'windows-inner') 'PART_UPLOAD_REQUIRES_RESIDENT' }
     $info=[IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
     Need ($info.Exists -and $info.Length -gt 0 -and $info.Length -lt 5242880 -and $info.Extension -ieq '.zip') 'INVALID_ZIP_FILE'
     $bytes=[IO.File]::ReadAllBytes($info.FullName); $sha=Get-Sha256 $bytes
     Add-Type -AssemblyName System.IO.Compression
-    try { $mem=[IO.MemoryStream]::new($bytes,$false); $zip=[IO.Compression.ZipArchive]::new($mem,[IO.Compression.ZipArchiveMode]::Read); $zip.Dispose(); $mem.Dispose() } catch { Fail 'INVALID_ZIP_FILE' }
+    try { $mem=[IO.MemoryStream]::new($bytes,$false); $zip=[IO.Compression.ZipArchive]::new($mem,[IO.Compression.ZipArchiveMode]::Read); if ($Asynchronous) { Need ($zip.Entries.Count -eq 1 -and $zip.Entries[0].FullName -ceq 'part.age') 'INVALID_TRANSFER_PART' }; $zip.Dispose(); $mem.Dispose() } catch { Fail 'INVALID_ZIP_FILE' }
+    if ($Asynchronous -and $script:PartUploads.ContainsKey('upload:'+$Key+':'+$sha)) { return Receive-PartUpload ('upload:'+$Key+':'+$sha) }
+    Need ($script:State.next_poll -le (Epoch)) 'CHANNEL_COOLDOWN'
+    if ($Asynchronous) { Need ($script:PartUploads.Count -lt 4) 'UPLOAD_SLOTS_BUSY' }
     $uploadKey=$sha; $identity=$null
     $name='aiconnector-'+$script:C.namespace+'-'+$Node+'-'+$sha+'.zip'
     if ($script:Relay) {
@@ -1232,7 +1360,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
     $check=Get-Field $row 'recovery'
     if ($row.status -eq 'uncertain' -and $check -and (Epoch)-$check.last_absent_at -lt $script:C.poll_seconds) { Fail 'UPLOAD_RECONCILE_PENDING' }
     if ($script:Relay) {
-        $release=Ensure-RunRelease $identity; Need ($null -ne $release) 'RELEASE_NOT_CONFIRMED'
+        $release=Ensure-RunRelease $identity $Asynchronous; Need ($null -ne $release) 'RELEASE_NOT_CONFIRMED'
     } else {
         $r=Api ('/repos/'+$script:C.repository+'/releases/tags/'+$script:C.release_tag); Require-Response $r
         Need ($r.json.id -and -not $r.json.draft) 'RELEASE_NOT_PUBLIC'; $release=$r.json
@@ -1240,6 +1368,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
     $upload=([string]$release.upload_url) -replace '\{.*$',''; $u=Assert-Url $upload; $api=Assert-Url $script:C.api_base
     Need (($u.Host -ceq 'uploads.github.com' -and $u.AbsolutePath -ceq ('/repos/'+$script:C.repository+'/releases/'+$release.id+'/assets')) -or ($api.IsLoopback -and $u.IsLoopback -and $api.Authority -ceq $u.Authority)) 'INVALID_UPLOAD_TARGET'
     Need ($row.name -ceq $name -and $row.bytes -eq $bytes.Length) 'UPLOAD_IDENTITY_CHANGED'
+    $context=@{row=$row;bytes=$bytes;name=$name;sha=$sha;identity=$identity;release=$release;uploadKey=$uploadKey;diagnostics=$Diagnostics;path=$info.FullName;key=$Key}
     $freshUpload=$false
     $found=Read-UploadAssets $release $row
     if ($found.Count -eq 0) {
@@ -1251,6 +1380,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
             Need ($delay -le 60) 'WRITE_COOLDOWN'
             if ($delay -gt 0) { Fail 'WRITE_COOLDOWN' }
         }
+        if ($Asynchronous) { return Start-PartUpload $context $upload }
         Start-DeliveryWrite $row
         $r=Invoke-WireHttp -Url ($upload+'?name='+[Uri]::EscapeDataString($name)) -Method POST -BinaryBody $bytes -BinaryContentType 'application/zip' -Headers @{Authorization=('Bearer '+$script:Token);Accept='application/vnd.github+json'} -Authenticated $true
         $row.http=$r.http
@@ -1259,7 +1389,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
         if ($r.http -eq 422) {
             # A previous in-flight upload can win after our absence read. Verify
             # that object rather than overwrite/delete it or trust the 422.
-            Save; $found=Read-UploadAssets $release $row
+            Save; $found=Read-UploadAssets $release $row $true
             if ($found.Count -eq 0) { $row.status='rejected'; Save; Fail 'UPLOAD_REJECTED' }
             $asset=$found[0]
         } else {
@@ -1268,23 +1398,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false) {
             $asset=$r.json; $freshUpload=$r.http -eq 201
         }
     } else { $asset=$found[0] }
-    Need ($asset.state -ceq 'uploaded' -and $asset.size -eq $bytes.Length -and $asset.name -ceq $name) 'ASSET_CONFLICT'
-    $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }
-    $manifest=@{name=$manifestName;bytes=$bytes.Length;sha256=$sha;url=[string]$asset.browser_download_url}
-    if ($script:Relay) { Need ($manifest.url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $identity)+'/'+$name)) 'ARTIFACT_RUN_MISMATCH' }
-    Artifact-Valid $manifest
-    # Only a fresh result POST may leave public validation to the receiving Mac.
-    # An ambiguous response, 422, or existing asset still requires byte equality.
-    $digest=[string](Get-Field $asset 'digest')
-    Need (-not $digest -or $digest -ceq ('sha256:'+$sha)) 'ARTIFACT_HASH_MISMATCH'
-    $deferred=$script:DeferUploadVerification -and $script:Relay -and $Node -ceq 'windows-inner' -and $freshUpload -and -not $Diagnostics
-    Trace-Event 'upload_api_confirmed' @{bytes=$bytes.Length}
-    if (-not $deferred) { $null=Fetch-Artifacts @($manifest) $true }
-    $row.public_verification='sender_verified'; if ($deferred) { $row.public_verification='receiver_required' }
-    $row.status='confirmed'; $row.manifest=$manifest; $row.confirmed_at=Epoch
-    $kind='upload_verified'; if ($deferred) { $kind='upload_verification_deferred' }
-    Trace-Event $kind @{bytes=$bytes.Length;confirmed_at=$row.confirmed_at}; Save
-    return $manifest
+    return Confirm-UploadedZip $context $asset $freshUpload
 }
 function Local-Action {
     if ($Action -eq 'Audit') { Audit-OneRoute; return Snapshot }
@@ -1292,6 +1406,7 @@ function Local-Action {
     if ($Action -eq 'Advertise') { return Advertise-Capabilities }
     if ($Action -eq 'Capabilities') { Assert-Relay; $null=Read-Routes; return @{receiver_capabilities=(Read-Capabilities)} }
     if ($Action -eq 'Status') { return Snapshot }
+    if ($Action -eq 'TransferUpload') { return Upload-Part $File }
     $runs=Runs
     if ($Action -eq 'Submit') {
         Need ($Node -eq 'mac-outer' -and $File) 'SUBMIT_REQUIRES_COORDINATOR_AND_FILE'
@@ -1368,7 +1483,7 @@ function Serve-Requests {
             $request=Parse $line; $requestId=[string]$request.operation_id
             Need ($requestId -cmatch '^[a-zA-Z0-9_-]{1,96}$') 'INVALID_OPERATION_ID'
             $script:OperationId=$requestId
-            Need ($request.action -cin @('Submit','Poll','Audit','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','FetchTransferPart','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
+            Need ($request.action -cin @('Submit','Poll','Audit','Flush','Status','Claim','Complete','Upload','UploadDiagnostics','TransferUpload','FetchTransferPart','RetryRejected','Advertise','Capabilities')) 'INVALID_TRANSPORT_ACTION'
             $script:Action=[string]$request.action; $script:OperationId=$requestId
             $script:Key=[string]$request.key; $script:File=[string]$request.file; $script:ClaimOwner=[string]$request.claim_owner
             Need ($script:Key.Length -le 300 -and $script:File.Length -le 4096 -and $script:ClaimOwner -cmatch '^(|[a-f0-9]{48})$') 'INVALID_TRANSPORT_ARGUMENT'
@@ -1377,21 +1492,24 @@ function Serve-Requests {
             if ($script:MetadataCredential -cne $credential) { $script:MetadataCache.Clear(); $script:MetadataCredential=$credential }
             $script:WireDiagnostic=$null; $script:DeferUploadVerification=$true
             try { if ($script:Profiler) { $script:Profiler.Begin($OperationId,$Action,$Key) } } catch { }
-            Trace-Event 'action_started'
+            if ($Action -cne 'TransferUpload') { Trace-Event 'action_started' }
+            Observe-PartUploadLimits
             if ($Action -eq 'Poll') { $value=Poll-Once } else { $value=Local-Action }
             $replyStage=Start-Stage 'reply.serialize'
             try { $reply=Json @{id=$requestId;ok=$true;value=$value} } finally { Stop-Stage $replyStage }
             $pipeStage=Start-Stage 'reply.pipe'
             try { [Console]::WriteLine($reply) } finally { Stop-Stage $pipeStage }
         } catch {
-            $script:MetadataCache.Clear()
+            $code=Error-Code $_
+            # Local admission waits do not make successfully read metadata stale.
+            if ($code -cnotin @('WRITE_COOLDOWN','UPLOAD_SLOTS_BUSY','REQUEST_COOLDOWN','UPLOAD_RECONCILE_PENDING')) { $script:MetadataCache.Clear() }
             Trace-Fault $_ 'action'
-            $code=Error-Code $_; $script:State.last_error=$code; Save
+            $script:State.last_error=$code; Save
             $retry=Get-Field $script:State 'next_poll' 0
             if ($_.Exception.Data.Contains('retry_at')) { $retry=[Math]::Max($retry,[long]$_.Exception.Data['retry_at']) }
             if ($code -eq 'WRITE_COOLDOWN') { $retry=Get-Field $script:State 'post_not_before' 0 }
             [Console]::WriteLine((Json @{id=$requestId;ok=$false;error=@{ok=$false;code=$code;node=$Node;retry_at=$retry;line=$_.InvocationInfo.ScriptLineNumber;diagnostic=$script:WireDiagnostic}}))
-        } finally { Trace-Event 'action_finished' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds}; $script:Token=''; try { if ($script:Profiler) { $script:Profiler.End() } } catch { } }
+        } finally { if ($Action -cne 'TransferUpload') { Trace-Event 'action_finished' @{elapsed_ms=[long]$watch.Elapsed.TotalMilliseconds} }; $script:Token=''; try { if ($script:Profiler) { $script:Profiler.End() } } catch { } }
     }
     try { if ($script:Profiler) { $script:Profiler.Dispose(); $script:Profiler=$null } } catch { }
 }

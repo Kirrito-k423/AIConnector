@@ -130,6 +130,8 @@ export function loadConfig(file) {
   }
   c.runner.timeoutSeconds??=600; c.runner.maxTurns??=8;
   c.runner.maxConcurrentRuns??=1;
+  c.runner.transferConcurrency??=2;
+  need(Number.isInteger(c.runner.transferConcurrency)&&c.runner.transferConcurrency>=1&&c.runner.transferConcurrency<=4,'INVALID_TRANSFER_CONCURRENCY');
   need(Number.isInteger(c.runner.maxConcurrentRuns)&&c.runner.maxConcurrentRuns>=1&&c.runner.maxConcurrentRuns<=8,'INVALID_RUN_CONCURRENCY');
   need(Number.isInteger(c.runner.timeoutSeconds)&&c.runner.timeoutSeconds>=5&&c.runner.timeoutSeconds<=86400,'INVALID_RUN_TIMEOUT');
   need(Number.isInteger(c.runner.maxTurns)&&c.runner.maxTurns>=1&&c.runner.maxTurns<=100,'INVALID_TURN_LIMIT');

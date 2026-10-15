@@ -7,6 +7,14 @@ import {Connector} from '../../service/connector.mjs';
 import {Runner} from '../../service/runner.mjs';
 import {save,sha} from '../../service/common.mjs';
 
+test('known local write spacing resumes at its deadline without a ten-second retry floor',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC write spacing ')),job={key:'transfer/1/run',dir,state:'running'},ledger={jobs:{[job.key]:job}},retryAt=Date.now()+1500;
+ save(path.join(dir,'worker.json'),{state:'ready'});save(path.join(dir,'result.json'),{outcome:'succeeded'});
+ const connector={call:async()=>{const e=new Error('WRITE_COOLDOWN');e.retryAt=retryAt;throw e;}};
+ try{const runner=new Runner({runner:{enabled:false}},connector,ledger,()=>{},{});await runner.reconcile(job,{runs:[]});await runner.idle();assert.ok(job.delivery_retry_at>=retryAt);assert.ok(job.delivery_retry_at<retryAt+500,'local spacing was inflated into a ten-second backoff');}
+ finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
 test('ready upload precedes a fresh scan without preempting an active request',async()=>{
   let release;const gate=new Promise(r=>release=r),order=[];
   const connector=new Connector({connector:{token_env:'AICONNECTOR_FIXTURE'}},{},async(_exe,args)=>{

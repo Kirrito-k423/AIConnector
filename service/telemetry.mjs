@@ -90,7 +90,7 @@ export function deliveryDiagnostics(c,ledger,snapshot,key){
     if(/^[a-z_]+_at$/.test(name)&&typeof time==='string'&&/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(time))stamps[name]=time;
     else if(name==='packaging_ms'&&Number.isFinite(time))stamps[name]=time;
   }
-  const allowed=new Set([...fields,'schema','at','source','kind','scope','event_id','event_kind','method','endpoint','request_id','http','category','confirmed_at','files_written','events_sent']);
+  const allowed=new Set([...fields,'schema','at','source','kind','scope','event_id','event_kind','method','endpoint','request_id','http','category','confirmed_at','files_written','events_sent','part_sha256','active_uploads']);
   const events=value.events.map(event=>Object.fromEntries(Object.entries(event).filter(([name,item])=>{
     if(!allowed.has(name))return false;
     if(typeof item==='number')return Number.isFinite(item);

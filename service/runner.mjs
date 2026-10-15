@@ -8,6 +8,7 @@ import {validateWatchProfile} from './watch.mjs';
 import {Resources} from './resources.mjs';
 import {checkRequirements,capabilities,VERSION,engineOf} from './capabilities.mjs';
 import {timing,deliveryDiagnostics} from './telemetry.mjs';
+import {mapTransfers} from './transfer-pool.mjs';
 
 export class Runner {
   constructor(config,connector,ledger,persist,secrets) {Object.assign(this,{c:config,connector,ledger,persist,secrets});this.resources=new Resources(config,ledger,persist);this.pending=new Map();
@@ -216,17 +217,17 @@ export class Runner {
         if(result.outcome==='succeeded'&&transfer){
           need(transfer.state==='sealed'&&transfer.key===job.key,'TRANSFER_NOT_SEALED');
           job.transfer_delivery={uploaded:transfer.parts.filter(p=>fs.existsSync(path.join(job.dir,'transfer-delivery',p.sha256+'.json'))).length,total:transfer.parts.length};
-          for(const part of transfer.parts){
-            const marker=path.join(job.dir,'transfer-delivery',part.sha256+'.json'),previous=read(marker);if(previous){need(previous.sha256===part.sha256&&previous.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');continue;}
-            const artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'transfer-parts',part.name)});
-            need(artifact.sha256===part.sha256&&artifact.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');save(marker,artifact);job.transfer_delivery.uploaded++;
-          }
+          await mapTransfers(transfer.parts,this.c.runner.transferConcurrency??2,async part=>{
+            const marker=path.join(job.dir,'transfer-delivery',part.sha256+'.json'),previous=read(marker);if(previous){need(previous.sha256===part.sha256&&previous.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');return;}
+            const artifact=await this.connector.call('UploadTransferPart',{key:job.key,file:path.join(job.dir,'transfer-parts',part.name)});
+            need(artifact.sha256===part.sha256&&artifact.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');save(marker,artifact);job.transfer_delivery.uploaded++;this.persist();
+          });
           this.persist();
         }
         if(!job.artifact){job.timings.upload_queued_at??=now();this.persist();job.artifact=await this.connector.call('Upload',{key:job.key,file:path.join(job.dir,'result.zip')});job.timings.upload_confirmed_at=now();timing(this.c.dataDir,'upload_confirmed',{key:job.key,bytes:job.artifact.bytes});this.persist();}
         const completed={...result,artifacts:[job.artifact]};
         await this.connector.call('Complete',{key:job.key,data:completed});job.state='submitted';job.submitted_at=now();job.timings.result_queued_at=job.submitted_at;job.error='';timing(this.c.dataDir,'result_queued',{key:job.key});this.persist();
-      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;job.delivery_retry_at=Math.max(Date.now()+10000,e.retryAt||0);timing(this.c.dataDir,'delivery_retry',{key:job.key,code:job.error,retry_at:job.delivery_retry_at});this.persist();}
+      }catch(e){job.error=cleanError(e);job.diagnostic=e.diagnostic;const delay=e.message==='WRITE_COOLDOWN'&&Number.isFinite(e.retryAt)&&e.retryAt>0?200:10000;job.delivery_retry_at=Math.max(Date.now()+delay,e.retryAt||0);timing(this.c.dataDir,'delivery_retry',{key:job.key,code:job.error,retry_at:job.delivery_retry_at});this.persist();}
       });}
       return;
     }

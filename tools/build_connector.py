@@ -7,7 +7,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '0.3.0'
-FILES = ['Connector.ps1', 'connector.config.json', 'Connector-Windows.cmd',
+FILES = ['service/upload-http.cs', 'Connector.ps1', 'connector.config.json', 'Connector-Windows.cmd',
          'Start-Windows-Connector.cmd', 'Start-Mac-Connector.command',
          'docs/CONNECTOR.md', 'docs/PROTOCOL.md', 'CONTEXT.md',
          'examples/task.json', 'examples/result.json', 'examples/connector.legacy.config.json',

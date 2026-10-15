@@ -99,7 +99,7 @@ jobs:
         run: python tools/validate_service_bundle.py dist/service/AIConnector-Service-windows-x64.zip --maintenance-repeats 6
   windows-service:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -110,6 +110,12 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
       - run: npm test
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+      - name: Native bounded uploads, control progress, restart and rate-limit recovery
+        if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
+        env:
+          PYTHONUTF8: '1'
+          PWSH: powershell.exe
+        run: python -m unittest discover -s tests -p test_transfer_pipeline.py -v
       - name: Health-only gate permits Warning/Alarm and rejects unknown input
         if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
         run: python -m unittest discover -s tests -p test_npu_health_gate.py -v

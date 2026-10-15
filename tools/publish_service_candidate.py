@@ -44,12 +44,12 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} fixes Issues #20 and #21: new encrypted data parts use 768 KiB plaintext and stay below 1,000,000 ZIP bytes; historical 3 MiB parts remain readable. '
-           'Capability publication leaves the background queue and gets a fair turn after 60 seconds or 12 foreground bypasses, alongside existing Poll fairness. Capabilities are captured on dispatch and freshness uses the confirmed generation timestamp. '
-           'Previously sealed oversized parts remain immutable: use a new task revision and run ID (or new task ID) with a newly bound encrypted request to regenerate smaller parts; resending the same run or RetryRejected does not rechunk it. '
-           'Age encryption, resume, ownership and shared-machine reservations remain included. '
+           f'{version} adds a bounded native HTTP upload pipeline: two in-flight data parts by default, one durable state owner, and control requests remain available while data is uploading. '
+           'It reuses validated release metadata and asset inventories, and resumes known local write spacing at its deadline instead of adding a ten-second retry floor. '
+           'Global write spacing and provider rate-limit backoff remain active. Unknown POSTs reconcile by their original names; sibling successes keep checkpoints; the final index is published only after every part is confirmed. '
+           'The 768 KiB writer, historical chunk compatibility, encryption and existing task/machine ownership remain included. '
            'The package retains the pinned offline simpleHtmlWatch controller, original configuration, data directory and unknown task/reservation state. '
-           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSFER-AND-CAPABILITIES-0717.md\n\n'
+           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/PARALLEL-TRANSFER-0718.md\n\n'
            'CI fixture acceptance does not prove deployment or a successful retest through the actual intranet proxy.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()
