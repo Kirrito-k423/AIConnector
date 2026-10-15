@@ -1,5 +1,15 @@
 # AIConnector：跨网段 AI 任务交接
 
+**v0.7.18-rc.2 默认八路并发文件上传。** 最多八个数据请求在途，沿用原 Windows 代理，并为控制请求保留连接；状态仍由一个常驻进程维护。复用 Release/附件目录，移除不必要的本地 10 秒等待。原 768 KiB 分块、加密、限流退避和恢复检查保持。
+
+机制、实测边界与配置见 [并行传输说明](docs/PARALLEL-TRANSFER-0718.md)。Mac / Windows 包通过验收后发布至 [v0.7.18-rc.2](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.18-rc.2)。旧超限运行的重新提交方式见 [0.7.17 修复说明](docs/TRANSFER-AND-CAPABILITIES-0717.md)。
+
+[下载服务候选包 v0.7.14-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.14-rc.1) · [有界目录与验收](docs/SERVER-CATALOG-0714.md) · [Issue 14 修复与验收](docs/ISSUE-14-FIX.md) · [八机协议与直接执行](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
+
+服务包自带 Node / Pi，Windows 无需 npm 安装依赖。解压后双击 `Open-Windows-Dashboard.cmd` 或 `Open-Mac-Dashboard.command`，在本机页面配置凭据；需要登录自启时运行对应的 `Install-*-Service`。默认只开放 CPU 校验入口，接入实验服务器须在 Windows 本机配置可信入口。当前真实模型 API、用户内网与 NPU 不计入自动测试通过结论。
+
+以下为仍可单独使用的纯通道包：
+
 **v0.3.0 将任务与交付件组织到独立 Relay 仓库。** Mac 发布任务，Windows 生成本地待办并持久化领取；内侧 AI 提交结果后，Mac 下载 ZIP、校验并发布回执。中间件不自动执行 SSH 或评论里的命令。
 
 [下载任务交接包 v0.3.0-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/download/v0.3.0-rc.1/AIConnector.zip) · [两端启动与 AI 接入说明](docs/CONNECTOR.md) · [专用运行仓库规则](docs/RELAY.md) · [任务协议](docs/PROTOCOL.md)
@@ -140,3 +150,5 @@ Windows CI 用系统 PowerShell 5.1 检查构建后的 ZIP、中文空格目录�
 发布后额外执行 `tools/validate_release.py v0.1.5`：从公网匿名下载真实 Release ZIP，校验、全新解压、不修改默认配置，启动并检查真实公共 Issue 与 7 个下载样本。此验收与用户内网通信证据分开记录。
 
 接口依据：[GitCode 文件上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-file-upload/)、[GitCode 图片上传](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-img-upload/)、[GitHub CLI 附件实现](https://github.com/cli/cli/blob/v2.101.0/internal/attachments/client.go)、[GitHub Release 资产接口](https://docs.github.com/en/rest/releases/assets)、[GitHub 限流处理](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)。
+
+0.7.7 的 Windows 十秒时间账本、队列阻塞定位和交付调度见 [TRANSPORT-077](docs/TRANSPORT-077.md)。

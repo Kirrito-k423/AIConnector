@@ -1,0 +1,252 @@
+"""Real resident PS transport: process reuse, persistence, ZIP barriers, no WAN writes."""
+import contextlib
+import copy
+import base64
+import hashlib
+import json
+import os
+import queue
+import subprocess
+import threading
+import time
+import unittest
+from urllib.parse import urlparse
+
+from test_probe import PWSH
+import test_relay as relay
+
+
+class Resident:
+    def __init__(self, case, node, script=None, timeout=30):
+        self.node = node
+        self.timeout = timeout
+        command = case.command(node, 'Serve')
+        if script: command[command.index('-File')+1] = str(script)
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        text=True, encoding='utf-8', env=dict(os.environ))
+        self.lines = queue.Queue()
+        def read():
+            for line in self.process.stdout:
+                if line.startswith('{'): self.lines.put(json.loads(line))
+            self.lines.put(None)
+        self.reader = threading.Thread(target=read, daemon=True)
+        self.reader.start()
+        self.count = 0
+        ready = self.lines.get(timeout=15)
+        assert ready and ready.get('ready') is True, ready
+
+    def call(self, action, key='', file='', owner='', ok=True, token=None):
+        self.count += 1
+        op = str(self.count)
+        self.process.stdin.write(json.dumps(dict(action=action, operation_id=op, key=key,
+            file=str(file), claim_owner=owner, token=token or ('MAC_TOKEN' if self.node=='mac-outer' else 'WIN_TOKEN')))+'\n')
+        self.process.stdin.flush()
+        reply = self.lines.get(timeout=self.timeout)
+        assert reply and reply['id'] == op, reply
+        assert reply['ok'] is ok, reply
+        return reply['value'] if ok else reply['error']
+
+    def close(self, kill=False):
+        if self.process.poll() is None:
+            if kill: self.process.kill()
+            else: self.process.stdin.close()
+            self.process.wait(timeout=15)
+        self.reader.join(timeout=2)
+        if not self.process.stdin.closed: self.process.stdin.close()
+        self.process.stdout.close();self.process.stderr.close()
+
+
+@unittest.skipUnless(PWSH, 'requires PowerShell')
+class ResidentTests(unittest.TestCase):
+    def setUp(self):
+        self.case = relay.RelayTests('test_handoff_creates_one_issue_one_release_and_persists_timeline')
+        self.case.setUp()
+
+    def tearDown(self): self.case.tearDown()
+
+    @contextlib.contextmanager
+    def runtime(self, node):
+        runtime = Resident(self.case, node)
+        try: yield runtime
+        finally: runtime.close()
+
+    def test_unchanged_projection_is_not_rewritten_and_cli_cannot_race_resident(self):
+        c=self.case;c.ready()
+        with self.runtime('windows-inner') as r:
+            first=r.call('Status')
+            files=[c.folder/'windows-inner'/name for name in ['state.json','status.json','status.md']]
+            files += list((c.folder/'windows-inner'/'inbox').glob('*.json'))
+            times=[p.stat().st_mtime_ns for p in files]
+            self.assertEqual(r.call('Status'),first)
+            self.assertEqual([p.stat().st_mtime_ns for p in files],times)
+            self.assertEqual(c.run_cli('windows-inner','Status',ok=False)['code'],'STATE_BUSY')
+            self.assertEqual(r.call('Watch',ok=False)['code'],'INVALID_TRANSPORT_ACTION')
+            self.assertEqual(r.call('Status')['runs'][0]['phase'],'accepted')
+        self.assertEqual(c.run_cli('windows-inner','Status')['runs'][0]['phase'],'accepted')
+
+    def test_local_store_fast_serialization_preserves_event_hashes_types_and_restart(self):
+        c=self.case;c.ready();state=c.read_state('windows-inner')
+        state['fixture_values']={'unicode':'中文🙂\\"\n','timestamp':'2026-10-10T00:00:00Z',
+                                 'empty':[], 'one':[{'ok':True}], 'null':None,
+                                 'integer':9223372036854775807,'fraction':1.25}
+        relay.legacy.ConnectorTests.write_state(c,'windows-inner',state)
+        events=state['events'];claims=state['claims'];comments=len(c.ctx['comments'])
+        with self.runtime('windows-inner') as r:
+            first=r.call('Status');r.call('Flush');r.call('Status')
+        envelope=json.loads((c.folder/'windows-inner'/'state.json').read_text(encoding='utf-8-sig'))
+        raw=base64.b64decode(envelope['data_base64'])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),envelope['sha256'])
+        restored=json.loads(raw)
+        self.assertEqual(restored['fixture_values'],state['fixture_values'])
+        self.assertEqual(restored['events'],events);self.assertEqual(restored['claims'],claims)
+        self.assertEqual(len(c.ctx['comments']),comments)
+        with self.runtime('windows-inner') as r:self.assertEqual(r.call('Status'),first)
+
+    def test_conflict_discovered_during_snapshot_is_durable_before_reply(self):
+        c=self.case;c.ready();state=c.read_state('windows-inner')
+        duplicate=copy.deepcopy(next(e for e in state['events'].values() if e['kind']=='accepted'))
+        duplicate.pop('event_id');duplicate['parent']='f'*64
+        duplicate['event_id']=hashlib.sha256(json.dumps(duplicate,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        state['events'][duplicate['event_id']]=duplicate
+        relay.legacy.ConnectorTests.write_state(c,'windows-inner',state)
+        r=Resident(c,'windows-inner')
+        try:self.assertEqual(r.call('Status')['runs'][0]['phase'],'conflict')
+        finally:r.close(kill=True)
+        self.assertEqual(c.read_state('windows-inner')['conflicts'][c.key],'CONFLICTING_EVENT')
+
+    def test_owned_claim_survives_resident_crash_without_new_identity(self):
+        c=self.case;c.ready();owner='a'*48
+        r=Resident(c,'windows-inner')
+        try: first=r.call('Claim',key=c.key,owner=owner)
+        finally: r.close(kill=True)
+        with self.runtime('windows-inner') as r:
+            again=r.call('Claim',key=c.key,owner=owner)
+            self.assertTrue(again['execute']);self.assertTrue(again['replayed'])
+            self.assertEqual(first['claim_event_id'],again['claim_event_id'])
+            self.assertFalse(r.call('Claim',key=c.key,owner='b'*48)['execute'])
+
+    def test_fresh_result_posts_before_public_download_but_corrupt_result_never_receipted(self):
+        c=self.case;c.ready();c.run_cli('windows-inner','Claim','-Key',c.key)
+        class FaultAPI(relay.RelayAPI):
+            def do_GET(self):
+                if urlparse(self.path).path.startswith('/assets/') and self.ctx.get('asset_fault'):
+                    self.ctx['gets'].append(urlparse(self.path).path)
+                    return self.reply(b'corrupt')
+                super().do_GET()
+        c.server.RequestHandlerClass=FaultAPI;c.ctx['asset_fault']=True
+        path=c.zip_path()
+        with self.runtime('windows-inner') as r:
+            manifest=r.call('Upload',key=c.key,file=path)
+            self.assertFalse(any(p.startswith('/assets/') for p in c.ctx['gets']))
+            c.result['artifacts']=[manifest];c.write_inputs()
+            r.call('Complete',key=c.key,file=c.resultfile);r.call('Flush');r.call('Flush')
+        s=c.poll('mac-outer')
+        self.assertEqual(s['runs'][0]['phase'],'result')
+        self.assertEqual(s['runs'][0]['error'],'ARTIFACT_HASH_MISMATCH')
+        self.assertFalse(any('"kind":"receipt"' in row['body'] for row in c.ctx['comments']))
+        c.ctx['asset_fault']=False;c.clear_cooldown('mac-outer')
+        self.assertEqual(c.poll('mac-outer')['runs'][0]['phase'],'receipt')
+
+    def test_existing_result_asset_still_requires_sender_hash_validation(self):
+        c=self.case;c.ready();c.run_cli('windows-inner','Claim','-Key',c.key)
+        path=c.zip_path();manifest=c.run_cli('windows-inner','Upload','-Key',c.key,'-File',path)
+        # Force reconciliation of an existing asset rather than a confirmed cache.
+        state=c.read_state('windows-inner');row=next(iter(state['uploads'].values()))
+        row['status']='uncertain'
+        if row.get('recovery'): row['recovery']['last_absent_at']=1
+        relay.legacy.ConnectorTests.write_state(c,'windows-inner',state)
+        c.ctx['assets'][urlparse(manifest['url']).path]=b'x'*manifest['bytes']
+        posts=len(c.ctx['posts'])
+        with self.runtime('windows-inner') as r:
+            self.assertEqual(r.call('Upload',key=c.key,file=path,ok=False)['code'],'ARTIFACT_HASH_MISMATCH')
+        self.assertEqual(len(c.ctx['posts']),posts)
+
+    def test_flush_yields_after_one_message_and_keeps_run_identity(self):
+        c=self.case;c.ready()
+        before=len(c.ctx['comments'])
+        with self.runtime('mac-outer') as r:
+            for n in range(6):
+                c.task['run_id']='batch-'+str(n);c.write_inputs();r.call('Submit',file=c.taskfile)
+            first=r.call('Flush')
+            sent=len(c.ctx['comments'])-before
+            self.assertEqual(sent,1)
+            self.assertEqual(sum(i['status']=='confirmed' for i in first['outbox']),sent+1)
+            for _ in range(5):r.call('Flush')
+        self.assertEqual(len(c.ctx['comments'])-before,6)
+        self.assertEqual(len(set(i['body'] for i in c.ctx['comments'])),len(c.ctx['comments']))
+
+    def test_poll_returns_pending_acceptance_without_waiting_for_comment_write(self):
+        c=self.case;c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            before=len(c.ctx['comments']);s=r.call('Poll')
+            self.assertEqual(len(c.ctx['comments']),before)
+            self.assertEqual(s['runs'][0]['phase'],'task')
+            self.assertEqual(s['outbox'][0]['kind'],'accepted')
+            self.assertEqual(r.call('Claim',key=c.key,owner='a'*48,ok=False)['code'],'RUN_NOT_READY')
+            self.assertEqual(r.call('Flush')['runs'][0]['phase'],'accepted')
+            self.assertTrue(r.call('Claim',key=c.key,owner='a'*48)['execute'])
+
+    def test_metadata_cache_reuses_success_only_and_clears_after_failed_readback(self):
+        c=self.case;c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            r.call('Poll');c.ctx['gets'].clear();r.call('Flush')
+            first=list(c.ctx['gets']);self.assertNotIn('/repos/test/tasks/issues',first)
+            r.call('Claim',key=c.key,owner='a'*48);c.ctx['gets'].clear();r.call('Flush')
+            self.assertFalse(any('/contents/' in p or '/releases/tags/' in p or p=='/repos/test/tasks/issues' for p in c.ctx['gets']))
+            c.ctx['fail_paths']={'/repos/test/tasks/issues/comments':503}
+            r.call('Poll',ok=False);c.ctx['fail_paths']={}
+            c.result['artifacts']=[];c.write_inputs();r.call('Complete',key=c.key,file=c.resultfile)
+            c.ctx['descriptor']['namespace']='changed'
+            posts=len(c.ctx['posts']);r.call('Flush',ok=False)
+            self.assertEqual(len(c.ctx['posts']),posts)
+
+    def test_diagnostics_cannot_publish_before_result_and_never_mutate_result(self):
+        c=self.case;c.ready();c.run_cli('windows-inner','Claim','-Key',c.key)
+        with self.runtime('windows-inner') as r:
+            file=c.zip_path();posts=len(c.ctx['posts'])
+            self.assertEqual(r.call('UploadDiagnostics',key=c.key,file=file,ok=False)['code'],'DIAGNOSTICS_REQUIRE_PUBLISHED_RESULT')
+            self.assertEqual(len(c.ctx['posts']),posts)
+            r.call('Complete',key=c.key,file=c.resultfile);r.call('Flush');r.call('Flush')
+            comments=list(c.ctx['comments']);asset=r.call('UploadDiagnostics',key=c.key,file=file)
+            self.assertTrue(asset['name'].startswith('diagnostics--windows-inner--'))
+            self.assertEqual(c.ctx['comments'],comments)
+            before=len(c.ctx['posts']);self.assertEqual(r.call('UploadDiagnostics',key=c.key,file=file),asset)
+            self.assertEqual(len(c.ctx['posts']),before)
+
+    def test_metadata_cache_expires_without_sliding_and_credential_change_invalidates(self):
+        c=self.case;c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            r.call('Poll');r.call('Flush');r.call('Claim',key=c.key,owner='a'*48)
+            c.ctx['descriptor']['namespace']='changed';posts=len(c.ctx['posts'])
+            # A credential refresh invalidates even a recently confirmed entry.
+            self.assertEqual(r.call('Flush',token='NEW_WIN_TOKEN',ok=False)['code'],'RELAY_MANIFEST_MISMATCH')
+            self.assertEqual(len(c.ctx['posts']),posts)
+            c.ctx['descriptor']['namespace']=c.config['namespace'];r.call('Flush')
+            c.result['artifacts']=[];c.write_inputs();r.call('Complete',key=c.key,file=c.resultfile)
+            c.ctx['descriptor']['namespace']='changed';posts=len(c.ctx['posts'])
+            time.sleep(31)
+            self.assertEqual(r.call('Flush',ok=False)['code'],'RELAY_MANIFEST_MISMATCH')
+            self.assertEqual(len(c.ctx['posts']),posts)
+
+    def test_pending_acceptance_is_not_reverified_each_poll_and_controls_precede_new_acceptance(self):
+        c=self.case
+        # First task becomes accepted and locally claimed; its started is pending.
+        c.submit();c.poll('mac-outer')
+        with self.runtime('windows-inner') as r:
+            r.call('Poll');r.call('Flush');r.call('Claim',key=c.key,owner='a'*48)
+            # New tasks must not jump ahead of the first task's started parent.
+            for n in range(5):
+                c.task['run_id']='later-'+str(n);c.write_inputs();c.submit();c.poll('mac-outer')
+            r.call('Poll');r.call('Poll')
+            events=[json.loads(x) for x in (c.folder/'windows-inner'/'transport-timing.jsonl').read_text(encoding='utf-8-sig').splitlines()]
+            checks=[e for e in events if e['kind']=='acceptance_inputs_verified']
+            self.assertEqual(len(checks),6,checks)
+            r.call('Complete',key=c.key,file=c.resultfile)
+            r.call('Flush')
+            self.assertIn('"kind":"started"',c.ctx['comments'][-1]['body'])
+            r.call('Flush');self.assertIn('"kind":"result"',c.ctx['comments'][-1]['body'])
+            r.call('Audit')
+
+
+if __name__=='__main__': unittest.main()

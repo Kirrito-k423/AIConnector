@@ -1,0 +1,35 @@
+{
+  "scope": "Mac PowerShell 7.6.6, same frozen input, seven canonical/hash samples per variant; no service/network/state writes; not Windows or E2E performance.",
+  "input_sha256": "5e4bc3251ca6ccf4565617335a84636b8e8cd2dca758e7f9c9e384305c07ea97",
+  "rows": [
+    {
+      "variant": "off",
+      "samples_ms": [
+        888.6168,
+        674.7117,
+        499.5832,
+        331.8216,
+        335.5828,
+        349.1543,
+        350.7959
+      ],
+      "all_hashes_verified": true,
+      "warm_median_ms": 349.9751
+    },
+    {
+      "variant": "on",
+      "samples_ms": [
+        848.5482,
+        592.7418,
+        492.7827,
+        347.9637,
+        341.5941,
+        337.7024,
+        336.4249
+      ],
+      "all_hashes_verified": true,
+      "warm_median_ms": 344.7789
+    }
+  ],
+  "measurement_limit": "One sequential off/on pair; not a statistical guarantee. Earlier live-state cross-source samples were confounded and are not used as overhead proof."
+}

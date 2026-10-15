@@ -1,0 +1,33 @@
+name: Windows file transfer activation repair
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/transfer-pairing-tests.yml'
+      - 'tools/enable_owned_transfer.mjs'
+      - 'tools/enable_owned_transfer.cmd'
+      - 'service/data-cli.mjs'
+      - 'tests/service/data-cli.test.mjs'
+      - 'tests/service/transfer-pairing.test.mjs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-pairing:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Prepare the unchanged Windows package affected by Issue 15
+        shell: pwsh
+        run: |
+          $archive=Join-Path $env:RUNNER_TEMP 'AIConnector-original-rc2.zip'
+          Invoke-WebRequest 'https://github.com/Kirrito-k423/AIConnector/releases/download/v0.7.15-rc.2/AIConnector-Service-windows-x64.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'df9dd1d614f94c9d5641c1cda5daa8e4709a7562b17e72b583d2724afc539a4a') { throw 'ORIGINAL_PACKAGE_HASH_MISMATCH' }
+          $destination=Join-Path $env:RUNNER_TEMP 'AIC 原始 Windows 安装包'
+          Expand-Archive $archive $destination
+          "AIC_PAIRING_INSTALL_ROOT=$(Join-Path $destination 'AIConnector-Service')" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: node --test tests/service/data-cli.test.mjs tests/service/transfer-pairing.test.mjs tests/service/file-transfer.test.mjs tests/service/file-export.test.mjs

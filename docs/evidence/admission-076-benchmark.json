@@ -1,0 +1,175 @@
+{
+  "rows": [
+    {
+      "variant": "baseline",
+      "repeat": 0,
+      "scope": "First receiver Poll dispatch to owner-bound Claim reply; excludes process cold start, Pi/model/SSH, WAN and resources.",
+      "runs": 6,
+      "http_delay_seconds": 0.08,
+      "claim_reply_ms": {
+        "smoke/1/bench-1": 5185.466332826763,
+        "smoke/1/bench-0": 9276.20045794174,
+        "smoke/1/bench-2": 9528.991333208978,
+        "smoke/1/bench-4": 9731.792666949332,
+        "smoke/1/bench-5": 14301.543499808758,
+        "smoke/1/bench-3": 16317.578332964331
+      },
+      "mean_claim_reply_ms": 10723.595437283317,
+      "all_claimed_ms": 16317.578332964331,
+      "at_admission": {
+        "gets": 48,
+        "posts": 11
+      },
+      "total_gets": 52,
+      "total_posts": 12,
+      "all_started_ms": 17224.07720796764,
+      "source_sha256": "70a6a078d1a0b503075c32dc1d0d20216c6e9bf49d0afcbeff5bc46d0910a27f"
+    },
+    {
+      "variant": "candidate",
+      "repeat": 0,
+      "scope": "First receiver Poll dispatch to owner-bound Claim reply; excludes process cold start, Pi/model/SSH, WAN and resources.",
+      "runs": 6,
+      "http_delay_seconds": 0.08,
+      "claim_reply_ms": {
+        "smoke/1/bench-4": 4104.272542055696,
+        "smoke/1/bench-0": 6084.308082703501,
+        "smoke/1/bench-5": 7451.300458051264,
+        "smoke/1/bench-1": 8684.182916767895,
+        "smoke/1/bench-3": 9636.521874926984,
+        "smoke/1/bench-2": 10899.387000128627
+      },
+      "mean_claim_reply_ms": 7809.995479105662,
+      "all_claimed_ms": 10899.387000128627,
+      "at_admission": {
+        "gets": 16,
+        "posts": 6
+      },
+      "total_gets": 22,
+      "total_posts": 12,
+      "all_started_ms": 14775.907792150974,
+      "source_sha256": "343fd5aaa79e201b2765fc2afc1c9d8b736684dc83ba624430ea6ca1c017fa99"
+    },
+    {
+      "variant": "candidate",
+      "repeat": 1,
+      "scope": "First receiver Poll dispatch to owner-bound Claim reply; excludes process cold start, Pi/model/SSH, WAN and resources.",
+      "runs": 6,
+      "http_delay_seconds": 0.08,
+      "claim_reply_ms": {
+        "smoke/1/bench-4": 4316.548292059451,
+        "smoke/1/bench-2": 5744.174625258893,
+        "smoke/1/bench-0": 7161.028916947544,
+        "smoke/1/bench-5": 8257.169042248279,
+        "smoke/1/bench-1": 9399.03900027275,
+        "smoke/1/bench-3": 10481.549417134374
+      },
+      "mean_claim_reply_ms": 7559.918215653549,
+      "all_claimed_ms": 10481.549417134374,
+      "at_admission": {
+        "gets": 16,
+        "posts": 6
+      },
+      "total_gets": 22,
+      "total_posts": 12,
+      "all_started_ms": 15094.553750008345,
+      "source_sha256": "343fd5aaa79e201b2765fc2afc1c9d8b736684dc83ba624430ea6ca1c017fa99"
+    },
+    {
+      "variant": "baseline",
+      "repeat": 1,
+      "scope": "First receiver Poll dispatch to owner-bound Claim reply; excludes process cold start, Pi/model/SSH, WAN and resources.",
+      "runs": 6,
+      "http_delay_seconds": 0.08,
+      "claim_reply_ms": {
+        "smoke/1/bench-1": 4562.15429212898,
+        "smoke/1/bench-0": 10069.649124983698,
+        "smoke/1/bench-2": 10454.3363340199,
+        "smoke/1/bench-4": 10800.44712498784,
+        "smoke/1/bench-3": 16317.823541816324,
+        "smoke/1/bench-5": 18962.047833949327
+      },
+      "mean_claim_reply_ms": 11861.076375314346,
+      "all_claimed_ms": 18962.047833949327,
+      "at_admission": {
+        "gets": 48,
+        "posts": 11
+      },
+      "total_gets": 52,
+      "total_posts": 12,
+      "all_started_ms": 20258.801749907434,
+      "source_sha256": "70a6a078d1a0b503075c32dc1d0d20216c6e9bf49d0afcbeff5bc46d0910a27f"
+    },
+    {
+      "variant": "baseline",
+      "repeat": 2,
+      "scope": "First receiver Poll dispatch to owner-bound Claim reply; excludes process cold start, Pi/model/SSH, WAN and resources.",
+      "runs": 6,
+      "http_delay_seconds": 0.08,
+      "claim_reply_ms": {
+        "smoke/1/bench-5": 4595.076750032604,
+        "smoke/1/bench-1": 9470.11641599238,
+        "smoke/1/bench-2": 9772.860208060592,
+        "smoke/1/bench-4": 10032.807582989335,
+        "smoke/1/bench-0": 14961.402249988168,
+        "smoke/1/bench-3": 17566.47350033745
+      },
+      "mean_claim_reply_ms": 11066.456117900088,
+      "all_claimed_ms": 17566.47350033745,
+      "at_admission": {
+        "gets": 48,
+        "posts": 11
+      },
+      "total_gets": 52,
+      "total_posts": 12,
+      "all_started_ms": 19060.44204114005,
+      "source_sha256": "70a6a078d1a0b503075c32dc1d0d20216c6e9bf49d0afcbeff5bc46d0910a27f"
+    },
+    {
+      "variant": "candidate",
+      "repeat": 2,
+      "scope": "First receiver Poll dispatch to owner-bound Claim reply; excludes process cold start, Pi/model/SSH, WAN and resources.",
+      "runs": 6,
+      "http_delay_seconds": 0.08,
+      "claim_reply_ms": {
+        "smoke/1/bench-3": 5459.007500205189,
+        "smoke/1/bench-4": 7007.318334188312,
+        "smoke/1/bench-2": 8280.172999948263,
+        "smoke/1/bench-0": 9470.977250020951,
+        "smoke/1/bench-5": 10623.453834094107,
+        "smoke/1/bench-1": 11681.100542191416
+      },
+      "mean_claim_reply_ms": 8753.671743441373,
+      "all_claimed_ms": 11681.100542191416,
+      "at_admission": {
+        "gets": 16,
+        "posts": 6
+      },
+      "total_gets": 22,
+      "total_posts": 12,
+      "all_started_ms": 15677.723709028214,
+      "source_sha256": "343fd5aaa79e201b2765fc2afc1c9d8b736684dc83ba624430ea6ca1c017fa99"
+    }
+  ],
+  "baseline_commit": "5703071e9e0dfc6ce243889b06c418c642fd78dc",
+  "scope": "Real resident PowerShell on Mac with controlled local Relay API, six owner-bound Claim replies; not Pi/model/SSH/WAN/A5 timing.",
+  "statistics": {
+    "baseline": {
+      "mean_claim_reply_ms": 11066.456117900088,
+      "all_claimed_ms": 17566.47350033745,
+      "all_started_ms": 19060.44204114005,
+      "total_gets": 52,
+      "total_posts": 12,
+      "samples": 3
+    },
+    "candidate": {
+      "mean_claim_reply_ms": 7809.995479105662,
+      "all_claimed_ms": 10899.387000128627,
+      "all_started_ms": 15094.553750008345,
+      "total_gets": 22,
+      "total_posts": 12,
+      "samples": 3
+    }
+  },
+  "all_claimed_reduction": 0.37953471424305796
+}
