@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.16 增加已授权共享机器池、保留原 run 的自动排队、Mac 可见的排队 IP 反馈及 Warning/Alarm 执行标注。** 原实验的资源与正确性门禁保留，Health-only 检查接入统一策略。原子整组预留、端到端加密取件和未知任务保护继续保留。软件 fixture 不代表真实 A5 或 T3/T4 实验验收。
+**v0.7.17 修复受限代理下文件分块超限，以及能力公告被持续任务流饿死的问题。** 新文件块按 768 KiB 明文切分，支持旧 3 MiB 块解密；能力公告加入有界公平调度，并使用实际生成时间计算新鲜度。
 
-新行为和旧实验脚本适配见 [共享调度说明](docs/SHARED-SCHEDULING-0716.md)。[下载 Mac / Windows v0.7.16-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.16-rc.1) 已通过两端安装包验收；以下旧包链接保留供历史参考。
+变更、旧失败任务恢复和验收说明见 [传输与能力公告修复](docs/TRANSFER-AND-CAPABILITIES-0717.md)。Mac / Windows 新包通过验收后发布至 [v0.7.17-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.17-rc.1)。[共享调度说明](docs/SHARED-SCHEDULING-0716.md) 与加密取件规则继续适用；以下旧包链接保留供历史参考。
 
 [下载服务候选包 v0.7.14-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.14-rc.1) · [有界目录与验收](docs/SERVER-CATALOG-0714.md) · [Issue 14 修复与验收](docs/ISSUE-14-FIX.md) · [八机协议与直接执行](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 

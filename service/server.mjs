@@ -63,10 +63,10 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
   async function advertise(){
     if(advertising||stopping||Date.now()<nextAdvertise||c.node!=='windows-inner'||c.connector.layout!=='task-issues-run-releases-v1')return;
     nextAdvertise=Date.now()+30000;
-    const current=localCapabilities();
+    let current=localCapabilities();
     if(ledger.capability_digest===current.digest&&Date.now()-(ledger.capability_at||0)<=1800000)return;
     advertising=true;
-    try{const r=await connector.call('Advertise',{data:current});if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.now();persist();activity.capability_state='confirmed';}else activity.capability_state='pending';activity.capability_error='';activity.capability_diagnostic=null;}
+    try{const r=await connector.call('Advertise',{data:current,getData:()=>current=localCapabilities()});if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.parse(r.data.generated_at)||0;persist();activity.capability_state='confirmed';}else activity.capability_state='pending';activity.capability_error='';activity.capability_diagnostic=null;}
     catch(e){activity.capability_error=cleanError(e);activity.capability_diagnostic=e.diagnostic;activity.capability_state='retrying';nextAdvertise=Math.max(nextAdvertise,e.retryAt||0);}
     finally{advertising=false;}
   }

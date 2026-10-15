@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import {Encrypter} from 'age-encryption';
 import {zipSync,unzipSync,strToU8,strFromU8} from 'fflate';
 import {newExportIdentity} from '../../service/file-export.mjs';
 import {ownedTransferProfile,encryptRequest,ownedTransferTask,buildTransfer,openTransferIndex,PART_BYTES} from '../../service/file-transfer.mjs';
@@ -20,6 +22,29 @@ async function fixture(operation='read'){
  const task=ownedTransferTask({task_id:'transfer',revision:1,run_id:'run',profile:'files',recipient_sha256:sha(mac.recipient),request_recipient_sha256:sha(windows.recipient),request_zip_sha256:sha(request),artifacts:[artifact]});
  return {dir,source,job,mac,windows,large,spec:{key,profile,task},close(){fs.rmSync(dir,{recursive:true,force:true});}};
 }
+test('proxy limited to decimal 1 MB accepts every encrypted part of incompressible input and Mac verifies all bytes',async()=>{
+ const f=await fixture();try{
+  const original=crypto.randomBytes(2*1024*1024+137);fs.writeFileSync(path.join(f.source,'PRIVATE_SOURCE.bin'),original);
+  const transfer=await buildTransfer(f.spec,f.job,f.windows.identity);
+  for(const part of transfer.parts)assert.ok(part.bytes<1000000,`proxy rejects ${part.bytes} byte POST`);
+  const bytes=zipSync({...Object.fromEntries(['transfer-index.age','transfer-index.json'].map(n=>[n,fs.readFileSync(path.join(f.job,'work',n))])),'result.json':strToU8(JSON.stringify({outcome:'succeeded',acceptance:{status:'passed'},execution:{engine:'direct'}}))});
+  const result=path.join(f.dir,'result.zip'),destination=path.join(f.dir,'received');fs.writeFileSync(result,bytes);
+  const receipt=await decryptResult({result,expectedSha:sha(bytes),identity:f.mac.identity,key:f.spec.key,destination,loadPart:async hash=>{const b=fs.readFileSync(path.join(f.job,'transfer-parts',hash+'.zip'));assert.ok(b.length<1000000);return b;}});
+  assert.equal(receipt.files_verified,true);assert.deepEqual(fs.readFileSync(path.join(destination,'selection-0/PRIVATE_PROJECT/PRIVATE_SOURCE.bin')),original);
+ }finally{f.close();}
+});
+test('new Mac accepts a historical 3 MiB v1 part and restarting Windows preserves its sealed index',async()=>{
+ const f=await fixture();try{
+  const original=crypto.randomBytes(3*1024*1024),transferId='a'.repeat(32),e=new Encrypter();e.addRecipient(f.mac.recipient);
+  const part=Buffer.from(zipSync({'part.age':await e.encrypt(zipSync({'binding.json':strToU8(JSON.stringify({key:f.spec.key,transferId,file:0,offset:0})),'bytes':original},{level:0}))},{level:0}));
+  const digest=sha(part),manifest={schema:'aiconnector.file-transfer.v1',key:f.spec.key,transferId,operation:'read',directories:[],excluded:[],selection_complete:true,files:[{name:'legacy.bin',bytes:original.length,sha256:sha(original),parts:[{sha256:digest,offset:0,bytes:original.length}]}]};
+  const sealed=Buffer.from(await e.encrypt(Buffer.from(JSON.stringify(manifest)))),index={schema:'aiconnector.transfer-index.v1',key:f.spec.key,recipient_sha256:sha(f.mac.recipient),index_sha256:sha(sealed),sealed:true,parts:[{sha256:digest,bytes:part.length}]};
+  const state={key:f.spec.key,request_sha256:f.spec.task.requirements.data_export.request_zip_sha256,state:'sealed',parts:[{sha256:digest,bytes:part.length,name:digest+'.zip'}]};save(path.join(f.job,'transfer-state.json'),state);
+  const before=fs.readFileSync(path.join(f.job,'transfer-state.json'));assert.deepEqual(await buildTransfer(f.spec,f.job,f.windows.identity),state);assert.deepEqual(fs.readFileSync(path.join(f.job,'transfer-state.json')),before);
+  const bytes=zipSync({'transfer-index.age':sealed,'transfer-index.json':strToU8(JSON.stringify(index)),'result.json':strToU8(JSON.stringify({outcome:'succeeded',acceptance:{status:'passed'},execution:{engine:'direct'}}))}),result=path.join(f.dir,'result.zip'),destination=path.join(f.dir,'received');fs.writeFileSync(result,bytes);
+  const receipt=await decryptResult({result,expectedSha:sha(bytes),identity:f.mac.identity,key:f.spec.key,destination,loadPart:async()=>part});assert.equal(receipt.files_verified,true);assert.deepEqual(fs.readFileSync(path.join(destination,'legacy.bin')),original);
+ }finally{f.close();}
+});
 test('owned directory transfer exceeds one ZIP, preserves binary/text/empty directories and encrypts every name and path',async()=>{
  const f=await fixture();try{
   const transfer=await buildTransfer(f.spec,f.job,f.windows.identity),indexBytes=fs.readFileSync(path.join(f.job,'work','transfer-index.age')),index=JSON.parse(fs.readFileSync(path.join(f.job,'work','transfer-index.json')));

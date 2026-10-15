@@ -44,13 +44,13 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} adds locally authorized shared machine pools, persistent waiting feedback visible on Mac, and Warning/Alarm execution with recorded health evidence. '
-           'Busy resources remain queued without model calls; selected single-node or atomic group reservations are reconciled by original IDs after lost replies. Queue IPs are owner-authorized; default execution metadata uses machine IDs and safe errors (Issue #16). '
-           'Fixed experimental environments are not silently replaced. Existing health-only OK gates must adopt the bundled npu_health_gate.py; NPU process, capacity and correctness checks remain separate. '
-           'Encrypted file retrieval and Issue #15 compact activation checks remain included. '
+           f'{version} fixes Issues #20 and #21: new encrypted data parts use 768 KiB plaintext and stay below 1,000,000 ZIP bytes; historical 3 MiB parts remain readable. '
+           'Capability publication leaves the background queue and gets a fair turn after 60 seconds or 12 foreground bypasses, alongside existing Poll fairness. Capabilities are captured on dispatch and freshness uses the confirmed generation timestamp. '
+           'Previously sealed oversized parts remain immutable: use a new task revision and run ID (or new task ID) with a newly bound encrypted request to regenerate smaller parts; resending the same run or RetryRejected does not rechunk it. '
+           'Age encryption, resume, ownership and shared-machine reservations remain included. '
            'The package retains the pinned offline simpleHtmlWatch controller, original configuration, data directory and unknown task/reservation state. '
-           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/SHARED-SCHEDULING-0716.md\n\n'
-           'CI fixture acceptance does not prove real intranet deployment, A5 hardware health or T3/T4 execution.\n')
+           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSFER-AND-CAPABILITIES-0717.md\n\n'
+           'CI fixture acceptance does not prove deployment or a successful retest through the actual intranet proxy.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()
         # Never replace existing assets or releases silently; reruns fail visibly.

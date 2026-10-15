@@ -12,7 +12,7 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 FILES=['Connector.ps1','connector.config.json','package.json','package-lock.json','CONTEXT.md','tools/benchmark_profile_workflow.mjs','tools/profile_contract.mjs','tools/validate_group_bridge.mjs','docs/ISSUE-14-FIX.md','docs/EXECUTION-0712.md','docs/evidence/profile-0711-macos.json',
-       'docs/SERVER-CATALOG-0714.md','docs/FILE-TRANSFER-0715.md','docs/ISSUE-15-FIX.md','docs/SHARED-SCHEDULING-0716.md','tools/npu_health_gate.py','tools/enable_owned_transfer.mjs','tools/enable_owned_transfer.cmd',
+       'docs/SERVER-CATALOG-0714.md','docs/FILE-TRANSFER-0715.md','docs/ISSUE-15-FIX.md','docs/SHARED-SCHEDULING-0716.md','docs/TRANSFER-AND-CAPABILITIES-0717.md','tools/npu_health_gate.py','tools/enable_owned_transfer.mjs','tools/enable_owned_transfer.cmd',
        'Open-Windows-Dashboard.cmd','Install-Windows-Service.cmd','Prepare-Windows-Service.cmd',
        'Open-Mac-Dashboard.command','Install-Mac-Service.command','Upgrade-Windows.cmd','docs/SERVICE.md','docs/PI-INTEGRATION.md','docs/EXECUTION-ACCEPTANCE.md','docs/SERVER-SETUP.md','docs/PROTOCOL.md','docs/RELAY.md','docs/ISSUE-7-8-FIX.md','docs/ISSUE-9-FIX.md','docs/ISSUE-11-FIX.md','docs/ISSUE-13-FIX.md','docs/PARALLEL-OPERATIONS.md','docs/TRANSPORT-PERFORMANCE.md','docs/TRANSPORT-075.md','docs/TRANSPORT-076.md','docs/TRANSPORT-077.md','docs/TRANSPORT-078.md','docs/TRANSPORT-079.md','docs/POLL-AND-FLUSH-0710.md','docs/PROFILE-AND-MODEL-0711.md','docs/evidence/flush-0710-macos.json','tools/report_windows.py']
 

@@ -7,7 +7,10 @@ import {zipSync,strToU8} from 'fflate';
 import {need,sha,atomic,read,save,now} from './common.mjs';
 import {decodeInputArchive} from './inputs.mjs';
 
-export const TRANSFER_REVISION='file-transfer-v1',PART_BYTES=3*1024*1024;
+// Leave headroom below both decimal 1 MB and binary 1 MiB proxy POST limits
+// for age framing and both ZIP envelopes, even with incompressible input.
+export const TRANSFER_REVISION='file-transfer-v1',PART_BYTES=768*1024;
+const MAX_READ_PART_BYTES=3*1024*1024;
 export const TRANSFER_OUTPUTS=['transfer-index.age','transfer-index.json'];
 export const TRANSFER_CHECKS=[{id:'transfer-sealed',kind:'output-json',file:'transfer-index.json',pointer:'/sealed',equals:true}];
 export function ownedTransferProfile(recipient,requestRecipient){return {
@@ -77,6 +80,7 @@ export async function buildTransfer(spec,dir,identityKey,{signal,checkGrant=()=>
     checkGrant();need(!signal?.aborted,'EXECUTION_TIMEOUT');
     const e=new Encrypter();e.addRecipient(spec.profile.delivery.recipient);const privateBytes=zipSync({'binding.json':strToU8(JSON.stringify({key:spec.key,...record})),'bytes':payload},{level:0});
     const sealed=await e.encrypt(privateBytes),zip=Buffer.from(zipSync({'part.age':sealed},{level:0})),digest=sha(zip),name=digest+'.zip';
+    need(zip.length<1000000,'TRANSFER_PART_TOO_LARGE');
     atomic(path.join(partDir,name),zip);state.parts.push({sha256:digest,bytes:zip.length,name});return digest;
   };
   const transferId=crypto.randomBytes(16).toString('hex');
@@ -134,7 +138,8 @@ export async function openTransferIndex(bytes,index,identityKey,key){
   const dirs=new Set(manifest.directories.map(n=>n.toLowerCase()));need(dirs.size===manifest.directories.length,'INVALID_TRANSFER_INDEX');
   for(const f of manifest.files){need(safeName(f.name)&&!names.has(f.name.toLowerCase())&&Number.isSafeInteger(f.bytes)&&f.bytes>=0&&/^[a-f0-9]{64}$/.test(f.sha256)&&Array.isArray(f.parts),'INVALID_TRANSFER_INDEX');names.add(f.name.toLowerCase());let offset=0;
     need(!dirs.has(f.name.toLowerCase()),'INVALID_TRANSFER_INDEX');
-    for(const p of f.parts){need(parts.has(p.sha256)&&!used.has(p.sha256)&&p.offset===offset&&Number.isInteger(p.bytes)&&p.bytes>0&&p.bytes<=PART_BYTES,'INVALID_TRANSFER_INDEX');used.add(p.sha256);offset+=p.bytes;}
+    // Writer size is a transport policy; historical v1 indexes remain valid.
+    for(const p of f.parts){need(parts.has(p.sha256)&&!used.has(p.sha256)&&p.offset===offset&&Number.isInteger(p.bytes)&&p.bytes>0&&p.bytes<=MAX_READ_PART_BYTES,'INVALID_TRANSFER_INDEX');used.add(p.sha256);offset+=p.bytes;}
     need(offset===f.bytes,'INVALID_TRANSFER_INDEX');
   }
   need(used.size===parts.size,'INVALID_TRANSFER_INDEX');return manifest;

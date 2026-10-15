@@ -5,16 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import {start} from '../../service/server.mjs';
-import {save,sha,loadConfig} from '../../service/common.mjs';
+import {save,read,sha,loadConfig} from '../../service/common.mjs';
 
 test('a pending capability advertisement does not prevent discovery ticks being dispatched',async()=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC admission '));let service,release,thirdPoll,timer;
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC admission '));let service,release,thirdPoll,timer,confirmedGeneratedAt;
  const gate=new Promise(r=>release=r),discovered=new Promise(r=>thirdPoll=r),socket=http.createServer();
  await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
  const connectorFile=path.join(dir,'connector.json'),file=path.join(dir,'service.json'),actions=[];
  fs.writeFileSync(connectorFile,JSON.stringify({schema:'aiconnector.config.v2',layout:'task-issues-run-releases-v1',namespace:'fixture',api_base:'http://127.0.0.1',poll_seconds:1,token_env:'AICONNECTOR_FIXTURE',repository:'fixture/relay'}));
  fs.writeFileSync(file,JSON.stringify({schema:'aiconnector.service.v1',node:'windows-inner',port,dataDir:'data',connectorConfig:connectorFile,runner:{enabled:false,profiles:{}}}));
- const connector={call:async(action,args)=>{actions.push(action);if(action==='Poll'&&actions.filter(a=>a==='Poll').length===3)thirdPoll();if(action==='Advertise'){await gate;return {confirmed:true,data:args.data};}return {runs:[],outbox:[]};},close:async()=>{}};
+ const connector={call:async(action,args)=>{actions.push(action);if(action==='Poll'&&actions.filter(a=>a==='Poll').length===3)thirdPoll();if(action==='Advertise'){const data=args.getData?.()||args.data;confirmedGeneratedAt=data.generated_at;await gate;return {confirmed:true,data};}return {runs:[],outbox:[]};},close:async()=>{}};
  try{
    service=await start(file,{secrets:{},connector});
    // Poll waits from completion; a one-second dispatch tick can add another tick.
@@ -22,6 +22,9 @@ test('a pending capability advertisement does not prevent discovery ticks being 
    await Promise.race([discovered,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`discovery stalled: ${actions.join(',')}`)),10000);})]);
    assert.equal(actions[0],'Poll');assert.equal(actions.filter(a=>a==='Advertise').length,1);
    assert.ok(actions.filter(a=>a==='Poll').length>=3,actions.join(','));
+   release();await service.close();service=null;
+   const ledger=read(path.join(dir,'data/service.json'));
+   assert.equal(ledger.capability_at,Date.parse(confirmedGeneratedAt),'confirmation time must not extend the age of a delayed capability snapshot');
  }finally{clearTimeout(timer);release();await service?.close();fs.rmSync(dir,{recursive:true,force:true});}
 });
 
