@@ -207,7 +207,7 @@ export class Runner {
       if(!job.timings.ready_observed_at){job.timings.ready_observed_at=now();job.timings.result_ready_at=worker.ended_at||null;timing(this.c.dataDir,'result_ready_observed',{key:job.key});}
       job.state='delivering';this.persist();
       // Admit a bounded set of independent durable deliveries. The transport
-      // still serializes API writes; one route's retry window does not own a gate.
+      // serializes state changes; encrypted parts share a bounded native I/O pool.
       if(!this.pending.has('delivery:'+job.key)&&[...this.pending.keys()].filter(k=>k.startsWith('delivery:')).length<4&&Date.now()>=(job.delivery_retry_at||0)){this.schedule('delivery:'+job.key,async()=>{
       try {
         job.delivery_attempts=(job.delivery_attempts||0)+1;job.timings.delivery_attempt_at=now();this.persist();
@@ -217,7 +217,7 @@ export class Runner {
         if(result.outcome==='succeeded'&&transfer){
           need(transfer.state==='sealed'&&transfer.key===job.key,'TRANSFER_NOT_SEALED');
           job.transfer_delivery={uploaded:transfer.parts.filter(p=>fs.existsSync(path.join(job.dir,'transfer-delivery',p.sha256+'.json'))).length,total:transfer.parts.length};
-          await mapTransfers(transfer.parts,this.c.runner.transferConcurrency??2,async part=>{
+          await mapTransfers(transfer.parts,this.c.runner.transferConcurrency??8,async part=>{
             const marker=path.join(job.dir,'transfer-delivery',part.sha256+'.json'),previous=read(marker);if(previous){need(previous.sha256===part.sha256&&previous.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');return;}
             const artifact=await this.connector.call('UploadTransferPart',{key:job.key,file:path.join(job.dir,'transfer-parts',part.name)});
             need(artifact.sha256===part.sha256&&artifact.bytes===part.bytes,'TRANSFER_PART_UPLOAD_MISMATCH');save(marker,artifact);job.transfer_delivery.uploaded++;this.persist();

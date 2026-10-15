@@ -38,7 +38,7 @@ function Upload-Part([string]$Path) {
 
 function Start-PartUpload($Context,[string]$Upload) {
     Need ($script:Resident -and $script:Relay -and $Node -ceq 'windows-inner') 'PART_UPLOAD_REQUIRES_RESIDENT'
-    Need ($script:PartUploads.Count -lt 4) 'UPLOAD_SLOTS_BUSY'
+    Need ($script:PartUploads.Count -lt 8) 'UPLOAD_SLOTS_BUSY'
     if (-not ('AIConnector.UploadHttp' -as [type])) {
         $source=[IO.File]::ReadAllText((Join-Path $root 'service/upload-http.cs'))
         if ($PSVersionTable.PSVersion.Major -le 5) { Add-Type -TypeDefinition $source -ReferencedAssemblies System.Net.Http,System,System.Core }
@@ -401,8 +401,9 @@ function Invoke-WireHttp-Work {
     if ($null -eq $script:HttpClient) {
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.AllowAutoRedirect = $false
-    [Net.ServicePointManager]::DefaultConnectionLimit=[Math]::Max(8,[Net.ServicePointManager]::DefaultConnectionLimit)
-    if ($handler.PSObject.Properties['MaxConnectionsPerServer']) { $handler.MaxConnectionsPerServer=8 }
+    # Eight data uploads must leave connections available for control traffic.
+    [Net.ServicePointManager]::DefaultConnectionLimit=[Math]::Max(12,[Net.ServicePointManager]::DefaultConnectionLimit)
+    if ($handler.PSObject.Properties['MaxConnectionsPerServer']) { $handler.MaxConnectionsPerServer=12 }
     $handler.UseDefaultCredentials = $false
     $handler.UseCookies = $false
     $handler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
@@ -1340,7 +1341,7 @@ function Upload-Zip([string]$Path,[bool]$Diagnostics=$false,[bool]$Asynchronous=
     try { $mem=[IO.MemoryStream]::new($bytes,$false); $zip=[IO.Compression.ZipArchive]::new($mem,[IO.Compression.ZipArchiveMode]::Read); if ($Asynchronous) { Need ($zip.Entries.Count -eq 1 -and $zip.Entries[0].FullName -ceq 'part.age') 'INVALID_TRANSFER_PART' }; $zip.Dispose(); $mem.Dispose() } catch { Fail 'INVALID_ZIP_FILE' }
     if ($Asynchronous -and $script:PartUploads.ContainsKey('upload:'+$Key+':'+$sha)) { return Receive-PartUpload ('upload:'+$Key+':'+$sha) }
     Need ($script:State.next_poll -le (Epoch)) 'CHANNEL_COOLDOWN'
-    if ($Asynchronous) { Need ($script:PartUploads.Count -lt 4) 'UPLOAD_SLOTS_BUSY' }
+    if ($Asynchronous) { Need ($script:PartUploads.Count -lt 8) 'UPLOAD_SLOTS_BUSY' }
     $uploadKey=$sha; $identity=$null
     $name='aiconnector-'+$script:C.namespace+'-'+$Node+'-'+$sha+'.zip'
     if ($script:Relay) {

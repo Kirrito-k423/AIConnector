@@ -128,6 +128,40 @@ finally{await connector.close();}
             for file in files:self.assertIn('sha256',self.collect(r,file))
         self.assertEqual(self.stats['peak'],2)
 
+    def test_eight_native_uploads_leave_room_for_control_http_and_bound_the_ninth(self):
+        c=self.c;files=[self.part(str(i)) for i in range(9)]
+        release=threading.Event();lock=threading.Lock();stats=self.stats
+        original_command=c.command
+        def command(*args):
+            cmd=original_command(*args);cmd[cmd.index('-TimeoutSeconds')+1]='30';return cmd
+        c.command=command
+        class HeldAPI(relay.RelayAPI):
+            def do_POST(self):
+                if not urlparse(self.path).path.endswith('/assets'):return super().do_POST()
+                with lock:
+                    stats['active']+=1;stats['peak']=max(stats['peak'],stats['active']);stats['posts']+=1
+                try:
+                    release.wait(20)
+                    super().do_POST()
+                finally:
+                    with lock:stats['active']-=1
+        c.server.RequestHandlerClass=HeldAPI
+        with ResidentContext(c) as r:
+            try:
+                for file in files[:8]:self.assertTrue(r.call('TransferUpload',key=c.key,file=file)['pending'])
+                until=time.monotonic()+3
+                while stats['active']<8 and time.monotonic()<until:time.sleep(.02)
+                self.assertEqual(stats['active'],8)
+                self.assertEqual(r.call('TransferUpload',key=c.key,file=files[8],ok=False)['code'],'UPLOAD_SLOTS_BUSY')
+                before=len(c.ctx['gets']);started=time.monotonic();r.call('Poll');elapsed=time.monotonic()-started
+                self.assertLess(elapsed,3,'eight data uploads consumed every control connection')
+                self.assertGreater(len(c.ctx['gets']),before,'must exercise network control, not only local Status')
+                self.assertEqual(stats['active'],8)
+                print(json.dumps({'eight_uploads':{'peak':stats['peak'],'control_http_ms':elapsed*1000,'ninth':'UPLOAD_SLOTS_BUSY'}}),flush=True)
+            finally:release.set()
+            for file in files[:8]:self.assertIn('sha256',self.collect(r,file))
+        self.assertEqual(stats['posts'],8)
+
     def test_lost_upload_response_and_restart_reconcile_without_another_post(self):
         c=self.c;file=self.part('lost');c.ctx['provision_mode']['asset']='after'
         r=Resident(c,'windows-inner')

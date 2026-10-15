@@ -8,7 +8,7 @@ import {TransferPool} from './transfer-pool.mjs';
 const FAIRNESS={Poll:{milliseconds:10000,bypasses:4},Advertise:{milliseconds:60000,bypasses:12}};
 
 export class Connector {
-  constructor(config,secrets={},invoke) {this.c=config;this.secrets=secrets;this.invoke=invoke;this.transport=invoke?null:new Transport(config);this.queue=[];this.running=false;this.waiters=[];this.parts=new TransferPool(config.runner?.transferConcurrency??2);}
+  constructor(config,secrets={},invoke) {this.c=config;this.secrets=secrets;this.invoke=invoke;this.transport=invoke?null:new Transport(config);this.queue=[];this.running=false;this.waiters=[];this.parts=new TransferPool(config.runner?.transferConcurrency??8);}
   async close(){await this.parts.idle();await this.tail;await this.transport?.close();await closeWaitTiming(this.c.dataDir);}
   get tail(){return !this.running&&!this.queue.length?Promise.resolve():new Promise(resolve=>this.waiters.push(resolve));}
   async drain(){

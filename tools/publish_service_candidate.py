@@ -44,7 +44,7 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} adds a bounded native HTTP upload pipeline: two in-flight data parts by default, one durable state owner, and control requests remain available while data is uploading. '
+           f'{version} uses eight in-flight data parts by default (configurable from one to eight), one durable state owner, and twelve HTTP connections to leave capacity for control requests while data is uploading. '
            'It reuses validated release metadata and asset inventories, and resumes known local write spacing at its deadline instead of adding a ten-second retry floor. '
            'Global write spacing and provider rate-limit backoff remain active. Unknown POSTs reconcile by their original names; sibling successes keep checkpoints; the final index is published only after every part is confirmed. '
            'The 768 KiB writer, historical chunk compatibility, encryption and existing task/machine ownership remain included. '

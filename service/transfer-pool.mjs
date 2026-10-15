@@ -11,7 +11,7 @@ export async function mapTransfers(items,concurrency,work){
 }
 
 export class TransferPool {
-  constructor(concurrency=2){need(Number.isInteger(concurrency)&&concurrency>=1&&concurrency<=4,'INVALID_TRANSFER_CONCURRENCY');this.limit=concurrency;this.active=0;this.queue=[];this.pending=new Map();}
+  constructor(concurrency=8){need(Number.isInteger(concurrency)&&concurrency>=1&&concurrency<=8,'INVALID_TRANSFER_CONCURRENCY');this.limit=concurrency;this.active=0;this.queue=[];this.pending=new Map();}
   run(key,work){
     if(this.pending.has(key))return this.pending.get(key);
     let resolve,reject;const result=new Promise((a,b)=>{resolve=a;reject=b;});
