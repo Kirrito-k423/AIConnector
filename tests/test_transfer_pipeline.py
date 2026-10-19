@@ -204,7 +204,10 @@ finally{await connector.close();}
         self.assertEqual(len(c.ctx['release_assets']),1)
 
     def test_write_spacing_is_shared_with_concurrent_parts(self):
-        c=self.c;c.config['write_interval_seconds']=3;c.write_config()
+        # This tests shared admission/cache behavior, not a three-second wall
+        # clock race on a loaded CI host. The first flight still completes while
+        # the next POST is gated; no sleep for the full interval is needed.
+        c=self.c;c.config['write_interval_seconds']=15;c.write_config()
         first,second=self.part('first'),self.part('second')
         with ResidentContext(c) as r:
             self.assertTrue(r.call('TransferUpload',key=c.key,file=first)['pending'])
