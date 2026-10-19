@@ -94,8 +94,54 @@ function Observe-PartUploadLimits {
     }
 }
 
+function Recover-StarterAsset($Context,$Asset) {
+    # GitHub can retain a failed upload as `starter`, even with a nonzero size.
+    # Only repair an upload with persisted local intent in this verified run.
+    $row=$Context.row; $now=Epoch
+    Need ($script:Relay -and (Get-Field $row 'attempts' 0) -gt 0 -and (Get-Field $row 'last_attempt_at' 0) -gt 0) 'ASSET_CONFLICT'
+    Need ($Asset.id -is [long] -or $Asset.id -is [int]) 'ASSET_CONFLICT'
+    Need ($Asset.id -gt 0 -and $Asset.name -ceq $Context.name -and -not (Get-Field $Asset 'digest') -and
+        ($Asset.size -eq 0 -or $Asset.size -eq $Context.bytes.Length) -and
+        $Asset.browser_download_url -ceq ($script:C.artifact_prefixes[0]+(Run-Tag $Context.identity)+'/'+$Context.name)) 'ASSET_CONFLICT'
+    $updatedText=Source-Time $Asset.updated_at
+    Need ([bool]$updatedText) 'ASSET_CONFLICT'
+    $updated=[DateTimeOffset]::Parse($updatedText,[Globalization.CultureInfo]::InvariantCulture)
+    $updatedEpoch=$updated.ToUnixTimeSeconds()
+    $grace=[Math]::Max(120,[Math]::Max(2*$TimeoutSeconds,2*$script:C.poll_seconds))
+    if ($now-$row.last_attempt_at -lt $grace -or $now-$updatedEpoch -lt $grace) { Fail 'UPLOAD_RECONCILE_PENDING' }
+    $check=Get-Field $row 'starter_recovery'
+    if (-not $check -or $check.asset_id -ne $Asset.id -or $check.updated_epoch -ne $updatedEpoch) {
+        $row.starter_recovery=@{asset_id=$Asset.id;updated_epoch=$updatedEpoch;observed_at=$now}; Save
+        Trace-Event 'upload_starter_observed' @{part_sha256=$Context.sha;category='starter'}
+        Fail 'UPLOAD_RECONCILE_PENDING'
+    }
+    if ($now-$check.observed_at -lt [Math]::Max(1,$script:C.poll_seconds)) { Fail 'UPLOAD_RECONCILE_PENDING' }
+    # A second uncached asset read must still identify the same incomplete object.
+    $path='/repos/'+$script:C.repository+'/releases/assets/'+$Asset.id
+    $r=Api $path
+    if ($r.http -eq 404) { $script:MetadataCache.Remove('assets:'+$Context.release.id); Fail 'UPLOAD_RECONCILE_PENDING' }
+    Require-Response $r; $current=$r.json
+    Need ($current.id -eq $Asset.id -and $current.name -ceq $Context.name -and $current.browser_download_url -ceq $Asset.browser_download_url) 'ASSET_CONFLICT'
+    # An upload finishing between reads is verified normally, never deleted.
+    if ($current.state -ceq 'uploaded') { return $current }
+    Need ($current.state -ceq 'starter' -and -not (Get-Field $current 'digest') -and
+        (Source-Time $current.updated_at) -ceq $updatedText -and $current.size -eq $Asset.size) 'ASSET_CONFLICT'
+    Need ((Get-Field $script:State 'post_not_before' 0) -le (Epoch)) 'WRITE_COOLDOWN'
+    $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
+    $check.delete_attempt_at=Epoch; $row.status='uncertain'; $row.Remove('recovery'); Save
+    $r=Api $path 'DELETE'
+    $script:MetadataCache.Remove('assets:'+$Context.release.id)
+    if ($r.http -ne 404) { Require-Response $r; Need ($r.http -eq 204) 'ASSET_CONFLICT' }
+    Trace-Event 'upload_starter_removed' @{part_sha256=$Context.sha;http=$r.http}
+    # Reuse the existing independent-absence and cooldown gates before reupload.
+    # A lost DELETE response also reconciles the same asset/run on the next call.
+    $row.status='uncertain'; $row.Remove('recovery'); Save
+    Fail 'UPLOAD_RECONCILE_PENDING'
+}
+
 function Confirm-UploadedZip($Context,$Asset,[bool]$FreshUpload) {
     $bytes=$Context.bytes; $name=$Context.name; $sha=$Context.sha; $row=$Context.row
+    if ($Asset.state -ceq 'starter') { $Asset=Recover-StarterAsset $Context $Asset }
     Need ($Asset.state -ceq 'uploaded' -and $Asset.size -eq $bytes.Length -and $Asset.name -ceq $name) 'ASSET_CONFLICT'
     $manifestName='artifact.zip'; if ($script:Relay) { $manifestName=$name }
     $manifest=@{name=$manifestName;bytes=$bytes.Length;sha256=$sha;url=[string]$Asset.browser_download_url}
@@ -164,7 +210,20 @@ function Trace-Event([string]$Kind,[hashtable]$Values=@{}) {
             if ([IO.File]::Exists($trace+'.1')) { [IO.File]::Delete($trace+'.1') }
             [IO.File]::Move($trace,$trace+'.1')
         }
-        [IO.File]::AppendAllText($trace,(ConvertTo-Json -InputObject $row -Depth 50 -Compress)+"`n",$script:Utf8)
+        $line=(ConvertTo-Json -InputObject $row -Depth 50 -Compress)+"`n"
+        [IO.File]::AppendAllText($trace,$line,$script:Utf8)
+        # Two records per actual HTTP attempt, kept apart from polling/retry
+        # noise. No extra network requests or per-tick writes are introduced.
+        if ($row.key -and $Kind -in @('transfer_part_started','transfer_part_http_finished')) {
+            $directory=Join-Path $StateDir 'transfer-timing'
+            $null=[IO.Directory]::CreateDirectory($directory)
+            $partTrace=Join-Path $directory ((Hash $row.key)+'.jsonl')
+            if ([IO.File]::Exists($partTrace) -and ([IO.FileInfo]::new($partTrace)).Length -ge 2097152) {
+                if ([IO.File]::Exists($partTrace+'.1')) { [IO.File]::Delete($partTrace+'.1') }
+                [IO.File]::Move($partTrace,$partTrace+'.1')
+            }
+            [IO.File]::AppendAllText($partTrace,$line,$script:Utf8)
+        }
     } catch { } # Timing failure must never change a delivery or execution decision.
 }
 function Start-Profiling {

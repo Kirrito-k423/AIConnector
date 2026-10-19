@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {WindowWriter} from './window-writer.mjs';
 
 const waitWriters=new Map();
@@ -74,12 +75,17 @@ export function diagnostics(c,ledger,snapshot,key='') {
   const windows=[...readWindows(path.join(c.dataDir,'service-windows.jsonl')),...readWindows(path.join(c.stateDir,'runtime-windows.jsonl')),...(job?.dir?readWindows(path.join(job.dir,'worker-windows.jsonl')):[])].filter(r=>Date.parse(r.window_end)>=begin);
   const ready=events.filter(e=>e.kind==='profiler_ready').at(-1);
   const runtime={windows_enabled:Boolean(ready),powershell_version:/^powershell_[0-9_]+$/.test(ready?.category||'')?ready.category.slice(11).replaceAll('_','.'):null};
+  const transferFile=key?path.join(c.stateDir,'transfer-timing',createHash('sha256').update(key).digest('hex')+'.jsonl'):null;
+  const transferEvents=transferFile?readTiming(transferFile).filter(e=>e.key===key&&['transfer_part_started','transfer_part_http_finished'].includes(e.kind)):[];
   return {schema:'aiconnector.diagnostics.v1',generated_at:new Date().toISOString(),node:c.node,key:key||null,
     retention:'Each timing stream retains the current and previous 2 MiB files; a run export includes the latest 2000 matching events.',
     limitation:'Delivery timing after result.zip creation stays local; export both endpoints to correlate the full handoff.',
     runtime,jobs:Object.values(ledger.jobs||{}).filter(j=>!key||j.key===key).map(j=>({key:j.key,state:j.state,timings:j.timings,delivery_attempts:j.delivery_attempts,claim_attempts:j.claim_attempts,claim_retry_at:j.wait_reason==='CLAIM_RETRY'?j.next_attempt:undefined})),
     channel:{last_poll:snapshot.last_poll,next_poll:snapshot.next_poll,scopes:snapshot.scopes,sync:snapshot.sync},
     windows:windows.slice(-1000),windows_truncated:windows.length>1000,window_scope:'Exclusive wall time per process in ten-second windows, includes other operations blocking this run. CPU belongs to this process only; not an additive wall stage. CPU boundaries interpolate between samples; cpu_sample_max_ms reports resolution. A crash can lose the final partial window.',
+    transfer_events:transferEvents.slice(-4000),transfer_events_truncated:transferEvents.length>4000,
+    transfer_events_rotated:Boolean(transferFile&&fs.existsSync(transferFile+'.1')),
+    transfer_retention:'Per-run upload HTTP events are isolated from general retries; current and previous 2 MiB files, latest 4000 records. Rotation may omit earlier attempts; compare coverage with the transfer index.',
     events:selected.slice(-2000),truncated:selected.length>2000};
 }
 
@@ -91,15 +97,18 @@ export function deliveryDiagnostics(c,ledger,snapshot,key){
     else if(name==='packaging_ms'&&Number.isFinite(time))stamps[name]=time;
   }
   const allowed=new Set([...fields,'schema','at','source','kind','scope','event_id','event_kind','method','endpoint','request_id','http','category','confirmed_at','files_written','events_sent','part_sha256','active_uploads']);
-  const events=value.events.map(event=>Object.fromEntries(Object.entries(event).filter(([name,item])=>{
+  const safeEvent=event=>Object.fromEntries(Object.entries(event).filter(([name,item])=>{
     if(!allowed.has(name))return false;
     if(typeof item==='number')return Number.isFinite(item);
     if(typeof item!=='string')return false;
     if(name==='key')return keyPattern.test(item);
     return /^[a-zA-Z0-9_:/.+-]{1,240}$/.test(item);
-  })));
+  }));
+  const events=value.events.map(safeEvent);
   return {schema:'aiconnector.delivery-diagnostics.v1',key,node:c.node,generated_at:value.generated_at,
     scope:'Windows local clock; Mac receipt already observed. This frozen sidecar predates its own upload. Old frozen sidecars from earlier versions keep their original scope.',
     timings:stamps,delivery_attempts:job?.delivery_attempts||0,claim_attempts:job?.claim_attempts||0,
-    events,runtime:value.runtime,windows:value.windows,windows_truncated:value.windows_truncated,window_scope:value.window_scope,truncated:value.truncated,retention:value.retention};
+    events,transfer_events:value.transfer_events.map(safeEvent),transfer_events_truncated:value.transfer_events_truncated,
+    transfer_events_rotated:value.transfer_events_rotated,transfer_retention:value.transfer_retention,
+    runtime:value.runtime,windows:value.windows,windows_truncated:value.windows_truncated,window_scope:value.window_scope,truncated:value.truncated,retention:value.retention};
 }

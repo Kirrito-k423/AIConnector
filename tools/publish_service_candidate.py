@@ -44,12 +44,12 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} repairs Issue #17 capability publication recovery: uncertain immutable advertisements reconcile against the full trusted comment history, then retry only after independent absence reads and a durable grace period. '
-           'Explicit rejections retain their original HTTP code and do not auto-retry. Existing task, Claim, SSH and reservation ownership remain unchanged. '
-           'Repeated manual sync requests coalesce, the dashboard shows a cooldown countdown, and errors no longer hide the last successful sync time. '
-           'Eight in-flight encrypted data parts remain the default, with original write spacing and provider backoff. '
-           'Both source and the freshly extracted package exercise capability recovery. '
-           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/ISSUE-17-FIX.md\n\n'
+           f'{version} recovers stale GitHub starter upload placeholders that previously caused ASSET_CONFLICT. '
+           'Cleanup requires durable local upload intent, the verified run and content-addressed name, a grace period, two observations and a fresh asset read. '
+           'Completed assets are verified and reused; ambiguous DELETE responses reconcile before any reupload, and provider cooldowns remain enforced. '
+           'Per-run HTTP upload timing is retained separately from polling and retry logs for concurrency analysis. '
+           'Eight in-flight encrypted data parts remain the default. '
+           f'Setup, live evidence and acceptance: https://github.com/{repo}/blob/{commit}/docs/TRANSFER-RECOVERY-0720.md\n\n'
            'CI fixture acceptance does not prove deployment or a successful retest through the actual intranet proxy.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
 import test_relay as relay
@@ -161,6 +162,11 @@ finally{await connector.close();}
             finally:release.set()
             for file in files[:8]:self.assertIn('sha256',self.collect(r,file))
         self.assertEqual(stats['posts'],8)
+        trace=c.folder/'windows-inner'/'transfer-timing'/(hashlib.sha256(c.key.encode()).hexdigest()+'.jsonl')
+        events=[json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertEqual(sum(e['kind']=='transfer_part_started' for e in events),8)
+        self.assertEqual(sum(e['kind']=='transfer_part_http_finished' for e in events),8)
+        self.assertTrue(all(e['key']==c.key for e in events))
 
     def test_lost_upload_response_and_restart_reconcile_without_another_post(self):
         c=self.c;file=self.part('lost');c.ctx['provision_mode']['asset']='after'
@@ -243,6 +249,109 @@ finally{await connector.close();}
             result=self.collect(r,second)
             self.assertEqual(result['sha256'],digest);self.assertTrue(c.ctx['race_422'])
             self.assertIn(url,c.ctx['gets']);self.assertEqual(len(c.ctx['release_assets']),2)
+
+    def starter_fixture(self, age=300, owned=True, mode='normal'):
+        c=self.c;file=self.part('starter');digest=hashlib.sha256(file.read_bytes()).hexdigest()
+        name='result--windows-inner--'+digest+'.zip';release=next(iter(c.ctx['releases'].values()))
+        url='/assets/'+release['tag_name']+'/'+name
+        stamp=datetime.fromtimestamp(time.time()-age,timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        asset=dict(id=999,name=name,size=file.stat().st_size,state='starter',digest=None,
+                   created_at=stamp,updated_at=stamp,release_id=release['id'],browser_download_url=c.base+url)
+        c.ctx['release_assets'].append(asset);c.ctx['deletes']=[]
+        if owned:
+            state=c.read_state('windows-inner')
+            state['uploads']['upload:'+c.key+':'+digest]=dict(status='uncertain',bytes=file.stat().st_size,
+                name=name,manifest=None,http=502,attempts=1,last_attempt_at=int(time.time())-age)
+            relay.legacy.ConnectorTests.write_state(c,'windows-inner',state)
+        original=c.server.RequestHandlerClass
+        class StarterAPI(original):
+            def do_GET(self):
+                if self.path=='/repos/test/tasks/releases/assets/999':
+                    if mode=='completed':
+                        asset.update(state='uploaded',digest='sha256:'+digest);self.ctx['assets'][url]=file.read_bytes()
+                    return self.reply(asset if asset in self.ctx['release_assets'] else {},200 if asset in self.ctx['release_assets'] else 404)
+                super().do_GET()
+            def do_DELETE(self):
+                self.ctx['deletes'].append(self.path)
+                if mode=='rate':return self.reply({},429,{'Retry-After':'5'})
+                if self.path!='/repos/test/tasks/releases/assets/999':return self.reply({},404)
+                if asset in self.ctx['release_assets']:self.ctx['release_assets'].remove(asset)
+                if mode=='lost':
+                    self.close_connection=True;self.connection.close();return
+                return self.reply({},204)
+        c.server.RequestHandlerClass=StarterAPI
+        return file,asset
+
+    def test_stale_starter_recovers_original_part_after_restart_without_deleting_uploaded_sibling(self):
+        c=self.c;file,asset=self.starter_fixture()
+        sibling={**asset,'id':998,'name':'unrelated.zip','state':'uploaded','digest':'sha256:'+'1'*64}
+        c.ctx['release_assets'].append(sibling)
+        with ResidentContext(c) as r:
+            error=r.call('TransferUpload',key=c.key,file=file,ok=False)
+            self.assertEqual(error['code'],'UPLOAD_RECONCILE_PENDING')
+            self.assertEqual(c.ctx['deletes'],[],'first observation must not delete')
+        time.sleep(1.1)
+        with ResidentContext(c) as r:
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+            self.assertEqual(c.ctx['deletes'],['/repos/test/tasks/releases/assets/999'])
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+            time.sleep(1.1)
+            result=self.collect(r,file)
+            self.assertEqual(result['sha256'],hashlib.sha256(file.read_bytes()).hexdigest())
+        self.assertIn(sibling,c.ctx['release_assets']);self.assertEqual(self.stats['posts'],1)
+
+    def test_recent_starter_is_waited_for_and_never_deleted(self):
+        file,asset=self.starter_fixture(age=0)
+        with ResidentContext(self.c) as r:
+            self.assertEqual(r.call('TransferUpload',key=self.c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+        self.assertEqual(self.c.ctx['deletes'],[]);self.assertEqual(self.stats['posts'],0)
+
+    def test_starter_without_persisted_local_upload_intent_is_not_deleted(self):
+        file,asset=self.starter_fixture(owned=False)
+        with ResidentContext(self.c) as r:
+            self.assertEqual(r.call('TransferUpload',key=self.c.key,file=file,ok=False)['code'],'ASSET_CONFLICT')
+        self.assertEqual(self.c.ctx['deletes'],[]);self.assertEqual(self.stats['posts'],0)
+
+    def test_starter_completed_before_delete_is_verified_and_reused(self):
+        c=self.c;file,asset=self.starter_fixture(mode='completed')
+        with ResidentContext(c) as r:
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+            time.sleep(1.1)
+            self.assertEqual(self.collect(r,file)['sha256'],hashlib.sha256(file.read_bytes()).hexdigest())
+        self.assertEqual(c.ctx['deletes'],[]);self.assertEqual(self.stats['posts'],0)
+
+    def test_starter_cleanup_rate_limit_blocks_new_uploads(self):
+        c=self.c;file,asset=self.starter_fixture(mode='rate')
+        with ResidentContext(c) as r:
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+            time.sleep(1.1)
+            error=r.call('TransferUpload',key=c.key,file=file,ok=False)
+            self.assertEqual(error['code'],'RATE_LIMITED_429');self.assertGreater(error['retry_at'],time.time())
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'CHANNEL_COOLDOWN')
+        self.assertIn(asset,c.ctx['release_assets']);self.assertEqual(self.stats['posts'],0)
+
+    def test_starter_lost_delete_response_reconciles_absence_after_restart(self):
+        c=self.c;file,asset=self.starter_fixture(mode='lost')
+        with ResidentContext(c) as r:
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+            time.sleep(1.1)
+            error=r.call('TransferUpload',key=c.key,file=file,ok=False)
+            self.assertNotEqual(error['code'],'ASSET_CONFLICT')
+        self.assertNotIn(asset,c.ctx['release_assets']);self.assertEqual(self.stats['posts'],0)
+        time.sleep(5.1)
+        with ResidentContext(c) as r:
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'UPLOAD_RECONCILE_PENDING')
+            time.sleep(1.1)
+            self.assertIn('sha256',self.collect(r,file))
+        # HttpClient may replay an idempotent DELETE after a connection loss.
+        self.assertEqual(set(c.ctx['deletes']),{'/repos/test/tasks/releases/assets/999'});self.assertEqual(self.stats['posts'],1)
+
+    def test_uploaded_asset_with_wrong_digest_remains_a_conflict_without_cleanup(self):
+        c=self.c;file,asset=self.starter_fixture()
+        asset.update(state='uploaded',digest='sha256:'+'0'*64)
+        with ResidentContext(c) as r:
+            self.assertEqual(r.call('TransferUpload',key=c.key,file=file,ok=False)['code'],'ARTIFACT_HASH_MISMATCH')
+        self.assertEqual(c.ctx['deletes'],[]);self.assertEqual(self.stats['posts'],0)
 class ResidentContext:
     def __init__(self,case):self.case=case
     def __enter__(self):self.runtime=Resident(self.case,'windows-inner');return self.runtime

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {timing,diagnostics,deliveryDiagnostics,readTiming,closeWaitTiming} from '../../service/telemetry.mjs';
 import {Connector} from '../../service/connector.mjs';
 
@@ -62,4 +63,22 @@ test('bounded timing export survives rotation and ignores an unfinished last lin
     assert.ok(fs.existsSync(file+'.1'));assert.equal(readTiming(file).at(-1).kind,'rotated');
     assert.ok(fs.statSync(file).size<1024);
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('task upload intervals survive general event truncation and exclude other runs or secrets',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'AIC long transfer '));
+ try{
+  const key='sample/1/run-1',c={dataDir:dir,stateDir:dir,node:'windows-inner'};
+  const row={schema:'aiconnector.timing.v1',at:'2026-10-19T00:00:00Z',source:'connector',key,part_sha256:'a'.repeat(64)};
+  fs.mkdirSync(path.join(dir,'transfer-timing'));
+  const file=path.join(dir,'transfer-timing',createHash('sha256').update(key).digest('hex')+'.jsonl');
+  fs.writeFileSync(file,[{...row,kind:'transfer_part_started',active_uploads:8},
+    {...row,at:'2026-10-19T00:00:03Z',kind:'transfer_part_http_finished',elapsed_ms:3000,http:201,headers:'SECRET_TOKEN'},
+    {...row,key:'other/1/run-1',kind:'transfer_part_started'}].map(e=>JSON.stringify(e)).join('\n')+'\n');
+  fs.writeFileSync(path.join(dir,'service-timing.jsonl'),Array.from({length:2100},()=>JSON.stringify({...row,kind:'delivery_retry',at:'2026-10-19T03:00:00Z'})).join('\n')+'\n');
+  const result=deliveryDiagnostics(c,{jobs:{}},{},key);
+  assert.equal(result.truncated,true);assert.equal(result.events.length,2000);
+  assert.equal(result.transfer_events.length,2);assert.equal(result.transfer_events[1].elapsed_ms,3000);
+  assert.ok(!JSON.stringify(result).includes('SECRET'));assert.ok(result.transfer_events.every(e=>e.key===key));
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
