@@ -1,0 +1,31 @@
+{
+  "package": "AIConnector-Service-windows-x64.zip",
+  "bytes": 57824731,
+  "sha256": "a42a956d5e180ed6f9d17539c4966a5d88718336ab556a835760b601f53a969a",
+  "verified_files": 7290,
+  "real_packaged_pi": true,
+  "real_windows": true,
+  "fixture_model": true,
+  "source_commit": "454a9492476e6df4f0fee2b19ee7ee241ce7ec7b",
+  "ci": "https://github.com/Kirrito-k423/AIConnector/actions/runs/36214230805",
+  "platform": "GitHub hosted Windows x64",
+  "node": "24.14.0",
+  "pi": "0.87.1",
+  "powershell": "5.1",
+  "end_to_end_passed": 6,
+  "end_to_end_skipped": 0,
+  "unit_passed": 10,
+  "unit_skipped": 0,
+  "tests": [
+    "task to receipt with input and result ZIP",
+    "HTTP host origin and bearer checks",
+    "Scheduled Task restart after crash and clean stop",
+    "restart during Pi plus transport 503 and 429",
+    "actual cmd and bundled runtime without Node on PATH",
+    "worker crash no reexecution and blocked recovery",
+    "RemoteSigned source marker trust and checksum mismatch refusal"
+  ],
+  "commercial_model": false,
+  "user_intranet": false,
+  "npu": false
+}

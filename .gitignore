@@ -4,3 +4,6 @@ __pycache__/
 *.local.json
 connector-state/
 connector-state-relay/
+node_modules/
+service-data/
+*.local.env

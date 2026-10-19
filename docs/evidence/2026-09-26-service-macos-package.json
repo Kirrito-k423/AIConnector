@@ -1,0 +1,28 @@
+{
+  "package": "AIConnector-Service-macos-arm64.zip",
+  "bytes": 203601707,
+  "sha256": "37476315e7eabfbf147c999d8e05f01b55fd66bd5531c3468e69c57c514f0554",
+  "verified_files": 7869,
+  "real_packaged_pi": true,
+  "real_windows": false,
+  "fixture_model": true,
+  "source_commit": "454a9492476e6df4f0fee2b19ee7ee241ce7ec7b",
+  "platform": "macOS ARM64",
+  "node": "24.14.0",
+  "pi": "0.87.1",
+  "powershell": "7.6.6",
+  "end_to_end_passed": 5,
+  "end_to_end_skipped": 1,
+  "unit_passed": 9,
+  "unit_skipped": 1,
+  "tests": [
+    "task to receipt with input and result ZIP",
+    "HTTP host origin and bearer checks",
+    "launchd restart after crash and clean stop",
+    "restart during Pi plus transport 503 and 429",
+    "worker crash no reexecution and blocked recovery"
+  ],
+  "commercial_model": false,
+  "user_intranet": false,
+  "npu": false
+}

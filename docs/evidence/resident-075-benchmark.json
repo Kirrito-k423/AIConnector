@@ -1,0 +1,186 @@
+{
+  "scope": "Real PS on Mac, valid synthetic completed ledgers; no WAN/model/A5 latency claim",
+  "repeats": 5,
+  "rows": [
+    {
+      "variant": "cold_baseline",
+      "runs": 1,
+      "events": 5,
+      "startup_ms": null,
+      "samples": [
+        {
+          "wall_ms": 694.8882089927793,
+          "changed_files": 4
+        },
+        {
+          "wall_ms": 888.0634591914713,
+          "changed_files": 4
+        },
+        {
+          "wall_ms": 683.3328339271247,
+          "changed_files": 4
+        },
+        {
+          "wall_ms": 553.2695832662284,
+          "changed_files": 4
+        },
+        {
+          "wall_ms": 498.9011250436306,
+          "changed_files": 4
+        }
+      ],
+      "median_ms": 683.3328339271247,
+      "median_changed_files": 4
+    },
+    {
+      "variant": "resident_candidate",
+      "runs": 1,
+      "events": 5,
+      "startup_ms": 447.88933359086514,
+      "samples": [
+        {
+          "wall_ms": 4.789415746927261,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 2.243458293378353,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 3.422374837100506,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 1.6061672940850258,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 1.4598746784031391,
+          "changed_files": 0
+        }
+      ],
+      "median_ms": 2.243458293378353,
+      "median_changed_files": 0
+    },
+    {
+      "variant": "cold_baseline",
+      "runs": 39,
+      "events": 195,
+      "startup_ms": null,
+      "samples": [
+        {
+          "wall_ms": 2748.785541858524,
+          "changed_files": 42
+        },
+        {
+          "wall_ms": 3064.401749987155,
+          "changed_files": 42
+        },
+        {
+          "wall_ms": 2688.6975839734077,
+          "changed_files": 42
+        },
+        {
+          "wall_ms": 2081.048416905105,
+          "changed_files": 42
+        },
+        {
+          "wall_ms": 2823.144624941051,
+          "changed_files": 42
+        }
+      ],
+      "median_ms": 2748.785541858524,
+      "median_changed_files": 42
+    },
+    {
+      "variant": "resident_candidate",
+      "runs": 39,
+      "events": 195,
+      "startup_ms": 935.4989170096815,
+      "samples": [
+        {
+          "wall_ms": 4.191416781395674,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 3.7390831857919693,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 3.4017087891697884,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 5.032916087657213,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 3.4301248379051685,
+          "changed_files": 0
+        }
+      ],
+      "median_ms": 3.7390831857919693,
+      "median_changed_files": 0
+    },
+    {
+      "variant": "cold_baseline",
+      "runs": 100,
+      "events": 500,
+      "startup_ms": null,
+      "samples": [
+        {
+          "wall_ms": 5807.207750156522,
+          "changed_files": 103
+        },
+        {
+          "wall_ms": 5945.526292081922,
+          "changed_files": 103
+        },
+        {
+          "wall_ms": 6840.319791343063,
+          "changed_files": 103
+        },
+        {
+          "wall_ms": 6362.251000013202,
+          "changed_files": 103
+        },
+        {
+          "wall_ms": 6409.097082912922,
+          "changed_files": 103
+        }
+      ],
+      "median_ms": 6362.251000013202,
+      "median_changed_files": 103
+    },
+    {
+      "variant": "resident_candidate",
+      "runs": 100,
+      "events": 500,
+      "startup_ms": 1991.6754174046218,
+      "samples": [
+        {
+          "wall_ms": 9.211750235408545,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 7.869584020227194,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 7.763790898025036,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 8.686374872922897,
+          "changed_files": 0
+        },
+        {
+          "wall_ms": 7.533750031143427,
+          "changed_files": 0
+        }
+      ],
+      "median_ms": 7.869584020227194,
+      "median_changed_files": 0
+    }
+  ]
+}

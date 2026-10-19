@@ -1,0 +1,38 @@
+import {validateNpuResources} from './npu-resources.mjs';
+// A separate, locally granted registry lets maintenance add server experiments
+// without granting writes to model credentials, transport or local commands.
+const need=(ok,code)=>{if(!ok)throw new Error(code);};
+const name=/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/;
+export function validateRegistry(value) {
+  need(value?.schema==='aiconnector.server-registry.v1','INVALID_SERVER_REGISTRY');
+  need(Array.isArray(value.machineIds)&&value.machineIds.length>0&&value.machineIds.length<=12&&value.machineIds.every(x=>typeof x==='string'&&x.length>0&&x.length<=256)&&new Set(value.machineIds).size===value.machineIds.length,'INVALID_SERVER_MACHINES');
+  need(value.profiles&&typeof value.profiles==='object'&&!Array.isArray(value.profiles)&&Object.keys(value.profiles).length<=24,'INVALID_SERVER_PROFILES');
+  for(const [id,p]of Object.entries(value.profiles)){
+    if(p.npuResources!==undefined){need(p.machinePool!==undefined,'NPU_POOL_REQUIRED');validateNpuResources(p.npuResources);}
+    need(p.poolSelected===undefined&&p.poolSha256===undefined,'SERVER_POOL_INTERNAL_FIELDS');
+    need(p.executionMode===undefined||['pi','direct'].includes(p.executionMode),'INVALID_EXECUTION_MODE');
+    need(p.resourceKeys===undefined||Array.isArray(p.resourceKeys)&&p.resourceKeys.length<=16&&p.resourceKeys.every(k=>typeof k==='string'&&/^[a-z0-9][a-z0-9_.:-]{0,95}$/.test(k)),'INVALID_RESOURCE_KEYS');
+    need(name.test(id)&&!['constructor','prototype','__proto__','server-maintenance','watch-catalog'].includes(id),'INVALID_SERVER_PROFILE_ID');
+    need(p.kind==='simplehtmlwatch'&&(value.machineIds.includes(p.machineId)||p.machinePool!==undefined)&&!p.group&&!p.allowAnyMachine&&!p.allowTaskArguments,'SERVER_PROFILE_SCOPE');
+    need(p.npuHealthPolicy===undefined||['strict','allow-warning-alarm'].includes(p.npuHealthPolicy),'INVALID_NPU_HEALTH_POLICY');
+    if(p.machinePool!==undefined){
+      need(Array.isArray(p.machinePool)&&p.machinePool.length>0&&p.machinePool.length<=12&&new Set(p.machinePool).size===p.machinePool.length&&p.machinePool.every(id=>value.machineIds.includes(id))&&!p.machineId&&!p.machineIds,'SERVER_POOL_SCOPE');
+      need(Number.isInteger(p.machineCount)&&p.machineCount>=1&&p.machineCount<=p.machinePool.length,'INVALID_WATCH_MACHINE_COUNT');
+      if(p.machineCount>1)need(p.outputs?.includes(p.groupCompletionOutput)&&Number.isInteger(p.groupRanksPerMachine)&&p.groupRanksPerMachine>=1&&p.groupRanksPerMachine<=128,'GROUP_COMPLETION_CONTRACT_REQUIRED');
+    }else need(p.machineCount===undefined,'WATCH_MACHINE_POOL_REQUIRED');
+    if(p.machineIds!==undefined)need(Array.isArray(p.machineIds)&&p.machineIds.length>=2&&p.machineIds.length<=12&&new Set(p.machineIds).size===p.machineIds.length&&p.machineIds.every(id=>value.machineIds.includes(id))&&p.machineIds.includes(p.machineId),'SERVER_GROUP_SCOPE');
+    need(['probe','experiment'].includes(p.mode)&&name.test(p.entry)&&typeof p.repository==='string'&&p.repository.length>0&&p.repository.length<=128&&/^[\w.-]{1,128}$/.test(p.revision),'INVALID_SERVER_PROFILE');
+    need(typeof p.shell==='string'&&p.shell.length>0&&typeof p.revisionCommand==='string'&&p.revisionCommand.length>0&&Buffer.byteLength(p.shell+p.revisionCommand)+p.revision.length<3800,'WATCH_COMMAND_TOO_LARGE');
+    need(Array.isArray(p.outputs)&&p.outputs.length>0&&p.outputs.length<=16&&p.outputs.every(x=>name.test(x)),'INVALID_SERVER_OUTPUTS');
+    if(p.machineIds)need(p.outputs.includes(p.groupCompletionOutput)&&Number.isInteger(p.groupRanksPerMachine)&&p.groupRanksPerMachine>=1&&p.groupRanksPerMachine<=128,'GROUP_COMPLETION_CONTRACT_REQUIRED');
+    need(Array.isArray(p.verification)&&p.verification.length>0&&p.verification.length<=16,'ACCEPTANCE_CHECKS_NOT_CONFIGURED');
+    const ids=new Set();
+    for(const c of p.verification){
+      need(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/.test(c.id)&&!ids.has(c.id),'INVALID_CHECK_ID');ids.add(c.id);
+      need(['execution','output-json'].includes(c.kind)&&(Object.hasOwn(c,'equals')||c.exists===true),'INVALID_SERVER_CHECK');
+      if(c.kind==='output-json')need(p.outputs.includes(c.file)&&typeof c.pointer==='string'&&(c.pointer===''||c.pointer.startsWith('/')),'INVALID_SERVER_CHECK');
+    }
+  }
+  need(Buffer.byteLength(JSON.stringify(value))<=65536,'SERVER_REGISTRY_TOO_LARGE');
+  return value;
+}

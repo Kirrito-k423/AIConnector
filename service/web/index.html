@@ -1,0 +1,39 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AIConnector · 实验交接</title><link rel="stylesheet" href="/style.css"></head>
+<body><header class="app-header"><div class="brand">AI<span>Connector</span></div><div id="node" class="pill">正在连接</div><div class="header-actions"><button type="button" class="quiet" data-panel="capability-panel">接收端能力</button><button type="button" class="quiet" data-panel="settings">连接设置</button><button type="button" class="quiet" data-panel="server-setup">接入服务器</button><button type="button" class="quiet" data-panel="agent-settings">Pi 配置</button><a id="repo" target="_blank" rel="noreferrer">Relay ↗</a><button type="button" data-panel="submit">发布任务</button></div></header>
+<main><div class="toolbar"><nav id="filters" aria-label="任务状态"><button type="button" data-filter="active" class="active" aria-pressed="true">处理中 <span data-count="active">0</span></button><button type="button" data-filter="error" aria-pressed="false">需要处理 <span data-count="error">0</span></button><button type="button" data-filter="confirmed" aria-pressed="false">已回执 <span data-count="confirmed">0</span></button><button type="button" data-filter="all" aria-pressed="false">全部 <span data-count="all">0</span></button></nav><button id="refresh" type="button" class="quiet">立即同步</button></div>
+<div id="notice" role="status"></div>
+<section class="workspace" aria-label="任务工作台"><aside class="queue"><div class="bar"><h1>任务</h1><span>最近活动 ↓</span></div><div id="runs" aria-label="任务列表"></div></aside><section id="detail" class="detail" aria-label="任务详情"><p class="empty">正在读取任务…</p></section></section>
+<footer>已领取：执行责任已登记 · 已回执：文件完整收到 · 实验是否达标请查看验收与产物。</footer></main>
+<dialog id="tools-dialog" aria-labelledby="dialog-title"><div class="dialog-bar"><span id="dialog-title">工作台设置</span><button id="close-dialog" type="button" class="quiet" aria-label="关闭设置">关闭 ×</button></div><div class="dialog-content"><p id="dialog-notice" role="status" class="error"></p>
+<details id="capability-panel"><summary>接收端实际能力</summary><p>投递前核对 Windows 公告；本机设置不能代替远端能力，过期公告不能用于新任务。</p><pre id="capabilities"></pre></details>
+<details id="server-setup"><summary>接入服务器</summary>
+<p>读取本机 simpleHtmlWatch 的可调度机器；选择后生成 SSH / 启动时间 / NPU 信息探测入口。机器名称与 ready 状态不代表 A5 身份或 NPU 空闲。</p>
+<button id="discover-servers" type="button">读取机器列表</button><p id="server-setup-notice" role="status"></p>
+<form id="server-setup-form"><div id="server-machines"></div>
+<label class="check"><input id="server-maintenance" type="checkbox">允许远程 Pi 维护所选机器的实验入口</label>
+<p>维护可登记并执行所选服务器上的命令，只能修改独立入口清单，不能修改模型密钥或扩大机器范围。选择后点击保存即生效；配置不等于实验已执行。</p>
+<button id="save-servers" type="submit" disabled>保存并公布能力</button></form>
+<pre id="server-setup-result"></pre>
+</details>
+<details id="submit"><summary>发布实验任务</summary><p>选择接收端已经配置的实验入口。修改任务内容请增加 revision；重复运行请更换 run_id。</p><form id="task-form"><label>任务 JSON<textarea id="task-json" rows="18" spellcheck="false"></textarea></label><label>输入 ZIP（可选，小于 5 MiB）<input id="zip" type="file" accept=".zip"></label><button type="submit">发布到 Relay</button></form></details>
+<details id="settings"><summary>连接设置</summary><p>密钥只保存到本机 Windows DPAPI / macOS 钥匙串，不写入任务、日志或 ZIP。</p><form id="settings-form"><div class="fields"><label>GitHub Token<input id="github-token" type="password" autocomplete="new-password" placeholder="留空保留已有值"></label><label>AI API Key<input id="api-key" type="password" autocomplete="new-password" placeholder="留空保留已有值"></label><label>API 协议<select id="model-api"><option value="openai-completions">OpenAI Chat Completions</option><option value="openai-responses">OpenAI Responses</option><option value="anthropic-messages">Anthropic Messages</option></select></label><label>Base URL<input id="model-base" type="url" placeholder="https://your-api.example/v1"></label><label>模型 ID<input id="model-id" placeholder="提供商的模型标识"></label></div><button type="submit">保存本机设置</button></form></details>
+<details id="agent-settings"><summary>Pi 环境与工具</summary><p>保存后用于下一次领取的任务。已有任务继续使用领取时的配置快照。环境说明会发送给所配置的模型，不进入公开结果 ZIP；请勿填写密码或 Token。</p>
+<form id="agent-form">
+<label>全局环境说明<textarea id="global-prompt" rows="7" placeholder="说明 Windows 的网络限制、服务器用途、实验目录和结果要求。"></textarea></label>
+<label>本地上下文文件（每行一个路径）<textarea id="context-files" rows="2" placeholder="AGENT_CONTEXT.md&#10;D:/experiments/AGENTS.md"></textarea></label>
+<label>本地 Skill 清单 JSON（path、references、requiredTools）<textarea id="skills-json" rows="3" spellcheck="false"></textarea></label>
+<label>继续执行预算 JSON（费用限制需先配置模型单价）<textarea id="budget-json" rows="3" spellcheck="false"></textarea></label>
+<div class="fields"><label class="check"><input id="runner-enabled" type="checkbox">自动接收并执行任务</label><label>Pi 总运行预算（秒）<input id="run-timeout" type="number" min="5" max="86400" title="包含模型等待、工具和独立验收；不含领取前排队和结果上传。保存后用于新任务，既有运行不延长、不重放。"></label><label>同时运行 Pi 数<input id="max-concurrent" type="number" min="1" max="8"></label><label>最多模型轮数<input id="max-turns" type="number" min="1" max="100"></label></div>
+<h3>服务器控制 · simpleHtmlWatch</h3><p>与 Pi 运行在同一台 Windows 上。先在 simpleHtmlWatch 中配置 SSH 机器；这里不需要复制 SSH 密码。ready 不代表 NPU 空闲。</p>
+<div class="fields"><label class="check"><input id="watch-enabled" type="checkbox">启用服务器工具</label><label>本机服务地址<input id="watch-base" type="url" placeholder="http://127.0.0.1:8765"></label><label>服务器状态轮询（秒）<input id="watch-poll" type="number" min="1" max="60"></label></div>
+<details><summary>实验入口配置</summary><p>任务只能执行本机配置的入口。simpleHtmlWatch 入口须指定机器、机器组，或明确设置 allowAnyMachine。outputs 列出的结果才会进入公开 ZIP。</p><button id="watch-example" type="button">添加 SSH 实验入口示例</button><label>入口 JSON<textarea id="profiles-json" rows="15" spellcheck="false"></textarea></label></details>
+<h3>联网读取与搜索</h3><p>Windows 可选择系统 curl，适用于 Node 只能访问回环的环境。此处代理只影响网页工具，模型继续使用连接设置中的本机网关。</p>
+<div class="fields"><label class="check"><input id="web-enabled" type="checkbox">启用网页工具</label><label>网络传输<select id="web-transport"><option value="curl">系统 curl</option><option value="node">Node HTTP</option></select></label><label>网页代理<input id="web-proxy" placeholder="system / direct / http://proxy:8080"></label><label>请求超时（秒）<input id="web-timeout" type="number" min="1" max="120"></label></div>
+<label>允许访问的主机（每行一个，包含非默认端口）<textarea id="web-hosts" rows="3" placeholder="www.hiascend.com&#10;github.com"></textarea></label>
+<label>搜索服务 URL 模板（可选，使用 {query} 表示搜索词）<input id="web-search" placeholder="https://你的搜索服务/search?q={query}"></label>
+<h3>自动上下文压缩</h3><p>压缩会调用模型生成摘要并保留近期对话。任务 ID、执行证据和结果独立持久保存。</p>
+<div class="fields"><label class="check"><input id="compact-enabled" type="checkbox">启用自动压缩</label><label>模型上下文窗口（token）<input id="context-window" type="number" min="4096"></label><label>单次最大输出（token）<input id="max-tokens" type="number" min="256"></label><label>预留空间（token）<input id="compact-reserve" type="number" min="256"></label><label>保留近期对话（token）<input id="compact-recent" type="number" min="256"></label></div>
+<button type="submit">保存 Pi 配置</button><p id="agent-notice" role="status"></p></form>
+<div class="agent-check"><label>网页检查地址（可选，须在允许的主机中）<input id="check-url" type="url" placeholder="https://www.hiascend.com/"></label><button id="check-agent" type="button">检查已保存配置（不执行实验）</button><pre id="check-result"></pre></div>
+</details>
+</div></dialog><script src="/app.js"></script></body></html>
