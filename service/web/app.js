@@ -3,6 +3,7 @@ function adoptToken(){const hash=new URLSearchParams(location.hash.slice(1));if(
 adoptToken();window.addEventListener('hashchange',()=>{adoptToken();void refresh();});
 let state,selected='',rows=[],filter='active',settingsLoaded=false,agentLoaded=false,refreshing;
 let detailKey='',detailSignature='';
+let manualPollUntil=0,manualPollPending=false;
 const labels={waiting:'等待资源',reserving:'预留机器',task:'已发布',accepted:'接收端已校验',started:'已领取',result:'结果已发布',receipt:'已回执',claiming:'登记领取',launching:'启动执行器',running:'Pi 处理中',delivering:'交付 ZIP 中',submitted:'等待回执',confirmed:'已回执',blocked:'需要处理',unknown:'执行状态未知',conflict:'运行冲突',pending:'等待发布',queued:'已加入发送队列'};
 const filterLabels={active:'处理中',error:'需要处理',confirmed:'已回执',all:'全部'};
 function timestamp(t){if(t===null||t===undefined||t==='')return 0;const n=typeof t==='number'?(t<1e11?t*1000:t):Date.parse(t);return Number.isFinite(n)?n:0;}
@@ -11,6 +12,10 @@ const el=(tag,text,className)=>{const e=document.createElement(tag);if(text!==un
 function link(parent,text,url){try{const u=new URL(url);if(!['http:','https:'].includes(u.protocol))return;const a=el('a',text);a.href=u.href;a.target='_blank';a.rel='noreferrer';parent.append(a);}catch{}}
 async function api(url,data){const r=await fetch(url,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+sessionStorage.getItem('aic-token'),...(data?{'Content-Type':'application/json'}:{})},body:data?JSON.stringify(data):undefined});const value=await r.json();if(!r.ok)throw new Error(value.diagnostic?value.error+'：'+JSON.stringify(value.diagnostic):value.error);return value;}
 function notice(s,problem=false){$('notice').textContent=s;$('notice').classList.toggle('problem',problem);$('dialog-notice').textContent=problem&&$('tools-dialog').open?s:'';}
+function renderSyncButton(){
+  const b=$('refresh'),seconds=Math.max(0,Math.ceil((manualPollUntil-Date.now())/1000)),busy=manualPollPending||state?.service?.busy;
+  b.disabled=Boolean(busy||seconds);b.textContent=busy?'正在同步…':seconds?`稍后同步（${seconds}s）`:'立即同步';
+}
 const phase=r=>r.job?.state||r.phase;
 const error=r=>Boolean(r.error||r.job?.error||r.job?.resources?.state==='unknown'||r.result&&r.result.outcome!=='succeeded'||['unknown','blocked','conflict'].includes(phase(r)));
 const done=r=>['confirmed','receipt'].includes(phase(r));
@@ -184,13 +189,16 @@ function render(){
     b.querySelector('[data-count]').textContent=rows.filter(r=>matches(r,b.dataset.filter)).length;
   }
   const problems=[s.last_error,state.channel.last_error,s.runner_error].filter(Boolean);
-  const publication=s.capability_error?'本地配置已生效；能力公告暂未成功，后台将继续核对/重试：'+s.capability_error+(s.capability_diagnostic?' '+JSON.stringify(s.capability_diagnostic):''):'';
+  const publication=s.capability_error?'本地配置已生效；能力公告暂未成功，后台将继续核对/重试：'+s.capability_error+(s.capability_diagnostic?' '+JSON.stringify(s.capability_diagnostic):''):
+    s.capability_pending_reason==='CAPABILITY_RECONCILE_PENDING'?'能力公告正在核对上次发送结果；确认未发布后将自动重试'+(s.capability_retry_at?'，最早重试 '+date(s.capability_retry_at):''):'';
   if(s.diagnostic)problems.push(JSON.stringify(s.diagnostic));
   const receiver=s.node==='windows-inner'?state.capabilities?.local:state.capabilities?.receiver?.data;
   if(receiver?.profiles?.length&&!receiver.profiles.some(p=>['probe','experiment','maintenance'].includes(p.mode)))problems.push('Windows 当前只有 CPU 自检能力，请在 Windows 看板「接入服务器」配置真实入口');
   if(!s.github_configured)problems.push('尚未配置 GitHub Token（当前只读）');
   if(s.runner_enabled&&!s.model_configured)problems.push('请在连接设置中配置模型和 API Key');
-  notice([...problems,publication].filter(Boolean).join(' · ')||'最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询'+(s.runner?' · Pi '+(s.runner.activeRuns||0)+'/'+(s.runner.maxConcurrentRuns||1):''),Boolean(problems.length));
+  const syncSummary='最近同步 '+date(state.channel.last_poll)+' · 每 '+s.poll_seconds+' 秒轮询'+(s.runner?' · Pi '+(s.runner.activeRuns||0)+'/'+(s.runner.maxConcurrentRuns||1):'');
+  notice([...problems,publication,syncSummary].filter(Boolean).join(' · '),Boolean(problems.length));
+  renderSyncButton();
   document.querySelector('[data-panel="submit"]').hidden=s.node!=='mac-outer';
   document.querySelector('[data-panel="server-setup"]').hidden=s.node!=='windows-inner';
   document.querySelector('[data-panel="capability-panel"]').hidden=!state.capabilities;
@@ -212,7 +220,13 @@ for(const b of document.querySelectorAll('[data-panel]'))b.onclick=()=>{
   $('tools-dialog').showModal();$('tools-dialog').scrollTop=0;
 };
 $('close-dialog').onclick=()=>$('tools-dialog').close();
-$('refresh').onclick=async()=>{const b=$('refresh');b.disabled=true;try{await api('/api/poll',{});await refresh();}catch(e){notice(e.message,true);}finally{b.disabled=false;}};
+$('refresh').onclick=async()=>{
+  manualPollPending=true;renderSyncButton();
+  try{const response=await api('/api/poll',{});manualPollUntil=Date.now()+(response.retry_after_ms??15000);await refresh();}
+  catch(e){if(e.message==='POLL_TOO_FREQUENT'){manualPollUntil=Date.now()+15000;notice('同步请求已收到，请稍候；后台仍会自动同步。');}else notice(e.message,true);}
+  finally{manualPollPending=false;renderSyncButton();}
+};
+setInterval(renderSyncButton,1000);
 $('task-json').value=JSON.stringify({task_id:'pi-smoke',revision:1,run_id:'run-'+new Date().toISOString().replace(/[-:.TZ]/g,'').slice(0,14),title:'Pi 自动实验闭环',objective:'让 Pi 执行内置 CPU 校验，收集指标并返回 ZIP。',requirements:{mode:'smoke',tools:['run_experiment'],checks:['cpu-smoke']},code:{repository:'aiconnector-builtin',revision:'builtin-smoke-v1'},environment:{target:'auto'},invocation:{entry:'auto',arguments:[]},acceptance:['sum=50005000，收到真实执行输出、结果 ZIP 和回执；不涉及 NPU。'],artifacts:[]},null,2);
 $('task-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const task=JSON.parse($('task-json').value),file=$('zip').files[0];let zipBase64;if(file){if(file.size>=5242880)throw new Error('ZIP 必须小于 5 MiB');const bytes=new Uint8Array(await file.arrayBuffer());let raw='';for(let i=0;i<bytes.length;i+=16384)raw+=String.fromCharCode(...bytes.subarray(i,i+16384));zipBase64=btoa(raw);}const r=await api('/api/tasks',{task,...(zipBase64?{zipBase64}:{})});selected=r.key;filter='active';$('tools-dialog').close();await refresh();}catch(e){notice(e.message,true);}finally{button.disabled=false;}};
 $('settings-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const model=$('model-id').value?{api:$('model-api').value,baseUrl:$('model-base').value,id:$('model-id').value}:null;await api('/api/settings',{githubToken:$('github-token').value,apiKey:$('api-key').value,model});$('github-token').value='';$('api-key').value='';await refresh();}catch(e){notice(e.message,true);}finally{button.disabled=false;}};

@@ -44,12 +44,12 @@ def main():
     notes=(f'Windows candidate built from `{commit}` and verified after fresh extraction. '
            f'All required Windows service, recovery and paired Flush performance jobs passed before publication.\n\n'
            f'Validation: https://github.com/{repo}/actions/runs/{os.environ["GITHUB_RUN_ID"]}\n\n'
-           f'{version} uses eight in-flight data parts by default (configurable from one to eight), one durable state owner, and twelve HTTP connections to leave capacity for control requests while data is uploading. '
-           'It reuses validated release metadata and asset inventories, and resumes known local write spacing at its deadline instead of adding a ten-second retry floor. '
-           'Global write spacing and provider rate-limit backoff remain active. Unknown POSTs reconcile by their original names; sibling successes keep checkpoints; the final index is published only after every part is confirmed. '
-           'The 768 KiB writer, historical chunk compatibility, encryption and existing task/machine ownership remain included. '
-           'The package retains the pinned offline simpleHtmlWatch controller, original configuration, data directory and unknown task/reservation state. '
-           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/PARALLEL-TRANSFER-0718.md\n\n'
+           f'{version} repairs Issue #17 capability publication recovery: uncertain immutable advertisements reconcile against the full trusted comment history, then retry only after independent absence reads and a durable grace period. '
+           'Explicit rejections retain their original HTTP code and do not auto-retry. Existing task, Claim, SSH and reservation ownership remain unchanged. '
+           'Repeated manual sync requests coalesce, the dashboard shows a cooldown countdown, and errors no longer hide the last successful sync time. '
+           'Eight in-flight encrypted data parts remain the default, with original write spacing and provider backoff. '
+           'Both source and the freshly extracted package exercise capability recovery. '
+           f'Setup and acceptance: https://github.com/{repo}/blob/{commit}/docs/ISSUE-17-FIX.md\n\n'
            'CI fixture acceptance does not prove deployment or a successful retest through the actual intranet proxy.\n')
     with tempfile.NamedTemporaryFile(mode='w',suffix='.md') as f:
         f.write(notes);f.flush()

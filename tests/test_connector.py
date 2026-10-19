@@ -130,7 +130,7 @@ class ConnectorTests(unittest.TestCase):
         self.resultfile.write_text(json.dumps(self.result, ensure_ascii=False), encoding='utf-8')
 
     def command(self, node, action, *args):
-        return [PWSH, '-NoLogo', '-NoProfile', '-File', str(ROOT/'Connector.ps1'), '-Node', node,
+        return [PWSH, '-NoLogo', '-NoProfile', '-File', os.environ.get('AIC_CONNECTOR_SCRIPT',str(ROOT/'Connector.ps1')), '-Node', node,
                 '-Action', action, '-Config', str(self.config_path), '-StateDir', str(self.folder/node),
                 '-Proxy', 'direct', '-TimeoutSeconds', '1', *map(str, args)]
 

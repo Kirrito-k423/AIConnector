@@ -1,8 +1,8 @@
 # AIConnector：跨网段 AI 任务交接
 
-**v0.7.18-rc.2 默认八路并发文件上传。** 最多八个数据请求在途，沿用原 Windows 代理，并为控制请求保留连接；状态仍由一个常驻进程维护。复用 Release/附件目录，移除不必要的本地 10 秒等待。原 768 KiB 分块、加密、限流退避和恢复检查保持。
+**v0.7.19-rc.1 修复 Windows 能力公告卡住与手动同步提示。** 不确定公告先完整核对远端，再经过缺席观察和等待期恢复；已存在的公告不重发，明确拒绝显示原 HTTP 状态码。重复同步请求合并并显示倒计时，出错时仍可查看最近同步时间。
 
-机制、实测边界与配置见 [并行传输说明](docs/PARALLEL-TRANSFER-0718.md)。Mac / Windows 包通过验收后发布至 [v0.7.18-rc.2](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.18-rc.2)。旧超限运行的重新提交方式见 [0.7.17 修复说明](docs/TRANSFER-AND-CAPABILITIES-0717.md)。
+修复机制与 Windows 验收见 [Issue 17 修复说明](docs/ISSUE-17-FIX.md)。Mac / Windows 包通过验收后发布至 [v0.7.19-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.19-rc.1)。默认八路上传、768 KiB 加密分块和限流退避继续沿用 [并行传输实现](docs/PARALLEL-TRANSFER-0718.md)；实际内网并发与耗时仍需现场复测。
 
 [下载服务候选包 v0.7.14-rc.1](https://github.com/Kirrito-k423/AIConnector/releases/tag/v0.7.14-rc.1) · [有界目录与验收](docs/SERVER-CATALOG-0714.md) · [Issue 14 修复与验收](docs/ISSUE-14-FIX.md) · [八机协议与直接执行](docs/EXECUTION-0712.md) · [性能证据与诊断](docs/TRANSPORT-PERFORMANCE.md) · [并行操作说明](docs/PARALLEL-OPERATIONS.md) · [Windows 服务器接入](docs/SERVER-SETUP.md) · [安装与升级](docs/SERVICE.md) · [Pi 集成](docs/PI-INTEGRATION.md)
 

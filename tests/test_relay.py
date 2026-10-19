@@ -166,8 +166,8 @@ class RelayTests(unittest.TestCase):
         self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
         data['digest']='c'*64;file.write_text(json.dumps(data));self.ctx['provision_mode']['comment']='before'
         self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
-        posts=len(self.ctx['posts']);r=self.run_cli('windows-inner','Advertise','-File',file,ok=False)
-        self.assertEqual(r.get('error',r.get('code')),'PROVISION_UNCERTAIN_OR_REJECTED');self.assertEqual(len(self.ctx['posts']),posts)
+        posts=len(self.ctx['posts']);r=self.run_cli('windows-inner','Advertise','-File',file)
+        self.assertFalse(r['confirmed']);self.assertEqual(r['reason'],'CAPABILITY_RECONCILE_PENDING');self.assertEqual(len(self.ctx['posts']),posts)
 
     def clear_cooldown(self, node):
         state = self.read_state(node); state['next_poll'] = 0; state['post_not_before'] = 0
@@ -175,6 +175,75 @@ class RelayTests(unittest.TestCase):
         raw = json.dumps(state, separators=(',', ':')).encode()
         (self.folder/node/'state.json').write_text(json.dumps(dict(
             schema='aiconnector.store.v1', sha256=sha(raw), data_base64=base64.b64encode(raw).decode())))
+
+    def test_capability_uncertain_comment_recovers_after_independent_absence_reads(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.18',digest='d'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data))
+        self.ctx['provision_mode']['comment']='before'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        self.ctx['provision_mode'].clear();self.clear_cooldown('windows-inner')
+        # First independent, complete absence read must not immediately repost.
+        posts=len(self.ctx['posts'])
+        pending=self.run_cli('windows-inner','Advertise','-File',file)
+        self.assertFalse(pending['confirmed']);self.assertEqual(pending['reason'],'CAPABILITY_RECONCILE_PENDING')
+        self.assertEqual(len(self.ctx['posts']),posts)
+        state=self.read_state('windows-inner')
+        row=next(v for k,v in state['provisions'].items() if k.startswith('capability:'))
+        self.assertEqual(row['recovery']['absent_reads'],1)
+        # Advance only the persisted observation clock, never bypass a remote read.
+        row['recovery'].update(last_absent_at=0,not_before=0)
+        raw=json.dumps(state,separators=(',', ':')).encode()
+        (self.folder/'windows-inner'/'state.json').write_text(json.dumps(dict(schema='aiconnector.store.v1',sha256=sha(raw),data_base64=base64.b64encode(raw).decode())))
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        self.assertEqual(len(self.ctx['comments']),1);self.assertEqual(len(self.ctx['issues']),1)
+        self.assertNotIn('capabilities_pending',self.read_state('windows-inner'))
+
+    def test_capability_recovery_reads_all_comments_not_only_the_latest(self):
+        old=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.18',digest='e'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(old))
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        old_id=next(k for k in self.read_state('windows-inner')['provisions'] if k.startswith('capability:'))
+        newer={**old,'digest':'f'*64};file.write_text(json.dumps(newer));self.clear_cooldown('windows-inner')
+        self.assertTrue(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        # Simulate a lost local confirmation for an already-visible older snapshot.
+        state=self.read_state('windows-inner');state['capabilities_pending']=old
+        state['provisions'][old_id]={'status':'uncertain','http':0}
+        raw=json.dumps(state,separators=(',', ':')).encode()
+        (self.folder/'windows-inner'/'state.json').write_text(json.dumps(dict(schema='aiconnector.store.v1',sha256=sha(raw),data_base64=base64.b64encode(raw).decode())))
+        posts=len(self.ctx['posts']);result=self.run_cli('windows-inner','Advertise','-File',file)
+        self.assertTrue(result['confirmed']);self.assertEqual(result['data']['digest'],newer['digest'])
+        self.assertEqual(len(self.ctx['posts']),posts);self.assertEqual(len(self.ctx['comments']),2)
+        self.assertNotIn('capabilities_pending',self.read_state('windows-inner'))
+
+    def test_legacy_capability_uncertainty_and_failed_read_cannot_skip_recovery_grace(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.18',digest='8'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data));self.ctx['provision_mode']['comment']='before'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        self.ctx['provision_mode'].clear();self.clear_cooldown('windows-inner')
+        state=self.read_state('windows-inner');row=next(v for k,v in state['provisions'].items() if k.startswith('capability:'))
+        row.pop('last_attempt_at',None);row.pop('attempts',None)
+        raw=json.dumps(state,separators=(',', ':')).encode()
+        (self.folder/'windows-inner'/'state.json').write_text(json.dumps(dict(schema='aiconnector.store.v1',sha256=sha(raw),data_base64=base64.b64encode(raw).decode())))
+        posts=len(self.ctx['posts']);before=int(time.time())
+        result=self.run_cli('windows-inner','Advertise','-File',file)
+        self.assertFalse(result['confirmed']);self.assertGreaterEqual(result['retry_at'],before+2)
+        self.ctx['fail_paths']={'/repos/test/tasks/issues/1/comments':503}
+        self.run_cli('windows-inner','Advertise','-File',file,ok=False)
+        row=next(v for k,v in self.read_state('windows-inner')['provisions'].items() if k.startswith('capability:'))
+        self.assertEqual(row['recovery']['absent_reads'],0)
+        self.ctx['fail_paths'].clear();self.clear_cooldown('windows-inner')
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        self.assertEqual(len(self.ctx['posts']),posts)
+
+    def test_capability_explicit_rejection_reports_original_http_and_never_auto_reposts(self):
+        data=dict(schema='aiconnector.capabilities.v1',node='windows-inner',namespace=self.config['namespace'],version='0.7.18',digest='9'*64,generated_at=datetime.now(timezone.utc).isoformat())
+        file=self.folder/'capabilities.json';file.write_text(json.dumps(data));self.ctx['provision_mode']['comment']='reject'
+        self.assertFalse(self.run_cli('windows-inner','Advertise','-File',file)['confirmed'])
+        posts=len(self.ctx['posts']);self.ctx['provision_mode'].clear();self.clear_cooldown('windows-inner')
+        for _ in range(2):
+            result=self.run_cli('windows-inner','Advertise','-File',file,ok=False)
+            self.assertEqual(result.get('code',result.get('error')),'PROVISION_REJECTED_403')
+        self.assertEqual(len(self.ctx['posts']),posts)
 
     def expire_poll_maintenance(self, node, **fields):
         state=self.read_state(node)

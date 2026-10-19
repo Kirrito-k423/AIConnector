@@ -51,6 +51,32 @@ test('encrypted transfer receipt is shown as ciphertext integrity, with plaintex
   assert.match(await page.locator('[data-section="result"]').textContent(),/Mac 解密并核对每个文件后，才能确认取件成功/);
 });
 const keys=page=>page.locator('#runs .run').evaluateAll(nodes=>nodes.map(n=>n.dataset.key));
+test('manual sync disables repeat clicks, counts down and keeps last-sync evidence beside errors',async t=>{
+  const {page,data,requests,poll}=await dashboard(t,fixture(),{width:1440,height:900},{'/api/poll':()=>({queued:true,retry_after_ms:15000})});
+  await page.clock.install();
+  await page.reload();await page.waitForFunction(()=>document.querySelector('#node').textContent.includes('发送端'));
+  const button=page.locator('#refresh');await button.click();
+  await page.waitForFunction(()=>document.querySelector('#refresh').textContent.includes('稍后同步'));
+  assert.equal(await button.isDisabled(),true);
+  await button.evaluate(b=>b.click());
+  assert.equal(requests.filter(r=>r.url==='/api/poll').length,1);
+  data.service.capability_error='PROVISION_REJECTED_403';await poll();
+  assert.match(await page.locator('#notice').textContent(),/PROVISION_REJECTED_403.*最近同步/);
+  await page.clock.fastForward(16000);
+  assert.equal(await button.isDisabled(),false);
+  assert.equal(await button.textContent(),'立即同步');
+  data.service.busy=true;await poll();
+  assert.equal(await button.isDisabled(),true);assert.equal(await button.textContent(),'正在同步…');
+});
+
+test('an older backend manual-poll cooldown is explained without exposing a failure code',async t=>{
+  const {page}=await dashboard(t);
+  await page.route('**/api/poll',route=>route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'POLL_TOO_FREQUENT'})}));
+  await page.locator('#refresh').click();
+  await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('同步请求已收到'));
+  assert.equal(await page.locator('#refresh').isDisabled(),true);
+  assert.doesNotMatch(await page.locator('#notice').textContent(),/POLL_TOO_FREQUENT/);
+});
 
 test('Mac shows receiver queue IPs as dated observations without changing completed runs',async t=>{
   const data=fixture();

@@ -48,6 +48,8 @@ def validate(archive,maintenance_repeats=0,parallel_repeats=0):
         for _ in range(maintenance_repeats or 1):
             subprocess.run(command+(['-k','maintenance_preflight'] if maintenance_repeats else []),env=env,check=True)
         if not maintenance_repeats:
+            subprocess.run([os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests'),'-p','test_relay.py','-k','capability','-v'],
+                           env=dict(env,AIC_CONNECTOR_SCRIPT=str(app/'Connector.ps1')),check=True)
             subprocess.run([os.sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests'),'-p','test_transfer_pipeline.py','-v'],
                            env=dict(env,AIC_PIPELINE_ROOT=str(app)),check=True)
         if os.name=='nt':

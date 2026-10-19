@@ -707,7 +707,9 @@ function Read-Routes-Work {
     $script:State.routes=$routes; Save; Cache-Metadata 'routes' $routes
     return $routes
 }
-function Read-Capabilities {
+function Read-Capabilities($Expected=$null,$ExpectedFound=$null) {
+    if ($ExpectedFound) { $ExpectedFound.Value=$false }
+    $expectedText=''; if ($Expected) { $expectedText=Canonical $Expected }
     $issue=Get-Field $script:State 'capability_issue'
     if (-not $issue) { return $null }
     $latest=$null
@@ -715,6 +717,7 @@ function Read-Capabilities {
         if (@($script:C.authors['windows-inner']) -cnotcontains [string]$c.user.login -or -not ([string]$c.body).StartsWith('AIConnector capabilities v1')) { continue }
         try { $d=Read-Metadata ([string]$c.body) 'AIConnector capabilities v1' } catch { continue }
         if ($d.schema -cne 'aiconnector.capabilities.v1' -or $d.namespace -cne $script:C.namespace -or $d.node -cne 'windows-inner') { continue }
+        if ($ExpectedFound -and $expectedText -and (Canonical $d) -ceq $expectedText) { $ExpectedFound.Value=$true }
         if (-not $latest -or [long]$c.id -gt [long]$latest.comment_id) { $latest=@{data=$d;comment_id=$c.id;url=$c.html_url;body_sha256=(Hash ([string]$c.body))} }
     }
     $previous=Get-Field $script:State 'receiver_capabilities'
@@ -737,20 +740,39 @@ function Advertise-Capabilities {
         if (-not (Get-Field $script:State 'capability_issue')) { return @{confirmed=$false} }
     }
     if ($script:State.provisions.ContainsKey('capability-issue')) { $script:State.provisions['capability-issue'].status='confirmed'; Save }
-    $latest=Read-Capabilities
     $pending=Get-Field $script:State 'capabilities_pending'
+    $observed=$false
+    try { $latest=Read-Capabilities $pending ([ref]$observed) }
+    catch {
+        if ($pending) {
+            $old=Get-Field $script:State.provisions ('capability:'+(Hash (Canonical $pending)))
+            if ($old) { Reset-DeliveryAbsence $old; Save }
+        }
+        throw
+    }
     if (-not $pending) {
         if ($latest -and $latest.data.digest -ceq $data.digest -and ((Epoch)-([DateTimeOffset]::Parse((Source-Time $latest.data.generated_at))).ToUnixTimeSeconds()) -lt 1800) { return @{confirmed=$true;data=$latest.data} }
         $pending=$data; $script:State.capabilities_pending=$pending; Save
     }
     $id='capability:'+(Hash (Canonical $pending))
-    if (-not $latest -or (Canonical $latest.data) -cne (Canonical $pending)) {
+    if (-not $observed) {
+        $row=Get-Field $script:State.provisions $id
+        if ($row -and $row.status -ceq 'uncertain') {
+            # Only this immutable, non-executing capability comment may retry,
+            # after complete remote absence reads and the durable grace period.
+            Observe-DeliveryAbsent $row; Save
+            if ($row.status -ceq 'uncertain') { return @{confirmed=$false;reason='CAPABILITY_RECONCILE_PENDING';retry_at=$row.recovery.not_before;data=(Get-Field $latest 'data')} }
+        }
+        if ($row -and $row.status -ceq 'rejected') { Fail ('PROVISION_REJECTED_'+[string]$row.http) }
         $body=Metadata-Body 'AIConnector capabilities v1' '当前实际版本、入口、工具与验收检查。超过两小时的公告不用于新任务投递。' $pending
         $null=Provision $id ($script:RepoPath+'/issues/'+$script:State.capability_issue.number+'/comments') @{body=$body}
-        $latest=Read-Capabilities
+        $latest=Read-Capabilities $pending ([ref]$observed)
     }
-    $confirmed=$latest -and (Canonical $latest.data) -ceq (Canonical $pending)
-    if ($confirmed) { $script:State.provisions[$id].status='confirmed'; $script:State.Remove('capabilities_pending'); Save }
+    $confirmed=$observed
+    if ($confirmed) {
+        if (-not $script:State.provisions.ContainsKey($id)) { $script:State.provisions[$id]=@{http=200} }
+        $script:State.provisions[$id].status='confirmed'; $script:State.Remove('capabilities_pending'); Save
+    }
     return @{confirmed=[bool]$confirmed;data=(Get-Field $latest 'data')}
 }
 function Provision([string]$Id,[string]$Path,$Body) {
@@ -760,7 +782,8 @@ function Provision([string]$Id,[string]$Path,$Body) {
     $row=$script:State.provisions[$Id]
     Need ($row.status -in @('pending','rate_limited')) 'PROVISION_UNCERTAIN_OR_REJECTED'
     if ((Get-Field $script:State 'post_not_before' 0) -gt (Epoch)) { return $false }
-    $row.status='uncertain'; Save
+    if ($Id -cmatch '^capability:[a-f0-9]{64}$') { Start-DeliveryWrite $row }
+    else { $row.status='uncertain'; Save }
     $r=Api $Path POST (Json $Body); $row.http=$r.http
     $script:State.post_not_before=(Epoch)+$script:C.write_interval_seconds
     if (Limited $r) { $row.status='rate_limited'; $script:State.next_poll=Cooldown $r; $script:State.last_error='RATE_LIMITED' }

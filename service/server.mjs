@@ -66,8 +66,13 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
     let current=localCapabilities();
     if(ledger.capability_digest===current.digest&&Date.now()-(ledger.capability_at||0)<=1800000)return;
     advertising=true;
-    try{const r=await connector.call('Advertise',{data:current,getData:()=>current=localCapabilities()});if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.parse(r.data.generated_at)||0;persist();activity.capability_state='confirmed';}else activity.capability_state='pending';activity.capability_error='';activity.capability_diagnostic=null;}
-    catch(e){activity.capability_error=cleanError(e);activity.capability_diagnostic=e.diagnostic;activity.capability_state='retrying';nextAdvertise=Math.max(nextAdvertise,e.retryAt||0);}
+    try{
+      const r=await connector.call('Advertise',{data:current,getData:()=>current=localCapabilities()});
+      if(r.confirmed&&r.data?.digest===current.digest){ledger.capability_digest=current.digest;ledger.capability_at=Date.parse(r.data.generated_at)||0;persist();activity.capability_state='confirmed';}else activity.capability_state='pending';
+      activity.capability_pending_reason=r.reason||'';activity.capability_retry_at=r.retry_at||0;
+      activity.capability_error='';activity.capability_diagnostic=null;
+    }
+    catch(e){activity.capability_pending_reason='';activity.capability_error=cleanError(e);activity.capability_diagnostic=e.diagnostic;activity.capability_state='retrying';nextAdvertise=Math.max(nextAdvertise,e.retryAt||0);}
     finally{advertising=false;}
   }
   async function submit(){
@@ -246,7 +251,11 @@ export async function start(configFile,{secrets:givenSecrets,connector:givenConn
       }
       if(url.pathname==='/api/poll') {
         // Wake the local scheduler; Connector still enforces its persisted cooldown.
-        need(Date.now()-(activity.last_manual_poll||0)>=15000,'POLL_TOO_FREQUENT');activity.last_manual_poll=Date.now();nextPoll=0;lastTick=0;void tick();reply(202,{queued:true});return;
+        const retryAfter=Math.max(0,15000-(Date.now()-(activity.last_manual_poll||0)));
+        // Repeated clicks (including another tab) join existing work without
+        // resetting the throttle or multiplying queued discovery requests.
+        if(busy||retryAfter>0){reply(202,{queued:busy,coalesced:true,state:busy?'syncing':'cooldown',retry_after_ms:retryAfter||1000});return;}
+        activity.last_manual_poll=Date.now();nextPoll=0;lastTick=0;void tick();reply(202,{queued:true,coalesced:false,state:'queued',retry_after_ms:15000});return;
       }
       reply(404,{error:'NOT_FOUND'});
     }catch(e){reply(['UNAUTHORIZED','INVALID_HOST','INVALID_ORIGIN'].includes(e.message)?403:400,{error:cleanError(e),...(e.watch_route?{watch_error:publicWatchError(e)}:{}),...(e.diagnostic?{diagnostic:e.diagnostic}:{})});}
